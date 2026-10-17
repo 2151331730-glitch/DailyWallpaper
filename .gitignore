@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+config.toml
+
+# Runtime data
+data/
+
+# Logs
+*.log
+
+# Build artifacts
+build/
+dist/
+*.spec
