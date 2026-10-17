@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import winreg
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,9 @@ class ApplyResult:
     ok: bool
     error: str = ""
 
+def _norm_path(path: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
 def convert_to_jpeg(src: Path, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(src) as im:
@@ -82,7 +86,8 @@ class WindowsStaticApplier:
             if not self.spi.set_wallpaper(jpeg):
                 raise OSError("SystemParametersInfoW returned 0")
             # Verify via SPI_GETDESKWALLPAPER; registry is only an auxiliary check.
-            if self.spi.get_wallpaper().lower() != str(jpeg).lower():
+            # SPI may report an absolute path with different case; normalize both.
+            if _norm_path(self.spi.get_wallpaper()) != _norm_path(jpeg):
                 raise OSError("wallpaper verification failed")
             return ApplyResult(ok=True)
         except Exception as exc:

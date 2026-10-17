@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from PIL import Image
 import pytest
@@ -23,6 +24,14 @@ class FakeSpi:
         return True
     def get_wallpaper(self):
         return self.path
+
+class AbsolutePathSpi(FakeSpi):
+    """Mimics SPI_GETDESKWALLPAPER returning an absolute, uppercase path."""
+    def set_wallpaper(self, path):
+        ok = super().set_wallpaper(path)
+        if ok:
+            self.path = os.path.abspath(str(path)).upper()
+        return ok
 
 def test_convert_to_jpeg(tmp_path):
     src = tmp_path / "a.png"
@@ -51,3 +60,17 @@ def test_apply_failure_restores(tmp_path):
     result = applier.apply(img)
     assert not result.ok
     assert spi.path == "C:/old.jpg"
+    # restore() must have re-applied the original wallpaper after the failure.
+    assert spi.calls[-1] == ("set", str(Path("C:/old.jpg")))
+
+def test_apply_accepts_absolute_case_different_spi_path(tmp_path, monkeypatch):
+    # The probe passes a relative path, while SPI_GETDESKWALLPAPER returns an
+    # absolute path (often with different case). apply() must still verify OK.
+    monkeypatch.chdir(tmp_path)
+    img = Path("wall.jpg")
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    reg, spi = FakeRegistry(), AbsolutePathSpi()
+    applier = WindowsStaticApplier(spi, reg)
+    result = applier.apply(img)
+    assert result.ok
+    assert spi.path == os.path.abspath(str(img.with_suffix(".apply.jpg"))).upper()
