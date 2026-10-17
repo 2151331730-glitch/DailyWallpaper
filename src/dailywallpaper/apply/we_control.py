@@ -9,6 +9,23 @@ from typing import Any, Callable
 class WeConfigError(RuntimeError):
     pass
 
+def _find_wallpaperconfig(node: Any) -> dict[str, Any] | None:
+    """Return the first dict holding a ``wallpaperconfig`` dict, at any depth."""
+    if isinstance(node, dict):
+        wallpaperconfig = node.get("wallpaperconfig")
+        if isinstance(wallpaperconfig, dict):
+            return wallpaperconfig
+        children = node.values()
+    elif isinstance(node, list):
+        children = node
+    else:
+        return None
+    for child in children:
+        found = _find_wallpaperconfig(child)
+        if found is not None:
+            return found
+    return None
+
 @dataclass(frozen=True)
 class WeConfig:
     raw: dict[str, Any]
@@ -18,14 +35,14 @@ class WeConfig:
     @classmethod
     def from_file(cls, path: Path) -> "WeConfig":
         raw = json.loads(path.read_text(encoding="utf-8"))
-        for value in raw.values():
-            if isinstance(value, dict) and "wallpaperconfig" in value:
-                selected = value["wallpaperconfig"].get("selectedwallpapers", {})
-                if not selected:
-                    raise WeConfigError("selectedwallpapers is empty")
-                key = next(iter(selected))
-                return cls(raw=raw, monitor_key=key, selected=selected)
-        raise WeConfigError("wallpaperconfig not found")
+        wallpaperconfig = _find_wallpaperconfig(raw)
+        if wallpaperconfig is None:
+            raise WeConfigError("wallpaperconfig not found")
+        selected = wallpaperconfig.get("selectedwallpapers", {})
+        if not selected:
+            raise WeConfigError("selectedwallpapers is empty")
+        key = next(iter(selected))
+        return cls(raw=raw, monitor_key=key, selected=selected)
 
     def current_file(self) -> str:
         return self.selected[self.monitor_key].get("file", "")

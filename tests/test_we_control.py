@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from dailywallpaper.apply.we_control import WeConfig, WeControl
 
@@ -13,9 +14,24 @@ class FakeRunner:
         self.calls.append(args)
         return type("R", (), {"returncode": self.returncode})()
 
-def test_config_finds_top_level_object():
+def test_config_finds_nested_wallpaperconfig():
     cfg = WeConfig.from_file(FIXTURE)
     assert cfg.current_file().endswith("2995369775/scene.pkg")
+    assert cfg.monitor_key == "Monitor0"
+
+def test_config_finds_flat_wallpaperconfig(tmp_path):
+    flat = tmp_path / "config.json"
+    flat.write_text(json.dumps({
+        "win11": {
+            "wallpaperconfig": {
+                "selectedwallpapers": {
+                    "Monitor0": {"file": "D:/flat/scene.pkg"},
+                },
+            },
+        },
+    }), encoding="utf-8")
+    cfg = WeConfig.from_file(flat)
+    assert cfg.current_file() == "D:/flat/scene.pkg"
     assert cfg.monitor_key == "Monitor0"
 
 def test_open_builds_command():
