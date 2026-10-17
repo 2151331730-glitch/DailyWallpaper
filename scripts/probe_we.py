@@ -1,6 +1,6 @@
 import json, sys, time
 from pathlib import Path
-from dailywallpaper.apply.we_control import WeConfig, WeControl
+from dailywallpaper.apply.we_control import WeConfig, WeControl, same_project
 
 WE = Path("D:/games/steam/steamapps/common/wallpaper_engine")
 CONFIG = WE / "config.json"
@@ -41,7 +41,7 @@ def main():
             time.sleep(2)
             current = ctl.current()
             results[kind] = {
-                "ok": ok and current.endswith(target.name),
+                "ok": ok and same_project(current, target),
                 "file": str(target),
                 "current": current,
             }

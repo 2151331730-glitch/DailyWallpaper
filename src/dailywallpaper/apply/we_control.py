@@ -47,6 +47,16 @@ class WeConfig:
     def current_file(self) -> str:
         return self.selected[self.monitor_key].get("file", "")
 
+def same_project(current: str, target: Path) -> bool:
+    """True when WE's current file belongs to ``target``'s project folder.
+
+    Wallpaper Engine resolves a ``project.json`` target to a sibling
+    ``scene.pkg`` or video file, so comparing file names is not reliable.
+    """
+    if not current:
+        return False
+    return Path(current).parent.resolve() == target.parent.resolve()
+
 class WeControl:
     def __init__(
         self,
