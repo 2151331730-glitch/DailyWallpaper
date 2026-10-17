@@ -53,17 +53,17 @@ Notes: the real `config.json` stores the data at `win11.general.wallpaperconfig`
 
 ## Probe 3: Vision
 
-Status: **PENDING** — waiting for a Zhipu API key.
+Status: **BLOCKED/PENDING** — the key is stored, but the first real calls did not produce JSON.
 
-- Code/tests: `tests/test_vision.py` passes (13 tests); the provider is exercised with an in-process fake client only.
-- No real API call has been made.
-- Once the key is stored, run:
+- Key: stored in Windows Credential Manager (`DailyWallpaper` / `zhipu`); the value was never printed or logged.
+- Attempt 1 (default thinking, `max_tokens=500`, JSON mode): `finish_reason=length`, `completion_tokens=500`, `reasoning_tokens=489`, content `'\n'`. The reasoning pass consumed the entire output budget before the JSON.
+- Attempt 2 (`thinking: {"type": "disabled"}`): HTTP 429, provider code 1305 (concurrency/rate limit). Retry pending.
+- No paid model call has been made.
+- Next: retry with 10/20s backoff; if 429 persists, wait longer. Then set `thinking: disabled` in `ZhipuVision` and use a larger output budget (or record reasoning tokens) before re-running:
 
 ```powershell
 .venv\Scripts\python.exe scripts\probe_vision.py --image "D:\games\steam\steamapps\workshop\content\431960\1132505365\preview.jpg"
 ```
-
-Expected: valid JSON scores, non-zero token usage, no key in output.
 
 ## Probe 4: Sources and weather
 
