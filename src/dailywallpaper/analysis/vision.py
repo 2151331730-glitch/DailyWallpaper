@@ -76,10 +76,11 @@ def validate_scores(payload: dict) -> VisionScores:
     if not isinstance(mood, list) or len(mood) > 6 or not all(isinstance(x, str) for x in mood):
         raise VisionError("mood_tags must be a list of <=6 strings")
     overlay = payload["text_overlay"]
-    if overlay not in {"none","minor","major"}:
+    if not isinstance(overlay, str) or overlay not in {"none","minor","major"}:
         raise VisionError("bad text_overlay")
     palette = payload["palette"]
-    if not isinstance(palette, list) or len(palette) > 5 or not all(HEX.match(x) for x in palette):
+    if (not isinstance(palette, list) or len(palette) > 5
+            or not all(isinstance(x, str) and HEX.match(x) for x in palette)):
         raise VisionError("bad palette")
     return VisionScores(
         quality=_int(payload,"quality"),
@@ -120,10 +121,18 @@ class ZhipuVision:
                 ]},
             ],
         )
-        payload = json.loads(resp.choices[0].message.content)
+        try:
+            payload = json.loads(resp.choices[0].message.content)
+        except (ValueError, TypeError, AttributeError, IndexError, KeyError) as exc:
+            raise VisionError("provider returned malformed response") from exc
+        try:
+            tokens_in = int(resp.usage.prompt_tokens or 0)
+            tokens_out = int(resp.usage.completion_tokens or 0)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            tokens_in = tokens_out = 0
         return VisionCallResult(
             scores=validate_scores(payload),
-            tokens_in=resp.usage.prompt_tokens,
-            tokens_out=resp.usage.completion_tokens,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             latency_ms=int((time.monotonic() - started) * 1000),
         )
