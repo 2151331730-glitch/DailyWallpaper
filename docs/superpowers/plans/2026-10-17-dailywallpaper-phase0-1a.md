@@ -1554,6 +1554,40 @@ def upsert_wallpaper(conn, c: Candidate) -> int:
     return int(row[0])
 ```
 
+- [ ] **Step 3b: Implement the design's mixed sort**
+
+`WallhavenSource` currently hardcodes `sorting=toplist`. Replace it with the spec 4.1 plan: pages 1–2 `toplist` with `topRange=1M`, page 3 `random`, page 4 `date_added`. `topRange` is sent only with `toplist`.
+
+```python
+SORT_PLAN = ("toplist", "toplist", "random", "date_added")
+
+def _sort_for_page(self, page: int) -> tuple[str, str | None]:
+    sorting = SORT_PLAN[(page - 1) % len(SORT_PLAN)]
+    return sorting, ("1M" if sorting == "toplist" else None)
+```
+
+Use it in `_search(page)`, and add tests:
+
+```python
+def test_wallhaven_sort_plan():
+    src = WallhavenSource(FakeSession({}))
+    assert [src._sort_for_page(p) for p in (1, 2, 3, 4)] == [
+        ("toplist", "1M"), ("toplist", "1M"), ("random", None), ("date_added", None),
+    ]
+
+def test_wallhaven_sends_toprange_only_for_toplist():
+    calls = []
+    class S:
+        def get(self, url, params, headers, timeout):
+            calls.append(dict(params))
+            return FakeResponse({"data": []})
+    src = WallhavenSource(S())
+    src._search(1)
+    src._search(3)
+    assert calls[0]["topRange"] == "1M"
+    assert "topRange" not in calls[1]
+```
+
 - [ ] **Step 4: Add fault tests**
 
 Test a 429 response and a malformed payload; assert `SourceError` and no DB row. Test that `fetch_all` continues when one source raises.
