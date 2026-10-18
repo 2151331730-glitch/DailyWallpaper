@@ -10,12 +10,21 @@ from dailywallpaper.config import default_config_path, load_config
 from dailywallpaper.logging_setup import setup_logging
 
 
-def main(argv=None, app_factory=None) -> int:
+def main(argv=None, app_factory=None, run_gui=None) -> int:
     parser = argparse.ArgumentParser(prog="dailywallpaper")
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="run the scheduler without the desktop shell",
+    )
     args = parser.parse_args(argv)
+    if args.dry_run:
+        # A dry run that is silently ignored (GUI) or that loops real applies
+        # (--headless) is worse than useless; make it exactly one safe tick.
+        args.once = True
 
     cfg = load_config(args.config)
     setup_logging(cfg.app.data_dir, cfg.app.log_level)
@@ -27,10 +36,16 @@ def main(argv=None, app_factory=None) -> int:
         app_factory = build_application
 
     with SingleInstance("DailyWallpaper"):
-        app = app_factory(cfg)
+        application = app_factory(cfg)
         if args.once:
-            return app.run_once(dry_run=args.dry_run)
-        return app.run_forever()
+            return application.run_once(dry_run=args.dry_run)
+        if args.headless:
+            return application.run_forever()
+        if run_gui is None:
+            from dailywallpaper.ui.shell import build_gui
+
+            run_gui = build_gui
+        return run_gui(cfg)
 
 
 if __name__ == "__main__":
