@@ -13,12 +13,14 @@ POLL_MS = 2000
 class UiShell:
     """Owns the Qt objects; all product logic lives in CommandService."""
 
-    def __init__(self, command_service, machine, on_quit, parent=None):
+    def __init__(self, command_service, machine, on_quit, parent=None, worker=None):
         self.service = command_service
         self.machine = machine
         self.on_quit = on_quit
+        self.worker = worker
         self.window = MainWindow(command_service, command_service.conn)
         self.tray = TrayIcon(command_service, on_open=self.show_window, on_quit=self._quit)
+        self._notified_for = None
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start(POLL_MS)
@@ -30,14 +32,26 @@ class UiShell:
     def _poll(self) -> None:
         self.window.refresh()
         self.tray.refresh()
+        today = self.service.clock.now().date().isoformat()
+        if self.service.snapshot().today_changed:
+            self.tray.set_state("changed")
+            if self._notified_for != today:
+                self._notified_for = today
+                self.tray.notify("每日壁纸", "今日壁纸已更新")
+        else:
+            self.tray.set_state("idle")
 
     def _quit(self) -> None:
         self.poll_timer.stop()
+        if self.worker is not None:
+            self.worker.stop()
         self.tray.hide()
         self.on_quit()
 
     def start(self) -> None:
         self.tray.show()
+        if self.worker is not None:
+            self.worker.start()
 
 
 def build_gui(cfg) -> int:
@@ -50,12 +64,22 @@ def build_gui(cfg) -> int:
     from dailywallpaper.state.machine import SystemClock
     from dailywallpaper.ui.commands import CommandService
 
+    from dailywallpaper.ui.worker import Worker
+
     application = build_application(cfg)
     machine = application.machine
+    # The worker builds its own application inside its own thread: a sqlite
+    # connection may only be used from the thread that created it.
+    worker = Worker(machine_factory=lambda: build_application(cfg).machine)
     service = CommandService(
-        machine.conn, cfg.app, SystemClock(), machine, machine.apply_service
+        machine.conn,
+        cfg.app,
+        SystemClock(),
+        machine,
+        machine.apply_service,
+        runner=worker,
     )
     app = QApplication.instance() or QApplication(sys.argv)
-    shell = UiShell(service, machine, on_quit=app.quit)
+    shell = UiShell(service, machine, on_quit=app.quit, worker=worker)
     shell.start()
     return app.exec()

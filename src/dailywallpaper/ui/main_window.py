@@ -41,6 +41,9 @@ class MainWindow(QWidget):
         self.score_label = QLabel("")
         self.reason_label = QLabel("")
         self.reason_label.setWordWrap(True)
+        # Decoding a multi-MB wallpaper every 2 s poll is wasteful; the
+        # normalised cache file is content-addressed, so the path is the key.
+        self._preview_path = None
 
         self.change_button = QPushButton("换一张")
         self.change_button.clicked.connect(self._change_now)
@@ -87,8 +90,9 @@ class MainWindow(QWidget):
         self.change_button.setEnabled(self.service.snapshot().can_change)
 
     def _show_preview(self, path: str) -> None:
-        if not path:
+        if not path or path == self._preview_path:
             return
+        self._preview_path = path
         pixmap = QPixmap(path)
         if pixmap.isNull():
             return

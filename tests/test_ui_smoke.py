@@ -180,3 +180,31 @@ def test_shell_wires_tray_and_window(qapp, tmp_path):
     assert shell.tray is not None
     assert shell.window is not None
     shell.poll_timer.stop()
+
+
+def test_worker_ticks_once_on_start_with_its_own_machine():
+    import threading
+
+    from dailywallpaper.ui.worker import Worker
+
+    seen = threading.Event()
+
+    class _M:
+        def tick(self, dry_run=False, manual=False):
+            seen.set()
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker.start()
+    try:
+        assert seen.wait(2) is True
+    finally:
+        worker.stop()
+
+
+def test_worker_ignores_a_second_manual_request_while_busy():
+    from dailywallpaper.ui.worker import Worker
+
+    worker = Worker(lambda: object(), interval=60)
+
+    assert worker.change_now() is True
+    assert worker.change_now() is False

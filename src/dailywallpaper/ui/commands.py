@@ -27,12 +27,15 @@ class CommandService:
     Kept free of Qt so every branch is exerciseable in a plain pytest run.
     """
 
-    def __init__(self, conn, config, clock, machine, apply_service):
+    def __init__(self, conn, config, clock, machine, apply_service, runner=None):
         self.conn = conn
         self.config = config
         self.clock = clock
         self.machine = machine
         self.apply_service = apply_service
+        # In the desktop shell a Worker runs ticks off the UI thread; tests
+        # leave this as None so change_now runs inline and returns the result.
+        self.runner = runner
         self._last_action = ""
         self._last_reason = ""
         # A double click in the tray must not apply twice (Review Focus 1).
@@ -84,6 +87,10 @@ class CommandService:
         if not self._apply_lock.acquire(blocking=False):
             return None  # a change is already running; ignore the extra click
         try:
+            if self.runner is not None:
+                # Never touch the network from the UI thread: hand it over.
+                self.runner.change_now()
+                return None
             result = self.machine.tick(dry_run=False, manual=True)
             self._last_action = result.action
             self._last_reason = result.reason
