@@ -131,6 +131,10 @@ class WindowsStaticApplier:
             tile=self.registry.get("TileWallpaper"),
         )
 
+    def current_wallpaper(self) -> str:
+        """What the desktop actually shows; the recheck compares against it."""
+        return self.spi.get_wallpaper()
+
     def apply(self, image: Path, style: str = "fill") -> ApplyResult:
         # Remember the mode so a failed apply can undo the mode switch too.
         previous_mode = self.background_type.get() if self.background_type else None

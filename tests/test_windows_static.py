@@ -173,3 +173,14 @@ def test_a_failed_apply_restores_the_background_mode(tmp_path):
 
     assert not result.ok
     assert bg.mode == 2  # the slideshow the user had is back
+
+
+def test_current_wallpaper_reads_the_desktop(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    spi = FakeSpi()
+    applier = WindowsStaticApplier(spi, FakeRegistry())
+
+    applier.apply(img)
+
+    assert applier.current_wallpaper() == spi.path
