@@ -148,7 +148,7 @@ class RealPipeline:
         ).fetchall()
         return PreferenceProfile.from_ratings(rows, now)
 
-    def prepare(self, now, mark: bool = True) -> None:
+    def prepare(self, now) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
         prepared_key = f"prepared_{now.date().isoformat()}"
@@ -384,7 +384,7 @@ class RealPipeline:
         ]
         self.shortlist = reviewed + rest
 
-    def pick(self, now):
+    def pick(self, now, dry_run: bool = False):
         if not self.shortlist:
             return None
         decision = self.shortlist.pop(0)
@@ -402,7 +402,7 @@ class RealPipeline:
                 decision.personalize,
                 decision.final,
                 decision.reason,
-                "applied",
+                "shortlisted" if dry_run else "applied",
                 now_iso(),
             ),
         )
@@ -429,7 +429,9 @@ def build_pipeline(cfg, conn):
         sources.append(WallhavenSource(session))
     if cfg.sources.bing_enabled:
         sources.append(BingSource(session, cfg.sources))
-    root = workshop_root(cfg.wallpaper_engine.install_dir) if cfg.wallpaper_engine.install_dir else None
+    root = None
+    if cfg.sources.we_workshop_enabled and cfg.wallpaper_engine.install_dir:
+        root = workshop_root(cfg.wallpaper_engine.install_dir)
     if root is not None and root.exists():
         sources.append(WorkshopSource(root, allow_mature=cfg.sources.allow_mature))
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)

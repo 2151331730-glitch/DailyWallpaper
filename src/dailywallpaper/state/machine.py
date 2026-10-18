@@ -18,7 +18,7 @@ class SystemClock:
 class Pipeline(Protocol):
     def prepare(self, now: datetime) -> None: ...
 
-    def pick(self, now: datetime): ...
+    def pick(self, now: datetime, dry_run: bool = False): ...
 
 
 logger = logging.getLogger(__name__)
@@ -90,15 +90,15 @@ class DailyStateMachine:
             if self._changed_today(now.date()):
                 return TickResult("already_changed")
             if now.time() < parse_time(self.config.app.daily_time, "08:30"):
-                self.pipeline.prepare(now, mark=not dry_run)
+                self.pipeline.prepare(now)
                 return TickResult("background")
             if now.time() > parse_time(self.config.app.latest_change_time, "22:00"):
                 return TickResult("too_late")
 
-        decision = self.pipeline.pick(now)
+        decision = self.pipeline.pick(now, dry_run=dry_run)
         if decision is None:
-            self.pipeline.prepare(now, mark=not dry_run)
-            decision = self.pipeline.pick(now)
+            self.pipeline.prepare(now)
+            decision = self.pipeline.pick(now, dry_run=dry_run)
         if decision is None:
             return TickResult("kept", "no candidate passed")
         if dry_run:

@@ -195,7 +195,7 @@ def test_manual_change_bypasses_pause_with_the_real_machine(tmp_path):
         def prepare(self, now):
             pass
 
-        def pick(self, now):
+        def pick(self, now, dry_run=False):
             return Decision(
                 wid, __import__("pathlib").Path("x.jpg"),
                 VisionScores(90, 70, 60, 10, False, False, "none",

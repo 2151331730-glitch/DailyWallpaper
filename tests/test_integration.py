@@ -598,3 +598,35 @@ def test_video_falls_back_to_the_poster_without_ffmpeg(tmp_path):
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
     assert len(pipeline.shortlist) == 1
+
+
+def test_the_workshop_source_is_off_unless_enabled(tmp_path):
+    from dataclasses import replace
+
+    from dailywallpaper.app import build_pipeline
+
+    cfg = _config(tmp_path)
+    cfg = replace(
+        cfg,
+        sources=replace(cfg.sources, we_workshop_enabled=False),
+        wallpaper_engine=replace(
+            cfg.wallpaper_engine,
+            install_dir=str(Path(r"D:/games/steam/steamapps/common/wallpaper_engine")),
+        ),
+    )
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+
+    names = [type(s).__name__ for s in build_pipeline(cfg, conn).sources]
+    assert "WorkshopSource" not in names
+
+
+def test_a_dry_run_records_a_shortlist_not_an_apply(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, ImageSession(), Provider([_scores(90, 10)]), clock)
+    machine = DailyStateMachine(conn, cfg, clock, pipeline, ApplyService(conn, Applier(), clock=clock))
+
+    machine.tick(dry_run=True)
+
+    statuses = [row["status"] for row in conn.execute("select status from decisions")]
+    assert statuses == ["shortlisted"]

@@ -29,7 +29,7 @@ class FakePipeline:
     def prepare(self, now, mark=True):
         self.prepared += 1
 
-    def pick(self, now):
+    def pick(self, now, dry_run=False):
         return self.decision
 
 
@@ -201,3 +201,4 @@ def test_malformed_latest_change_time_does_not_crash(tmp_path):
     )
 
     assert machine.tick().action in {"applied", "kept", "background", "too_late"}
+
