@@ -1,0 +1,14 @@
+{
+  "quality": 82,
+  "creativity": 71,
+  "novelty": 64,
+  "formulaic": 18,
+  "nsfw": false,
+  "watermark": false,
+  "text_overlay": "none",
+  "style_tags": ["landscape", "minimal", "warm"],
+  "mood_tags": ["calm", "bright"],
+  "palette": ["#223344", "#AABBCC"],
+  "subject": "mountain lake at sunrise",
+  "reason": "clean composition and restrained palette"
+}

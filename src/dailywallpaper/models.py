@@ -1,0 +1,20 @@
+# src/dailywallpaper/models.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dailywallpaper.analysis.vision import VisionScores
+
+
+@dataclass(frozen=True)
+class Decision:
+    wallpaper_id: int
+    image_path: Path
+    scores: "VisionScores"
+    explore: float
+    personalize: float
+    final: float
+    reason: str

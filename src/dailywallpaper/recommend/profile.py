@@ -1,0 +1,80 @@
+# src/dailywallpaper/recommend/profile.py
+"""Preference profile built from the rating history.
+
+Old ratings decay: <90 days counts fully, <180 days half, older a quarter.
+Tag weights are L2-normalized so the cosine-style affinity stays in range.
+"""
+from __future__ import annotations
+
+import json
+import math
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime
+
+from dailywallpaper.db import _as_aware, parse_ts
+
+FRESH_DAYS = 90
+AGING_DAYS = 180
+FRESH_WEIGHT = 1.0
+AGING_WEIGHT = 0.5
+OLD_WEIGHT = 0.25
+NEUTRAL = 50.0
+
+
+def _decay(age_days: int) -> float:
+    if age_days < FRESH_DAYS:
+        return FRESH_WEIGHT
+    if age_days < AGING_DAYS:
+        return AGING_WEIGHT
+    return OLD_WEIGHT
+
+
+def _source_of(row) -> str:
+    try:
+        value = row["source"]
+    except (KeyError, IndexError):
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+@dataclass
+class PreferenceProfile:
+    tag_weights: dict[str, float]
+    source_weights: dict[str, float]
+    rating_count: int
+
+    @classmethod
+    def from_ratings(cls, rows, now: datetime) -> "PreferenceProfile":
+        tags: dict[str, float] = defaultdict(float)
+        sources: dict[str, float] = defaultdict(float)
+        count = 0
+        for row in rows:
+            count += 1
+            created = parse_ts(row["created_at"])
+            weight = _decay((_as_aware(now) - created).days) * row["rating"]
+            for tag in json.loads(row["derived_tags_json"] or "[]"):
+                tags[tag] += weight
+            source = _source_of(row)
+            if source:
+                sources[source] += weight
+        norm = math.sqrt(sum(value * value for value in tags.values())) or 1.0
+        return cls(
+            tag_weights={key: value / norm for key, value in tags.items()},
+            source_weights=dict(sources),
+            rating_count=count,
+        )
+
+    def tag_affinity(self, tags) -> float:
+        if not self.tag_weights:
+            return NEUTRAL
+        numerator = sum(self.tag_weights.get(tag, 0.0) for tag in tags)
+        denominator = math.sqrt(len(tags)) or 1.0
+        cosine = max(-1.0, min(1.0, numerator / denominator))
+        return (cosine + 1.0) * 50.0
+
+    def source_affinity(self, source: str) -> float:
+        if not self.source_weights:
+            return NEUTRAL
+        average = max(-1.0, min(1.0, self.source_weights.get(source, 0.0)))
+        return (average + 1.0) * 50.0

@@ -502,7 +502,7 @@ def test_apply_saves_and_verifies(tmp_path):
     state = applier.snapshot()
     result = applier.apply(img)
     assert result.ok
-    assert reg.values["WallPaper"] == str(img)
+    assert spi.path == str(img.with_suffix(".apply.jpg"))
     assert state.wallpaper == "C:/old.jpg"
 
 def test_apply_failure_restores(tmp_path):
@@ -512,7 +512,7 @@ def test_apply_failure_restores(tmp_path):
     applier = WindowsStaticApplier(spi, reg)
     result = applier.apply(img)
     assert not result.ok
-    assert reg.values["WallPaper"] == "C:/old.jpg"
+    assert spi.path == "C:/old.jpg"
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1021,6 +1021,11 @@ def validate_scores(payload: dict) -> VisionScores:
         raise VisionError("style_tags must be 1-8 items")
     if not all(isinstance(x, str) and x.strip() for x in style):
         raise VisionError("style_tags must be non-empty strings")
+    if not isinstance(payload["nsfw"], bool) or not isinstance(payload["watermark"], bool):
+        raise VisionError("nsfw and watermark must be booleans")
+    mood = payload["mood_tags"]
+    if not isinstance(mood, list) or len(mood) > 6 or not all(isinstance(x, str) for x in mood):
+        raise VisionError("mood_tags must be a list of <=6 strings")
     overlay = payload["text_overlay"]
     if overlay not in {"none","minor","major"}:
         raise VisionError("bad text_overlay")
@@ -1036,7 +1041,7 @@ def validate_scores(payload: dict) -> VisionScores:
         watermark=bool(payload["watermark"]),
         text_overlay=overlay,
         style_tags=[x.strip().lower() for x in style],
-        mood_tags=[x.strip().lower() for x in payload["mood_tags"] if isinstance(x, str)][:6],
+        mood_tags=[x.strip().lower() for x in mood],
         palette=palette,
         subject=str(payload["subject"])[:40],
         reason=str(payload["reason"])[:80],
@@ -1549,6 +1554,40 @@ def upsert_wallpaper(conn, c: Candidate) -> int:
     return int(row[0])
 ```
 
+- [ ] **Step 3b: Implement the design's mixed sort**
+
+`WallhavenSource` currently hardcodes `sorting=toplist`. Replace it with the spec 4.1 plan: pages 1–2 `toplist` with `topRange=1M`, page 3 `random`, page 4 `date_added`. `topRange` is sent only with `toplist`.
+
+```python
+SORT_PLAN = ("toplist", "toplist", "random", "date_added")
+
+def _sort_for_page(self, page: int) -> tuple[str, str | None]:
+    sorting = SORT_PLAN[(page - 1) % len(SORT_PLAN)]
+    return sorting, ("1M" if sorting == "toplist" else None)
+```
+
+Use it in `_search(page)`, and add tests:
+
+```python
+def test_wallhaven_sort_plan():
+    src = WallhavenSource(FakeSession({}))
+    assert [src._sort_for_page(p) for p in (1, 2, 3, 4)] == [
+        ("toplist", "1M"), ("toplist", "1M"), ("random", None), ("date_added", None),
+    ]
+
+def test_wallhaven_sends_toprange_only_for_toplist():
+    calls = []
+    class S:
+        def get(self, url, params, headers, timeout):
+            calls.append(dict(params))
+            return FakeResponse({"data": []})
+    src = WallhavenSource(S())
+    src._search(1)
+    src._search(3)
+    assert calls[0]["topRange"] == "1M"
+    assert "topRange" not in calls[1]
+```
+
 - [ ] **Step 4: Add fault tests**
 
 Test a 429 response and a malformed payload; assert `SourceError` and no DB row. Test that `fetch_all` continues when one source raises.
@@ -1681,7 +1720,7 @@ git commit -m "feat: add image canonicalization and prefilter"
 - Create: `tests/test_vision_cache.py`
 
 **Interfaces:**
-- Produces: `VisionClient(provider, conn, pricing).analyze_or_cache(wallpaper_id, image_hash, image_path, model)` 
+- Produces: `VisionClient(provider, conn, pricing, budget=None).analyze_or_cache(wallpaper_id, image_hash, image_path, model)`
 - Produces: `record_usage(conn, provider, model, purpose, tokens_in, tokens_out, cost_cny, estimated, cache_hit, status_code, latency_ms, run_id="")`
 - Produces: `estimate_cost(tokens_in, max_output_tokens, pricing) -> float`
 - Consumes: `validate_scores`, `analyses`, `wallpaper_analyses`, `api_usage`.
@@ -1760,6 +1799,28 @@ conn.execute(
     (wallpaper_id, analysis_id, now_iso()),
 )
 conn.commit()
+```
+
+- [ ] **Step 2c: Wire budget pre-write/settle**
+
+```python
+usage_id = None
+if self.budget:
+    usage_id = self.budget.prewrite_estimate(
+        provider="zhipu", model=model, purpose="screen", estimate=0.003
+    )
+try:
+    result = self.provider.analyze(image_path, model)
+except Exception:
+    if self.budget and usage_id is not None:
+        self.budget.settle_usage(usage_id, 0, 0, 0.0, 500, 0)
+    raise
+if self.budget and usage_id is not None:
+    self.budget.settle_usage(
+        usage_id, result.tokens_in, result.tokens_out,
+        estimate_cost(result.tokens_in, self.max_output_tokens, self.pricing[model]),
+        200, result.latency_ms,
+    )
 ```
 
 - [ ] **Step 3: Implement retry-on-invalid-JSON**
@@ -2463,13 +2524,14 @@ def build_pipeline(cfg, conn):
     key = keyring.get_password("DailyWallpaper", "zhipu")
     if not key:
         raise RuntimeError("Zhipu key missing; run scripts/set_key.py")
+    budget = BudgetGuard(
+        conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, SystemClock()
+    )
     vision = VisionClient(
         provider=ZhipuVision(key),
         conn=conn,
         pricing=cfg.vision.pricing,
-    )
-    budget = BudgetGuard(
-        conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, SystemClock()
+        budget=budget,
     )
     return RealPipeline(cfg, conn, session, sources, vision, budget)
 ```

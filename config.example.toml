@@ -1,0 +1,74 @@
+[app]
+data_dir = "data"
+daily_time = "08:30"
+latest_change_time = "22:00"
+timezone = "Asia/Shanghai"
+start_with_windows = false
+manual_change_counts_toward_daily_limit = true
+allow_manual_override_after_daily_change = false
+max_analyses_per_day = 40
+max_downloads_per_day = 60
+log_level = "INFO"
+
+[sources]
+wallhaven_enabled = true
+bing_enabled = true
+we_workshop_enabled = false
+allow_mature = false
+wallhaven_categories = "111"
+min_width = 2560
+min_height = 1440
+aspect_min = 1.70
+aspect_max = 1.85
+max_image_mb = 40
+max_video_mb = 500
+wallhaven_pages = 4
+
+[vision]
+provider = "zhipu"
+screen_model = "glm-4.6v-flash"
+review_model = "glm-4.6v"
+review_top_n = 5
+prompt_version = "v1"
+max_output_tokens = 500
+temperature = 0.2
+
+[vision.pricing."glm-4.6v"]
+input_cny_per_million = 1.0
+output_cny_per_million = 3.0
+
+[vision.pricing."glm-4.6v-flash"]
+input_cny_per_million = 0.0
+output_cny_per_million = 0.0
+
+[budget]
+monthly_cny = 10.0
+warn_ratio = 0.80
+
+[weather]
+enabled = true
+city = "北京"
+latitude = 39.9075
+longitude = 116.39723
+cache_minutes = 60
+
+[wallpaper]
+style = "fill"
+monitor = 0
+media_strategy = "mixed"
+dynamic_every_n_days = 3
+dynamic_requires_ac = true
+
+[wallpaper_engine]
+install_dir = "D:/games/steam/steamapps/common/wallpaper_engine"
+config_path = "D:/games/steam/steamapps/common/wallpaper_engine/config.json"
+
+[tools]
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+
+[retention]
+wallpapers_days = 90
+cache_days = 180
+log_mb = 5
+log_backups = 5

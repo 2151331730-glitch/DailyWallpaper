@@ -1,0 +1,104 @@
+# src/dailywallpaper/analysis/scoring.py
+"""Hard gates and the 55/45 explore-personalize ranking (spec 7.x)."""
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+
+from dailywallpaper.models import Decision
+from dailywallpaper.recommend.weather import weather_fit
+
+from .vision import VisionScores
+
+QUALITY_FLOOR = 60
+MINOR_OVERLAY_PENALTY = 10
+FORMULAIC_CEILING = 70
+EXPLORE_WEIGHT = 0.55
+PERSONALIZE_WEIGHT = 0.45
+COLD_START_PRIOR = 60.0
+PRIOR_STRENGTH = 5.0
+RARITY_WINDOW = 30
+
+
+def hard_gate(scores: VisionScores) -> list[str]:
+    """Return every reason a candidate must not be applied."""
+    quality = scores.quality - (
+        MINOR_OVERLAY_PENALTY if scores.text_overlay == "minor" else 0
+    )
+    reasons: list[str] = []
+    if quality < QUALITY_FLOOR:
+        reasons.append("quality")
+    if scores.formulaic > FORMULAIC_CEILING:
+        reasons.append("formulaic")
+    if scores.nsfw:
+        reasons.append("nsfw")
+    if scores.watermark:
+        reasons.append("watermark")
+    if scores.text_overlay == "major":
+        reasons.append("text_overlay")
+    return reasons
+
+
+@dataclass(frozen=True)
+class DecisionScores:
+    explore: float
+    personalize: float
+    final: float
+
+
+def explore_score(scores: VisionScores, source: str, recent) -> float:
+    """Creativity/novelty plus how rare the primary style is and how much it differs from last time."""
+    primary = scores.style_tags[0]
+    count = sum(1 for _, style in recent if style == primary)
+    rarity = 100 * (1 - min(count, RARITY_WINDOW) / RARITY_WINDOW)
+    last_source, last_style = recent[-1] if recent else ("", "")
+    diversity = 100
+    if last_source == source:
+        diversity -= 50
+    if last_style == primary:
+        diversity -= 50
+    return (
+        0.35 * scores.creativity
+        + 0.35 * scores.novelty
+        + 0.20 * rarity
+        + 0.10 * max(0, diversity)
+    )
+
+
+def personalize_score(scores: VisionScores, profile, source: str, weather_code: int) -> float:
+    return (
+        0.70 * profile.tag_affinity(scores.style_tags)
+        + 0.20 * profile.source_affinity(source)
+        + 0.10 * weather_fit(scores.mood_tags, weather_code)
+    )
+
+
+def final_score(
+    scores: VisionScores, source: str, profile, recent, weather_code: int
+) -> DecisionScores:
+    explore = explore_score(scores, source, recent)
+    raw_personalize = personalize_score(scores, profile, source, weather_code)
+    n = profile.rating_count
+    if n:
+        personalize = (n / (n + PRIOR_STRENGTH)) * raw_personalize + (
+            PRIOR_STRENGTH / (n + PRIOR_STRENGTH)
+        ) * COLD_START_PRIOR
+    else:
+        personalize = COLD_START_PRIOR
+    return DecisionScores(
+        explore=explore,
+        personalize=personalize,
+        final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize,
+    )
+
+
+def rank(decisions: list[Decision], date_key: str) -> list[Decision]:
+    """Deterministic ordering: final, then quality, then a per-day stable hash."""
+
+    def key(decision: Decision):
+        tiebreak = hashlib.sha256(
+            f"{decision.wallpaper_id}:{date_key}".encode()
+        ).hexdigest()
+        return (-decision.final, -decision.scores.quality, tiebreak)
+
+    return sorted(decisions, key=key)
