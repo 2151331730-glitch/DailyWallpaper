@@ -1,9 +1,34 @@
 # src/dailywallpaper/app.py
-"""Application shell and the single-instance guard."""
+"""Application shell, pipeline and the single-instance guard."""
 from __future__ import annotations
 
 import ctypes
+import json
 import time
+from pathlib import Path
+
+import keyring
+import requests
+
+from dailywallpaper.analysis.images import canonicalize, download
+from dailywallpaper.analysis.prefilter import prefilter
+from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
+from dailywallpaper.analysis.vision import (
+    KEYRING_ACCOUNT,
+    KEYRING_SERVICE,
+    VisionClient,
+    ZhipuVision,
+)
+from dailywallpaper.apply.service import ApplyService
+from dailywallpaper.apply.windows_static import WindowsStaticApplier
+from dailywallpaper.cost.budget import BudgetGuard
+from dailywallpaper.db import connect, migrate
+from dailywallpaper.models import Decision
+from dailywallpaper.recommend.profile import PreferenceProfile
+from dailywallpaper.sources.bing import BingSource
+from dailywallpaper.sources.repository import upsert_wallpaper
+from dailywallpaper.sources.wallhaven import WallhavenSource
+from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
@@ -47,3 +72,141 @@ class Application:
         while True:
             self.machine.tick()
             self.sleep(self.interval_seconds)
+
+
+class RealPipeline:
+    """Fetch, screen, analyze and rank one day's candidates."""
+
+    def __init__(self, cfg, conn, session, sources, vision, budget):
+        self.cfg = cfg
+        self.conn = conn
+        self.session = session
+        self.sources = sources
+        self.vision = vision
+        self.budget = budget
+        self.shortlist = []
+
+    def _recent_styles(self):
+        rows = self.conn.execute(
+            """
+            select w.source, a.style_tags_json
+            from decisions d
+            join wallpapers w on w.id = d.wallpaper_id
+            join wallpaper_analyses wa on wa.wallpaper_id = w.id
+            join analyses a on a.id = wa.analysis_id
+            where d.status = 'applied'
+            order by d.id desc limit 30
+            """
+        ).fetchall()
+        recent = []
+        for row in rows:
+            tags = json.loads(row["style_tags_json"] or "[]")
+            recent.append((row["source"], tags[0] if tags else ""))
+        return recent
+
+    def _profile(self, now):
+        rows = self.conn.execute(
+            """
+            select r.rating, r.created_at, r.derived_tags_json, w.source
+            from ratings r join wallpapers w on w.id = r.wallpaper_id
+            """
+        ).fetchall()
+        return PreferenceProfile.from_ratings(rows, now)
+
+    def prepare(self, now) -> None:
+        raw = []
+        for source in self.sources:
+            try:
+                raw.extend(source.fetch(self.cfg.app.max_analyses_per_day))
+            except Exception:
+                continue
+
+        recent = self._recent_styles()
+        profile = self._profile(now)
+        recent_hashes = [
+            row["phash"]
+            for row in self.conn.execute(
+                "select phash from wallpapers where phash <> '' order by id desc limit 200"
+            ).fetchall()
+        ]
+
+        data_dir = Path(self.cfg.app.data_dir)
+        self.shortlist = []
+        downloads = analyses = 0
+        for candidate in raw:
+            if downloads >= self.cfg.app.max_downloads_per_day:
+                break
+            if analyses >= self.cfg.app.max_analyses_per_day:
+                break
+            wallpaper_id = upsert_wallpaper(self.conn, candidate)
+            if not candidate.preview_url:
+                continue
+            preview = download(
+                self.session,
+                candidate.preview_url,
+                data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
+            )
+            downloads += 1
+            canonical, image_hash = canonicalize(preview, data_dir / "cache" / "normalized")
+            if not prefilter(canonical, candidate, self.cfg.sources, recent_hashes).ok:
+                continue
+            if not self.budget.check(0.003):
+                break
+            record = self.vision.analyze_or_cache(
+                wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
+            )
+            analyses += 1
+            if hard_gate(record.scores):
+                continue
+            scores = final_score(record.scores, candidate.source, profile, recent, 0)
+            self.shortlist.append(
+                Decision(
+                    wallpaper_id,
+                    canonical,
+                    record.scores,
+                    scores.explore,
+                    scores.personalize,
+                    scores.final,
+                    record.scores.reason,
+                )
+            )
+        self.shortlist = rank(self.shortlist, now.date().isoformat())
+
+    def pick(self, now):
+        return self.shortlist.pop(0) if self.shortlist else None
+
+
+def build_pipeline(cfg, conn):
+    session = requests.Session()
+    sources = []
+    if cfg.sources.wallhaven_enabled:
+        sources.append(WallhavenSource(session))
+    if cfg.sources.bing_enabled:
+        sources.append(BingSource(session))
+    api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+    if not api_key:
+        raise RuntimeError("Zhipu key missing; run scripts/set_key.py")
+    budget = BudgetGuard(
+        conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, SystemClock()
+    )
+    vision = VisionClient(
+        provider=ZhipuVision(api_key),
+        conn=conn,
+        pricing=cfg.vision.pricing,
+        budget=budget,
+    )
+    return RealPipeline(cfg, conn, session, sources, vision, budget)
+
+
+def build_application(cfg):
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    pipeline = build_pipeline(cfg, conn)
+    machine = DailyStateMachine(
+        conn=conn,
+        config=cfg,
+        clock=SystemClock(),
+        pipeline=pipeline,
+        apply_service=ApplyService(conn, WindowsStaticApplier()),
+    )
+    return Application(machine)

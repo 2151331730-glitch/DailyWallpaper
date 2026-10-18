@@ -16,10 +16,18 @@ class ApplyService:
     replaced, which is what ``undo_last`` restores.
     """
 
-    def __init__(self, conn, applier, we=None):
+    def __init__(self, conn, applier, we=None, clock=None):
         self.conn = conn
         self.applier = applier
         self.we = we
+        self.clock = clock
+
+    def _change_date(self) -> str:
+        # Follow the state machine's clock when one is supplied, so a
+        # simulated day and the row it writes agree on the date.
+        if self.clock is None:
+            return today_iso()
+        return self.clock.now().date().isoformat()
 
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         state = self.applier.snapshot()
@@ -41,7 +49,7 @@ class ApplyService:
             VALUES(?,?,?,?,?,?,1)
             """,
             (
-                today_iso(),
+                self._change_date(),
                 wallpaper_id,
                 state.wallpaper,
                 json.dumps({"file": we_before}, ensure_ascii=False),

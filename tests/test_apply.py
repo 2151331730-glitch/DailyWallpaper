@@ -115,6 +115,25 @@ def test_undo_restores_the_previous_wallpaper(tmp_path):
     assert service.applier.restored[-1].wallpaper == "C:/old.jpg"
 
 
+def test_change_date_follows_an_injected_clock(tmp_path):
+    from datetime import datetime
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 20, 9, 0)
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(conn, _FakeApplier(), clock=_Clock())
+
+    service.apply(wid, tmp_path / "new.jpg")
+
+    assert conn.execute("select change_date from change_log").fetchone()[0] == "2026-10-20"
+
+
 def test_undo_without_history_returns_false(tmp_path):
     conn, wid, service = _service(tmp_path)
 
