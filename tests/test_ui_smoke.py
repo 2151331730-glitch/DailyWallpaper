@@ -148,3 +148,35 @@ def test_window_without_history_does_not_crash(qapp, tmp_path):
     window = MainWindow(_Service(), conn)
 
     assert window.title_label.text() == ""
+
+
+def test_shell_wires_tray_and_window(qapp, tmp_path):
+    from datetime import datetime
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.state.machine import TickResult
+    from dailywallpaper.ui.commands import CommandService
+    from dailywallpaper.ui.shell import UiShell
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 18, 9, 0)
+
+    class _Machine:
+        def tick(self, dry_run=False):
+            return TickResult("kept")
+
+    class _Apply:
+        def undo_last(self):
+            return True
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    service = CommandService(conn, AppSection(), _Clock(), _Machine(), _Apply())
+
+    shell = UiShell(service, _Machine(), on_quit=lambda: None)
+
+    assert shell.tray is not None
+    assert shell.window is not None
+    shell.poll_timer.stop()

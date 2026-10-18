@@ -68,11 +68,11 @@ def test_cli_dry_run_is_forwarded(tmp_path):
     assert calls == [("once", True)]
 
 
-def test_cli_without_once_runs_forever(tmp_path):
+def test_cli_headless_runs_forever(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg)], app_factory=lambda c: _App(calls))
+    main(["--config", str(cfg), "--headless"], app_factory=lambda c: _App(calls))
 
     assert calls == [("forever", None)]
 
@@ -129,3 +129,22 @@ def test_single_instance_rejects_a_second_owner():
         with pytest.raises(RuntimeError):
             with SingleInstance(name):
                 pass
+
+
+def test_cli_headless_flag_skips_the_gui(tmp_path):
+    calls = []
+    cfg = _config(tmp_path)
+
+    main(["--config", str(cfg), "--once", "--headless"], app_factory=lambda c: _App(calls))
+
+    assert calls == [("once", False)]
+
+
+def test_cli_runs_the_gui_when_not_headless(tmp_path):
+    calls = []
+    cfg = _config(tmp_path)
+
+    code = main(["--config", str(cfg)], app_factory=lambda c: _App(calls), run_gui=lambda cfg: 0)
+
+    assert code == 0
+    assert calls == []
