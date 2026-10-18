@@ -48,6 +48,12 @@ def upsert_wallpaper(conn, candidate: Candidate) -> int:
     return int(row[0])
 
 
+def set_phash(conn, wallpaper_id: int, phash: str) -> None:
+    """Store the perceptual hash so later runs can reject near-duplicates."""
+    conn.execute("update wallpapers set phash=? where id=?", (phash, wallpaper_id))
+    conn.commit()
+
+
 def fetch_all(sources, limit: int) -> list[Candidate]:
     """Fetch from every source; one failing source does not abort the rest."""
     items: list[Candidate] = []

@@ -23,11 +23,12 @@ from dailywallpaper.analysis.vision import (
 from dailywallpaper.apply.service import ApplyService
 from dailywallpaper.apply.windows_static import WindowsStaticApplier
 from dailywallpaper.cost.budget import BudgetGuard
-from dailywallpaper.db import connect, migrate
+from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
 from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.sources.bing import BingSource
-from dailywallpaper.sources.repository import upsert_wallpaper
+from dailywallpaper.recommend.weather import cached_weather
+from dailywallpaper.sources.repository import set_phash, upsert_wallpaper
 from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
@@ -69,7 +70,11 @@ class Application:
         self.interval_seconds = interval_seconds
 
     def run_once(self, dry_run: bool = False) -> int:
-        return self.machine.tick(dry_run=dry_run)
+        result = self.machine.tick(dry_run=dry_run)
+        detail = f" — {result.reason}" if result.reason else ""
+        print(f"{result.action}{detail}")
+        logger.info(f"tick: {result.action}{detail}")
+        return 1 if result.action == "apply_failed" else 0
 
     def run_forever(self) -> int:
         while True:
@@ -146,6 +151,20 @@ class RealPipeline:
 
         self.budget.warn_if_needed()
 
+        weather_code = 0
+        if self.cfg.weather.enabled:
+            try:
+                weather = cached_weather(
+                    self.session,
+                    self.conn,
+                    self.cfg.weather.latitude,
+                    self.cfg.weather.longitude,
+                    self.cfg.weather.cache_minutes,
+                )
+                weather_code = weather.code
+            except Exception as exc:
+                logger.warning(f"weather unavailable, scoring neutral: {exc}")
+
         data_dir = Path(self.cfg.app.data_dir)
         self.shortlist = []
         downloads = analyses = 0
@@ -167,8 +186,10 @@ class RealPipeline:
                 canonical, image_hash = canonicalize(
                     preview, data_dir / "cache" / "normalized"
                 )
-                if not prefilter(canonical, candidate, self.cfg.sources, recent_hashes).ok:
+                check = prefilter(canonical, candidate, self.cfg.sources, recent_hashes)
+                if not check.ok:
                     continue
+                set_phash(self.conn, wallpaper_id, check.dhash)
                 if not self.budget.check(0.003):
                     break
                 record = self.vision.analyze_or_cache(
@@ -177,7 +198,9 @@ class RealPipeline:
                 analyses += 1
                 if hard_gate(record.scores):
                     continue
-                scores = final_score(record.scores, candidate.source, profile, recent, 0)
+                scores = final_score(
+                    record.scores, candidate.source, profile, recent, weather_code
+                )
                 self.shortlist.append(
                     Decision(
                         wallpaper_id,
@@ -201,7 +224,29 @@ class RealPipeline:
         self.conn.commit()
 
     def pick(self, now):
-        return self.shortlist.pop(0) if self.shortlist else None
+        if not self.shortlist:
+            return None
+        decision = self.shortlist.pop(0)
+        # Recorded before the apply so tomorrow's diversity term can see it.
+        self.conn.execute(
+            """
+            insert into decisions(decision_date,wallpaper_id,explore_score,
+              personalize_score,final_score,reason,status,created_at)
+            values(?,?,?,?,?,?,?,?)
+            """,
+            (
+                now.date().isoformat(),
+                decision.wallpaper_id,
+                decision.explore,
+                decision.personalize,
+                decision.final,
+                decision.reason,
+                "applied",
+                now_iso(),
+            ),
+        )
+        self.conn.commit()
+        return decision
 
 
 def build_pipeline(cfg, conn):

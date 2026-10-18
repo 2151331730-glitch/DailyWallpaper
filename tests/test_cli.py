@@ -78,13 +78,15 @@ def test_cli_without_once_runs_forever(tmp_path):
 
 
 def test_application_run_once_delegates_to_the_machine():
+    from dailywallpaper.state.machine import TickResult
+
     class _Machine:
         def __init__(self):
             self.calls = []
 
         def tick(self, dry_run=False):
             self.calls.append(dry_run)
-            return 0
+            return TickResult("dry_run" if dry_run else "applied")
 
     machine = _Machine()
     app = Application(machine, sleep=lambda seconds: None)

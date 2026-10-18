@@ -109,6 +109,43 @@ class Source:
         return list(self.candidates)
 
 
+class DaySource:
+    """A source that serves fresh candidates on every fetch, like a real one."""
+
+    def __init__(self):
+        self.day = 0
+
+    def fetch(self, limit=None):
+        self.day += 1
+        return [
+            Candidate(
+                "wallhaven", f"d{self.day}-{index}", "t", "p", "f",
+                f"https://img/day{self.day}/{index}.png",
+                "image", 3840, 2160, 1000, [], {},
+            )
+            for index in range(3)
+        ]
+
+
+class SynthSession:
+    """Serve a distinct, sharp, mid-tone image for any https://img/... URL."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url, stream=True, timeout=30):
+        import hashlib
+
+        self.calls += 1
+        seed = int(hashlib.sha256(url.encode()).hexdigest()[:8], 16)
+        rng = np.random.default_rng(seed)
+        blocks = rng.integers(60, 220, size=(10, 16)).astype(np.uint8)
+        arr = np.kron(blocks, np.ones((32, 32), dtype=np.uint8))
+        buffer = io.BytesIO()
+        Image.fromarray(np.stack([arr] * 3, axis=-1)).save(buffer, "PNG")
+        return _Response(buffer.getvalue())
+
+
 class Provider:
     def __init__(self, scores):
         self.scores = scores
@@ -162,20 +199,18 @@ def test_one_apply_per_day_for_a_week(tmp_path):
     migrate(conn)
 
     clock = Clock(datetime(2026, 10, 18, 9, 0))
-    provider = Provider([_scores(90, 10), _scores(50, 20), _scores(50, 20)])
-    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
-    pipeline = RealPipeline(cfg, conn, ImageSession(), [Source(_candidates())], vision, budget)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [DaySource()], vision, budget)
     service = ApplyService(conn, Applier(), clock=clock)
     machine = DailyStateMachine(conn, cfg, clock, pipeline, service)
-    app = Application(machine, sleep=lambda seconds: None)
 
-    assert app.run_once().action == "applied"
-    assert app.run_once().action == "already_changed"
+    assert machine.tick().action == "applied"
+    assert machine.tick().action == "already_changed"
 
     for _ in range(6):
         clock.advance(1)
-        assert app.run_once().action == "applied"
+        assert machine.tick().action == "applied"
 
     rows = conn.execute(
         "select change_date from change_log where success=1 order by change_date"
@@ -233,6 +268,35 @@ def test_prepare_warns_once_when_the_budget_is_nearly_spent(tmp_path):
 
     rows = conn.execute("select count(*) from state where key like 'budget_warned_%'").fetchone()
     assert rows[0] == 1
+
+
+def test_prepare_stores_a_phash_for_accepted_candidates(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+
+    pipeline.prepare(clock.now())
+
+    hashes = [r[0] for r in conn.execute("select phash from wallpapers").fetchall()]
+    assert len(hashes) == 3
+    assert all(hashes)
+
+
+def test_pick_records_a_decision_row(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    pipeline.prepare(clock.now())
+
+    decision = pipeline.pick(clock.now())
+
+    assert decision is not None
+    row = conn.execute("select * from decisions").fetchone()
+    assert row["wallpaper_id"] == decision.wallpaper_id
+    assert row["status"] == "applied"
+    assert row["decision_date"] == "2026-10-18"
 
 
 def test_low_quality_candidates_are_gated_out(tmp_path):
