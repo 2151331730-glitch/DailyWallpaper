@@ -5,9 +5,9 @@ from dailywallpaper.db import connect, migrate
 
 
 class _FakeApplier:
-    def __init__(self, ok=True):
+    def __init__(self, ok=True, wallpaper="C:/old.jpg"):
         self.ok = ok
-        self.current = WallpaperState(wallpaper="C:/old.jpg", style="22", tile="0")
+        self.current = WallpaperState(wallpaper=wallpaper, style="22", tile="0")
         self.restored = []
 
     def snapshot(self):
@@ -52,7 +52,11 @@ def _wallpaper(conn):
 def _service(tmp_path, ok=True, we=None):
     conn = connect(tmp_path / "app.db")
     migrate(conn)
-    return conn, _wallpaper(conn), ApplyService(conn, _FakeApplier(ok=ok), we=we)
+    old = tmp_path / "old.jpg"
+    old.write_bytes(b"x")
+    return conn, _wallpaper(conn), ApplyService(
+        conn, _FakeApplier(ok=ok, wallpaper=str(old)), we=we
+    )
 
 
 def test_successful_apply_logs_a_static_change(tmp_path):
@@ -63,7 +67,7 @@ def test_successful_apply_logs_a_static_change(tmp_path):
     row = conn.execute("select * from change_log").fetchone()
     assert row["success"] == 1
     assert row["method"] == "static"
-    assert row["previous_wallpaper"] == "C:/old.jpg"
+    assert row["previous_wallpaper"].endswith("old.jpg")
 
 
 def test_failed_apply_writes_no_success_row(tmp_path):
@@ -112,7 +116,7 @@ def test_undo_restores_the_previous_wallpaper(tmp_path):
 
     assert service.undo_last() is True
 
-    assert service.applier.restored[-1].wallpaper == "C:/old.jpg"
+    assert service.applier.restored[-1].wallpaper.endswith("old.jpg")
 
 
 def test_change_date_follows_an_injected_clock(tmp_path):
@@ -147,3 +151,32 @@ def test_undo_reopens_the_previous_we_project(tmp_path):
 
     assert service.undo_last() is True
     assert we.opened == ["D:/we/scene.pkg"]
+
+
+def test_undo_refuses_a_missing_previous_wallpaper(tmp_path):
+    conn, wid, service = _service(tmp_path)
+    conn.execute(
+        "insert into change_log(change_date,wallpaper_id,previous_wallpaper,method,applied_at,success)"
+        " values('2026-10-18',1,'C:/does/not/exist.jpg','static','x',1)"
+    )
+    conn.commit()
+
+    assert service.undo_last() is False
+
+
+def test_applier_exception_is_treated_as_failure(tmp_path):
+    class _Boom(_FakeApplier):
+        def apply(self, image, style="fill"):
+            raise RuntimeError("boom")
+
+    we = _FakeWe()
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(conn, _Boom(), we=we)
+
+    assert service.apply(wid, tmp_path / "new.jpg") is False
+    assert we.opened == ["D:/we/scene.pkg"]
+    assert conn.execute("select count(*) from change_log").fetchone()[0] == 0

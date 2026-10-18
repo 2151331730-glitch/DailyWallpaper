@@ -36,7 +36,13 @@ class ApplyService:
             if not self.we.close():
                 return False
 
-        result = self.applier.apply(image_path)
+        try:
+            result = self.applier.apply(image_path)
+        except Exception as exc:
+            # An applier that raises is a failed apply; do not leave WE closed.
+            if self.we and we_before:
+                self.we.open(Path(we_before))
+            return False
         if not result.ok:
             if self.we and we_before:
                 self.we.open(Path(we_before))
@@ -75,6 +81,9 @@ class ApplyService:
 
         if self.we and previous_we:
             return bool(self.we.open(Path(previous_we)))
+
+        if not Path(row["previous_wallpaper"]).exists():
+            return False
 
         current = self.applier.snapshot()
         self.applier.restore(
