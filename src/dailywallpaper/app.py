@@ -23,7 +23,11 @@ from dailywallpaper.analysis.vision import (
     ZhipuVision,
 )
 from dailywallpaper.apply.service import ApplyService
-from dailywallpaper.apply.windows_static import Win32BackgroundType, WindowsStaticApplier
+from dailywallpaper.apply.windows_static import (
+    Win32BackgroundType,
+    WindowsStaticApplier,
+    convert_to_jpeg,
+)
 from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
@@ -51,6 +55,8 @@ from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
 STEAM_KEY_ACCOUNT = "steam_api_key"
+# Only the head of the ranked list needs a full-resolution download.
+MATERIALIZE_TOP_N = 3
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +279,54 @@ class RealPipeline:
         if self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
+        self._materialize(data_dir, counters)
         self._prepared_on = prepared_key
+
+    def _materialize(self, data_dir: Path, counters: dict) -> None:
+        """Download the full image for the candidates that could be applied.
+
+        Screening works on a <=1024px copy; applying that would upscale a
+        thumbnail onto a 4K desktop. Anything without a real file is dropped
+        rather than applied, so a failed download costs the day's wallpaper,
+        not its quality.
+        """
+        kept = []
+        made = 0
+        for decision in self.shortlist:
+            if decision.apply_path is not None:
+                # Already a file on disk, or a local path with nothing better.
+                kept.append(decision)
+                continue
+            if (
+                made >= MATERIALIZE_TOP_N
+                or counters["downloads"] >= self.cfg.app.max_downloads_per_day
+            ):
+                continue
+            row = self.conn.execute(
+                "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
+            ).fetchone()
+            url = str(row[0]) if row else ""
+            if not url.startswith(("http://", "https://")):
+                continue
+            try:
+                raw = data_dir / "downloads" / f"{decision.wallpaper_id}.img"
+                download(
+                    self.session,
+                    url,
+                    raw,
+                    max_bytes=self.cfg.sources.max_image_mb * 1024 * 1024,
+                )
+                dest = data_dir / "wallpapers" / f"{decision.wallpaper_id}.jpg"
+                convert_to_jpeg(raw, dest)
+                raw.unlink(missing_ok=True)
+                counters["downloads"] += 1
+                made += 1
+                kept.append(replace(decision, apply_path=dest))
+            except Exception as exc:
+                logger.warning(
+                    f"full image for {decision.wallpaper_id} failed: {exc}"
+                )
+        self.shortlist = kept
 
     def _keep_ready(self) -> None:
         self.shortlist = [decision for decision in self.shortlist if decision.ready]
@@ -361,11 +414,10 @@ class RealPipeline:
                         scores.final,
                         reason,
                         candidate.source,
-                        apply_path=(
-                            Path(candidate.file_url)
-                            if Path(candidate.file_url).is_file()
-                            else canonical
-                        ),
+                        # A remote original has no local file yet; the
+                        # materializer fills this in after ranking, and a
+                        # candidate it cannot materialize is dropped.
+                        apply_path=_apply_path_for(candidate, canonical),
                         ready=(
                             candidate.source != "steam_workshop"
                             or Path(candidate.file_url).is_file()
@@ -455,6 +507,21 @@ class RealPipeline:
         )
         self.conn.commit()
         return decision
+
+
+def _apply_path_for(candidate, canonical: Path) -> Path | None:
+    """Where the applier should read the image from.
+
+    A file already on disk (workshop project) is used directly; a remote
+    original is marked None so the materializer downloads it full size. A
+    local path that does not exist has nothing better than the screening copy.
+    """
+    source = str(candidate.file_url or "")
+    if source and Path(source).is_file():
+        return Path(source)
+    if source.startswith(("http://", "https://")):
+        return None
+    return canonical
 
 
 def workshop_root(install_dir) -> Path | None:

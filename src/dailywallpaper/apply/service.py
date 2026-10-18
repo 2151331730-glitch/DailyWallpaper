@@ -101,6 +101,12 @@ class ApplyService:
                 now_iso(),
             ),
         )
+        # The startup re-apply must use the file that was actually applied,
+        # not the smaller screening copy.
+        self.conn.execute(
+            "insert or replace into state(key,value) values('last_applied_path',?)",
+            (str(image_path),),
+        )
         self.conn.commit()
         if method == "static" and self.we is not None and self.recheck_delays:
             self._epoch += 1
@@ -169,7 +175,13 @@ class ApplyService:
                     # WE is not running yet (the control channel is dead);
                     # at login that is normal, so put the wallpaper back anyway.
                     logger.warning("startup: WE did not close; applying anyway")
-            result = self.applier.apply(Path(row[0]))
+            path = Path(row[0])
+            recorded = self.conn.execute(
+                "select value from state where key='last_applied_path'"
+            ).fetchone()
+            if recorded is not None and recorded[0] and Path(recorded[0]).is_file():
+                path = Path(recorded[0])
+            result = self.applier.apply(path)
             if not result.ok:
                 logger.warning(f"startup re-apply failed: {result.error}")
             return bool(result.ok)

@@ -545,3 +545,32 @@ def test_startup_applies_even_when_we_cannot_be_closed(tmp_path):
 
     assert service.ensure_visible() is True
     assert service.applier.applied[-1] == image
+
+
+def test_a_successful_apply_records_the_applied_path(tmp_path):
+    conn, wid, service = _service(tmp_path)
+    target = tmp_path / "new.jpg"
+
+    assert service.apply(wid, target) is True
+
+    row = conn.execute("select value from state where key='last_applied_path'").fetchone()
+    assert row[0] == str(target)
+
+
+def test_startup_prefers_the_recorded_applied_path(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    preview = tmp_path / "preview.jpg"
+    preview.write_bytes(b"x")
+    full = tmp_path / "full.jpg"
+    full.write_bytes(b"x")
+    _logged_wallpaper(conn, preview)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(full),),
+    )
+    conn.commit()
+    service = ApplyService(conn, _FakeApplier())
+
+    assert service.ensure_visible() is True
+    assert service.applier.applied[-1] == full

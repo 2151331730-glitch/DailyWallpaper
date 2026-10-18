@@ -765,3 +765,68 @@ def test_a_steam_item_evicted_between_prepare_and_pick_is_skipped(tmp_path):
     (root / "123" / "project.json").unlink()
 
     assert pipeline.pick(datetime(2026, 10, 18, 9, 0)) is None
+
+
+def _two_size_session():
+    full = io.BytesIO()
+    _checkerboard(24).resize((2560, 1440)).save(full, "PNG")
+    small = io.BytesIO()
+    _checkerboard(6).resize((320, 180)).save(small, "PNG")
+    items = {
+        "https://img/full.png": full.getvalue(),
+        "https://img/preview.png": small.getvalue(),
+    }
+
+    class _S:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, stream=True, timeout=30, **kwargs):
+            self.calls += 1
+            if url not in items:
+                raise RuntimeError(f"404 {url}")
+            return _Response(items[url])
+
+    return _S()
+
+
+def test_the_applied_file_is_the_full_resolution_image(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    candidate = Candidate(
+        "wallhaven", "w1", "T", "", "https://img/full.png",
+        "https://img/preview.png", "image", 2560, 1440, 0, [], {},
+    )
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, _two_size_session(), [Source([candidate])], vision, CountingBudget(100)
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    decision = pipeline.shortlist[0]
+    apply_path = Path(decision.apply_path)
+    assert apply_path.name.endswith(".jpg")
+    assert apply_path.parent.name == "wallpapers"
+    assert Image.open(apply_path).size == (2560, 1440)
+    # The analysis copy stays small on purpose.
+    assert Image.open(decision.image_path).size[0] <= 1024
+
+
+def test_a_candidate_without_a_full_image_is_not_applied(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    candidate = Candidate(
+        "wallhaven", "w1", "T", "", "https://img/missing.png",
+        "https://img/preview.png", "image", 2560, 1440, 0, [], {},
+    )
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, _two_size_session(), [Source([candidate])], vision, CountingBudget(100)
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert pipeline.shortlist == []
