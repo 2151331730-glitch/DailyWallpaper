@@ -84,7 +84,7 @@ class CommandService:
         if not self._apply_lock.acquire(blocking=False):
             return None  # a change is already running; ignore the extra click
         try:
-            result = self.machine.tick(dry_run=False)
+            result = self.machine.tick(dry_run=False, manual=True)
             self._last_action = result.action
             self._last_reason = result.reason
             return result

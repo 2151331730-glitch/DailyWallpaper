@@ -20,8 +20,8 @@ class _Machine:
     def __init__(self):
         self.calls = []
 
-    def tick(self, dry_run=False):
-        self.calls.append(dry_run)
+    def tick(self, dry_run=False, manual=False):
+        self.calls.append((dry_run, manual))
         return TickResult("applied", "", 1)
 
 
@@ -122,7 +122,7 @@ def test_change_now_asks_the_machine_for_a_real_apply(tmp_path):
     conn, machine, service = _setup(tmp_path)
     result = service.change_now()
     assert result.action == "applied"
-    assert machine.calls == [False]
+    assert machine.calls == [(False, True)]
 
 
 def test_snapshot_reports_the_last_action(tmp_path):
@@ -150,7 +150,7 @@ def test_a_second_click_while_applying_is_ignored(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        def tick(self, dry_run=False):
+        def tick(self, dry_run=False, manual=False):
             self.calls += 1
             release.wait(2)
             return TickResult("applied")
@@ -177,4 +177,49 @@ def test_manual_change_still_works_while_paused(tmp_path):
 
     service.change_now()
 
-    assert machine.calls == [False]
+    assert machine.calls == [(False, True)]
+
+
+def test_manual_change_bypasses_pause_with_the_real_machine(tmp_path):
+    from dailywallpaper.models import Decision
+    from dailywallpaper.state.machine import DailyStateMachine
+    from dailywallpaper.analysis.vision import VisionScores
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    wid = _wallpaper(conn)
+
+    class _Pipeline:
+        def prepare(self, now):
+            pass
+
+        def pick(self, now):
+            return Decision(
+                wid, __import__("pathlib").Path("x.jpg"),
+                VisionScores(90, 70, 60, 10, False, False, "none",
+                             ["landscape"], ["calm"], ["#112233"], "s", "r"),
+                60.0, 60.0, 60.0, "pick",
+            )
+
+    class _Apply:
+        def __init__(self):
+            self.triggers = []
+
+        def apply(self, wallpaper_id, image_path, trigger="auto"):
+            self.triggers.append(trigger)
+            return True
+
+        def undo_last(self):
+            return True
+
+    apply_service = _Apply()
+    machine = DailyStateMachine(
+        conn, AppSection(), _Clock(datetime(2026, 10, 18, 23, 30)), _Pipeline(), apply_service
+    )
+    service = CommandService(conn, AppSection(), machine.clock, machine, apply_service)
+
+    service.pause(7)
+    result = service.change_now()
+
+    assert result.action == "applied"
+    assert apply_service.triggers == ["manual"]

@@ -67,17 +67,24 @@ class DailyStateMachine:
             )
         return self.conn.execute(sql, (date.isoformat(),)).fetchone() is not None
 
-    def tick(self, dry_run: bool = False) -> TickResult:
+    def tick(self, dry_run: bool = False, manual: bool = False) -> TickResult:
+        """One scheduler step.
+
+        ``manual`` is the user pressing "换一张": pause, the daily limit and
+        the latest-change-time window are all about the *automatic* schedule,
+        so a manual change skips them (spec 7.2) and is recorded as manual.
+        """
         now = self.clock.now()
-        if self._paused(now):
-            return TickResult("paused")
-        if self._changed_today(now.date()):
-            return TickResult("already_changed")
-        if now.time() < parse_time(self.config.app.daily_time):
-            self.pipeline.prepare(now)
-            return TickResult("background")
-        if now.time() > parse_time(self.config.app.latest_change_time):
-            return TickResult("too_late")
+        if not manual:
+            if self._paused(now):
+                return TickResult("paused")
+            if self._changed_today(now.date()):
+                return TickResult("already_changed")
+            if now.time() < parse_time(self.config.app.daily_time):
+                self.pipeline.prepare(now)
+                return TickResult("background")
+            if now.time() > parse_time(self.config.app.latest_change_time):
+                return TickResult("too_late")
 
         decision = self.pipeline.pick(now)
         if decision is None:
@@ -88,7 +95,8 @@ class DailyStateMachine:
         if dry_run:
             return TickResult("dry_run", decision.reason, decision.wallpaper_id)
 
-        ok = self.apply_service.apply(decision.wallpaper_id, decision.image_path, "auto")
+        trigger = "manual" if manual else "auto"
+        ok = self.apply_service.apply(decision.wallpaper_id, decision.image_path, trigger)
         return TickResult(
             "applied" if ok else "apply_failed", "", decision.wallpaper_id
         )

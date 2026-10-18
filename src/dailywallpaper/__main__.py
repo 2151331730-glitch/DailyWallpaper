@@ -21,6 +21,10 @@ def main(argv=None, app_factory=None, run_gui=None) -> int:
         help="run the scheduler without the desktop shell",
     )
     args = parser.parse_args(argv)
+    if args.dry_run:
+        # A dry run that is silently ignored (GUI) or that loops real applies
+        # (--headless) is worse than useless; make it exactly one safe tick.
+        args.once = True
 
     cfg = load_config(args.config)
     setup_logging(cfg.app.data_dir, cfg.app.log_level)
