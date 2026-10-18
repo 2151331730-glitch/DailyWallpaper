@@ -250,6 +250,11 @@ class RealPipeline:
             primary, data_dir, profile, recent, weather_code, weather_text,
             recent_hashes, counters,
         )
+        # A remote Steam item that has not been downloaded yet must not be
+        # picked: applying it would either use the preview thumbnail or block
+        # the tick on a download. It must not count as a qualified candidate
+        # either, or the fallback below would never run.
+        self._keep_ready()
         fallback = secondary
         if on_battery and self.cfg.wallpaper.dynamic_requires_ac:
             # Never fall back INTO a live wallpaper while on battery.
@@ -262,16 +267,16 @@ class RealPipeline:
                 fallback, data_dir, profile, recent, weather_code, weather_text,
                 recent_hashes, counters,
             )
+            self._keep_ready()
 
         self.shortlist = rank(self.shortlist, now.date().isoformat())
-        # A remote Steam item that has not been downloaded yet must not be
-        # picked: applying it would either use the preview thumbnail or block
-        # the tick on a download. The prefetcher makes it ready for later.
-        self.shortlist = [decision for decision in self.shortlist if decision.ready]
         if self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
         self._prepared_on = prepared_key
+
+    def _keep_ready(self) -> None:
+        self.shortlist = [decision for decision in self.shortlist if decision.ready]
 
     def _ffmpeg_available(self) -> bool:
         """A missing ffmpeg must not silently drop every video candidate."""

@@ -703,3 +703,33 @@ def test_a_remote_workshop_item_waits_for_its_download(tmp_path):
     assert len(second.shortlist) == 1
     assert second.shortlist[0].ready is True
     assert second.shortlist[0].apply_path == root / "123" / "project.json"
+
+
+def test_an_unready_remote_item_does_not_block_the_fallback(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    root = tmp_path / "steam_workshop"
+    remote = Candidate(
+        "steam_workshop", "123", "Neon", "", str(root / "123" / "project.json"),
+        "https://img/0.png", "scene", 0, 0, 0, [], {},
+    )
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+
+    class _Ac:
+        def on_battery(self):
+            return False
+
+    pipeline = RealPipeline(
+        cfg, conn, ImageSession(), [Source([remote, still])], vision,
+        CountingBudget(100), power=_Ac(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert [d.source for d in pipeline.shortlist] == ["bing"]
