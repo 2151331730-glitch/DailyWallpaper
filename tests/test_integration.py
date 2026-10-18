@@ -384,3 +384,25 @@ def test_review_top_n_zero_skips_review(tmp_path):
 
     assert all(not decision.reviewed for decision in pipeline.shortlist)
     assert "review-model" not in provider.calls
+
+
+def test_build_pipeline_requires_pricing_for_every_model(tmp_path):
+    from dataclasses import replace
+
+    import pytest
+
+    from dailywallpaper.app import build_pipeline
+    from dailywallpaper.config import VisionPricing
+
+    cfg = _config(tmp_path)
+    broken = replace(
+        cfg,
+        vision=replace(
+            cfg.vision, pricing={"glm-4.6v-flash": VisionPricing(1.0, 2.0)}
+        ),
+    )
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+
+    with pytest.raises(ValueError, match="review-model"):
+        build_pipeline(broken, conn)

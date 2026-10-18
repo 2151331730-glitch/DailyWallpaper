@@ -309,6 +309,9 @@ class RealPipeline:
 
 
 def build_pipeline(cfg, conn):
+    for name in (cfg.vision.screen_model, cfg.vision.review_model):
+        if name not in cfg.vision.pricing:
+            raise ValueError(f"[vision.pricing.{name!r}] is missing from the config")
     session = requests.Session()
     sources = []
     if cfg.sources.wallhaven_enabled:
