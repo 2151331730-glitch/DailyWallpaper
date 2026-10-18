@@ -26,7 +26,7 @@ class FakePipeline:
         self.decision = decision
         self.prepared = 0
 
-    def prepare(self, now):
+    def prepare(self, now, mark=True):
         self.prepared += 1
 
     def pick(self, now):

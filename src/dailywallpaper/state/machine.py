@@ -90,14 +90,14 @@ class DailyStateMachine:
             if self._changed_today(now.date()):
                 return TickResult("already_changed")
             if now.time() < parse_time(self.config.app.daily_time, "08:30"):
-                self.pipeline.prepare(now)
+                self.pipeline.prepare(now, mark=not dry_run)
                 return TickResult("background")
             if now.time() > parse_time(self.config.app.latest_change_time, "22:00"):
                 return TickResult("too_late")
 
         decision = self.pipeline.pick(now)
         if decision is None:
-            self.pipeline.prepare(now)
+            self.pipeline.prepare(now, mark=not dry_run)
             decision = self.pipeline.pick(now)
         if decision is None:
             return TickResult("kept", "no candidate passed")

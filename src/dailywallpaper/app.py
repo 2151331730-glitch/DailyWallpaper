@@ -143,7 +143,9 @@ class RealPipeline:
         ).fetchall()
         return PreferenceProfile.from_ratings(rows, now)
 
-    def prepare(self, now) -> None:
+    def prepare(self, now, mark: bool = True) -> None:
+        # A dry run must not consume the day's one prepare: its shortlist
+        # only lives in memory, so a later real run would find nothing.
         prepared_key = f"prepared_{now.date().isoformat()}"
         if self.conn.execute(
             "select 1 from state where key=?", (prepared_key,)
@@ -271,10 +273,11 @@ class RealPipeline:
         if self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
-        self.conn.execute(
-            "insert or replace into state(key,value) values(?,?)", (prepared_key, "1")
-        )
-        self.conn.commit()
+        if mark:
+            self.conn.execute(
+                "insert or replace into state(key,value) values(?,?)", (prepared_key, "1")
+            )
+            self.conn.commit()
 
     def _review_top(self, profile, recent, weather_code) -> None:
         """Re-score the strongest candidates with the paid model.

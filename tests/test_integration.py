@@ -447,3 +447,19 @@ def test_a_static_day_falls_back_when_only_dynamic_exists(tmp_path):
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
     assert len(pipeline.shortlist) == 1
+
+
+def test_a_dry_run_does_not_consume_the_day(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    service = ApplyService(conn, Applier(), clock=clock)
+    machine = DailyStateMachine(conn, cfg, clock, pipeline, service)
+
+    machine.tick(dry_run=True)
+
+    row = conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone()
+    assert row is None
