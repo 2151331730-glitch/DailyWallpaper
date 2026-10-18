@@ -60,3 +60,11 @@ def test_default_command_carries_an_absolute_config_path(tmp_path):
 
     assert "--config" in command
     assert str((tmp_path / "config.toml").absolute()) in command
+
+
+def test_default_command_starts_the_tray_gui(tmp_path):
+    from dailywallpaper.app_autostart import default_command
+
+    command = default_command(tmp_path / "config.toml")
+
+    assert "--headless" not in command

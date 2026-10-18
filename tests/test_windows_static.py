@@ -138,3 +138,23 @@ def test_picture_mode_is_left_alone(tmp_path):
 
     assert applier.apply(img).ok
     assert bg.switches == 0
+
+
+def test_solid_colour_background_is_switched_back_to_picture(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg = FakeBackground(1)
+    applier = WindowsStaticApplier(FakeSpi(), FakeRegistry(), background_type=bg)
+
+    assert applier.apply(img).ok
+    assert bg.mode == 0
+
+
+def test_a_missing_background_type_key_is_left_alone(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg = FakeBackground(None)
+    applier = WindowsStaticApplier(FakeSpi(), FakeRegistry(), background_type=bg)
+
+    assert applier.apply(img).ok
+    assert bg.switches == 0

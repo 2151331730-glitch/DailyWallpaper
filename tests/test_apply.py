@@ -392,3 +392,69 @@ def test_a_failing_recheck_is_swallowed(tmp_path):
 
     assert service.apply(wid, tmp_path / "new.jpg") is True
     assert conn.execute("select count(*) from change_log").fetchone()[0] == 1
+
+
+def _logged_wallpaper(conn, image_path, media_type="image"):
+    conn.execute(
+        "insert into wallpapers(source,source_id,local_path,media_type,created_at)"
+        " values('t','1',?,'?','x')".replace("'?'", "?"),
+        (str(image_path), media_type),
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into change_log(change_date,wallpaper_id,previous_wallpaper,"
+        "previous_we_config_json,method,applied_at,success) values('2026-10-18',?,?,?,?,?,1)",
+        (wid, "", "{}", "static", "2026-10-18T18:50:38"),
+    )
+    conn.commit()
+    return wid
+
+
+def test_startup_reapplies_the_last_static_wallpaper_over_we(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "wall.jpg"
+    image.write_bytes(b"x")
+    _logged_wallpaper(conn, image)
+    we = _FakeWe()
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    assert service.ensure_visible() is True
+    assert we.closed == 1
+    assert service.applier.applied[-1] == image
+
+
+def test_startup_leaves_a_dynamic_wallpaper_alone(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "scene.pkg"
+    image.write_bytes(b"x")
+    _logged_wallpaper(conn, image, media_type="scene")
+    we = _FakeWe()
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    assert service.ensure_visible() is False
+    assert we.closed == 0
+    assert service.applier.applied == []
+
+
+def test_startup_without_history_does_nothing(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    we = _FakeWe()
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    assert service.ensure_visible() is False
+    assert we.closed == 0
+
+
+def test_startup_failure_is_reported_not_raised(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "wall.jpg"
+    image.write_bytes(b"x")
+    _logged_wallpaper(conn, image)
+    service = ApplyService(conn, _FakeApplier(ok=False), we=_FakeWe())
+
+    assert service.ensure_visible() is False

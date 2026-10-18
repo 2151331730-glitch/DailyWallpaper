@@ -99,6 +99,12 @@ class Application:
         return 1 if result.action == "apply_failed" else 0
 
     def run_forever(self) -> int:
+        service = getattr(self.machine, "apply_service", None)
+        if service is not None:
+            try:
+                service.ensure_visible()
+            except Exception as exc:  # a bad startup check must not end the run
+                logger.warning(f"startup wallpaper check failed: {exc}")
         while True:
             try:
                 self.machine.tick()

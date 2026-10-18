@@ -102,16 +102,22 @@ class WindowsStaticApplier:
         self.background_type = background_type
 
     def _leave_slideshow_mode(self) -> str:
-        """Return "" when a picture-mode apply can proceed, else a message."""
+        """Return "" when a picture-mode apply can proceed, else a message.
+
+        Any mode other than picture (0) hides a freshly set wallpaper: a
+        slideshow/Spotlight rotates its own images, and solid colour paints
+        over the file. Switching back to picture is what setting a wallpaper
+        means, so try it and only refuse when Windows rejects the change.
+        """
         if self.background_type is None:
             return ""
         mode = self.background_type.get()
-        if mode not in (Win32BackgroundType.SLIDESHOW, Win32BackgroundType.SPOTLIGHT):
+        if mode in (None, 0):
             return ""
         if self.background_type.set_picture():
             return ""
         return (
-            "当前桌面是幻灯片/Spotlight 模式，无法自动切回“图片”，"
+            "当前桌面不是“图片”模式（幻灯片/Spotlight/纯色），无法自动切回，"
             "请在 设置 → 个性化 → 背景 中手动改成“图片”后重试"
         )
 

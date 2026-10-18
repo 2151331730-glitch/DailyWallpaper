@@ -37,6 +37,7 @@ class Worker:
     def _loop(self) -> None:
         # The connection is created here, in the thread that will use it.
         self._machine = self.machine_factory()
+        self._ensure_visible()
         self._tick_once()
         while not self._stop.wait(self.interval):
             if self._manual.is_set():
@@ -44,6 +45,16 @@ class Worker:
                 self._tick_once(manual=True)
             else:
                 self._tick_once()
+
+    def _ensure_visible(self) -> None:
+        """Put the last wallpaper back if WE grabbed the desktop at login."""
+        service = getattr(self._machine, "apply_service", None)
+        if service is None:
+            return
+        try:
+            service.ensure_visible()
+        except Exception as exc:  # startup must never kill the tick thread
+            logger.warning(f"startup wallpaper check failed: {exc}")
 
     def _tick_once(self, manual: bool = False) -> None:
         try:

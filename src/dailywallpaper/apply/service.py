@@ -118,6 +118,39 @@ class ApplyService:
                 # A recheck runs off the main path; one failure must not escape.
                 logger.warning(f"post-apply recheck failed: {exc}")
 
+    def ensure_visible(self) -> bool:
+        """Re-assert the last successful wallpaper after a login (spec 9.1).
+
+        WE starts with Windows and may restore its own live wallpaper over a
+        static one. Re-applying the recorded image is not a new change: it
+        writes no change_log row and does not touch the daily limit.
+        """
+        row = self.conn.execute(
+            """
+            select w.local_path, w.media_type
+            from change_log c join wallpapers w on w.id = c.wallpaper_id
+            where c.success = 1
+            order by c.id desc limit 1
+            """
+        ).fetchone()
+        if row is None or not row[0]:
+            return False
+        if row[1] in ("scene", "video"):
+            # WE owns the desktop; do not start it on its own (spec 9.2).
+            return False
+        try:
+            if self.we is not None and self.we.current():
+                if not self.we.close():
+                    logger.warning("startup: WE did not close; desktop left alone")
+                    return False
+            result = self.applier.apply(Path(row[0]))
+            if not result.ok:
+                logger.warning(f"startup re-apply failed: {result.error}")
+            return bool(result.ok)
+        except Exception as exc:
+            logger.warning(f"startup re-apply failed: {exc}")
+            return False
+
     def undo_last(self) -> bool:
         row = self.conn.execute(
             "SELECT * FROM change_log WHERE success=1 ORDER BY id DESC LIMIT 1"
