@@ -39,6 +39,12 @@ class _Service:
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+    # Widgets outliving the QApplication crash the interpreter at exit under
+    # the offscreen platform; tear them down while the app is still alive.
+    app.closeAllWindows()
+    for widget in QApplication.allWidgets():
+        widget.deleteLater()
+    app.processEvents()
 
 
 def test_tray_has_the_documented_menu(qapp):
@@ -208,3 +214,33 @@ def test_worker_ignores_a_second_manual_request_while_busy():
 
     assert worker.change_now() is True
     assert worker.change_now() is False
+
+
+def test_rating_dialog_saves_like_and_reason(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.rating_dialog import RatingDialog
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.commit()
+
+    dialog = RatingDialog(RatingsService(conn), wid)
+    dialog.reason_buttons["太暗"].click()
+    dialog.like_button.click()
+
+    assert dialog.chosen == 1
+    row = conn.execute("select rating, comment from ratings").fetchone()
+    assert row["rating"] == 1
+    assert "太暗" in row["comment"]
+
+
+def test_rating_dialog_exposes_the_documented_reasons(qapp):
+    from dailywallpaper.ui.rating_dialog import QUICK_REASONS
+
+    assert QUICK_REASONS == [
+        "太花哨", "太暗", "不喜欢动漫", "想要风景",
+        "想要暗色", "想要简约", "想要人物", "其他",
+    ]
