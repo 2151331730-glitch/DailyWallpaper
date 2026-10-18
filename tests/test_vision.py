@@ -59,6 +59,62 @@ def test_non_string_palette_entry_rejected():
         validate_scores(bad)
 
 
+def test_comma_separated_tags_normalized():
+    payload = load("vision_ok.json")
+    payload["style_tags"] = "anime, landscape, minimal"
+    payload["mood_tags"] = "calm, cozy"
+
+    scores = validate_scores(payload)
+
+    assert scores.style_tags == ["anime", "landscape", "minimal"]
+    assert scores.mood_tags == ["calm", "cozy"]
+
+
+def test_empty_mood_tags_string_becomes_empty_list():
+    payload = load("vision_ok.json")
+    payload["mood_tags"] = ""
+
+    assert validate_scores(payload).mood_tags == []
+
+
+def test_empty_comma_separated_style_tags_rejected():
+    payload = load("vision_ok.json")
+    payload["style_tags"] = "  ,  , "
+
+    with pytest.raises(VisionError):
+        validate_scores(payload)
+
+
+def test_non_string_tag_type_rejected():
+    payload = load("vision_ok.json")
+    payload["style_tags"] = 123
+
+    with pytest.raises(VisionError):
+        validate_scores(payload)
+
+
+def test_comma_separated_palette_normalized():
+    payload = load("vision_ok.json")
+    payload["palette"] = "ff8c00, 8b4513, 4b0082"
+
+    assert validate_scores(payload).palette == ["#ff8c00", "#8b4513", "#4b0082"]
+
+
+def test_hash_prefix_palette_unchanged():
+    payload = load("vision_ok.json")
+    payload["palette"] = "#ff8c00, #8b4513"
+
+    assert validate_scores(payload).palette == ["#ff8c00", "#8b4513"]
+
+
+def test_bad_hex_in_palette_string_rejected():
+    payload = load("vision_ok.json")
+    payload["palette"] = "ff8c00, nothex"
+
+    with pytest.raises(VisionError):
+        validate_scores(payload)
+
+
 class _FakeMessage:
     def __init__(self, content):
         self.content = content
@@ -67,10 +123,15 @@ class _FakeChoice:
     def __init__(self, content):
         self.message = _FakeMessage(content)
 
+class _FakeDetails:
+    def __init__(self, reasoning_tokens=0):
+        self.reasoning_tokens = reasoning_tokens
+
 class _FakeUsage:
-    def __init__(self, prompt_tokens=123, completion_tokens=45):
+    def __init__(self, prompt_tokens=123, completion_tokens=45, reasoning_tokens=0):
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.completion_tokens_details = _FakeDetails(reasoning_tokens)
 
 _DEFAULT = object()
 
@@ -156,3 +217,30 @@ def test_zhipu_missing_usage_returns_zero_tokens(tmp_path):
     assert result.scores.quality == 82
     assert result.tokens_in == 0
     assert result.tokens_out == 0
+
+
+def test_zhipu_analyze_disables_thinking(tmp_path):
+    from dailywallpaper.analysis.vision import ZhipuVision
+
+    image = tmp_path / "preview.jpg"
+    image.write_bytes(b"fake-image-bytes")
+    client = _FakeClient(_FakeResponse([_FakeChoice(_ok_content())]))
+    provider = object.__new__(ZhipuVision)
+    provider.client = client
+
+    provider.analyze(image, "glm-test")
+
+    sent = client.chat.completions.last
+    assert sent["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_zhipu_analyze_records_reasoning_tokens(tmp_path):
+    image = tmp_path / "preview.jpg"
+    image.write_bytes(b"fake-image-bytes")
+    provider = _provider_with(
+        _FakeResponse([_FakeChoice(_ok_content())], usage=_FakeUsage(reasoning_tokens=7))
+    )
+
+    result = provider.analyze(image, "glm-test")
+
+    assert result.reasoning_tokens == 7
