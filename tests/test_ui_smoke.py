@@ -405,3 +405,52 @@ def test_settings_page_toggles_a_source(qapp, tmp_path):
 
     assert page.save() is True
     assert load_config(path).sources.wallhaven_enabled is False
+
+
+def test_today_tab_marks_a_reviewed_wallpaper(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,title,created_at)"
+                 " values('bing','1','复核图','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-18',?,'70','80','74.5','r','applied','x')", (wid,))
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,created_at)"
+        " values('review-model','v1','h','{}',90,70,60,10,'x')")
+    aid = conn.execute("select id from analyses").fetchone()[0]
+    conn.execute("insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+                 " values(?,?,'x')", (wid, aid))
+    conn.commit()
+
+    window = MainWindow(_Service(), conn, review_model="review-model")
+    window.refresh()
+
+    assert "已复核" in window.reviewed_label.text()
+
+
+def test_today_tab_marks_an_unreviewed_wallpaper(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,title,created_at)"
+                 " values('bing','1','普通图','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-18',?,'70','80','74.5','r','applied','x')", (wid,))
+    conn.commit()
+
+    window = MainWindow(_Service(), conn, review_model="review-model")
+    window.refresh()
+
+    assert "已复核" not in window.reviewed_label.text()

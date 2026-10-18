@@ -18,3 +18,5 @@ class Decision:
     personalize: float
     final: float
     reason: str
+    source: str = ""
+    reviewed: bool = False

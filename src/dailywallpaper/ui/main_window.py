@@ -34,10 +34,11 @@ class MainWindow(QWidget):
     """Read-only view of the newest decision plus the manual actions."""
 
     def __init__(self, service, conn, parent=None, budget_cny=10.0,
-                 config=None, config_path=None):
+                 config=None, config_path=None, review_model=None):
         super().__init__(parent)
         self.service = service
         self.conn = conn
+        self.review_model = review_model
         self.setWindowTitle("每日壁纸")
         self.resize(560, 660)
 
@@ -70,6 +71,7 @@ class MainWindow(QWidget):
         self.score_label = QLabel("")
         self.reason_label = QLabel("")
         self.reason_label.setWordWrap(True)
+        self.reviewed_label = QLabel("")
         # Decoding a multi-MB wallpaper every 2 s poll is wasteful; the
         # normalised cache file is content-addressed, so the path is the key.
         self._preview_path = None
@@ -92,6 +94,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.meta_label)
         layout.addWidget(self.score_label)
         layout.addWidget(self.reason_label)
+        layout.addWidget(self.reviewed_label)
         layout.addLayout(actions)
 
     def _change_now(self):
@@ -129,6 +132,9 @@ class MainWindow(QWidget):
             )
             self.reason_label.setText(row["reason"] or "")
             self._show_preview(row["local_path"])
+        self.reviewed_label.setText(
+            "已复核（付费模型）" if self._latest_is_reviewed() else ""
+        )
         self.change_button.setEnabled(self.service.snapshot().can_change)
         # Rebuilding 90 thumbnails on every 2 s poll would freeze the UI.
         self._polls += 1
@@ -140,6 +146,23 @@ class MainWindow(QWidget):
             self.history.refresh()
         elif self.tabs.currentWidget() is self.cost:
             self.cost.refresh()
+
+    def _latest_is_reviewed(self) -> bool:
+        if not self.review_model:
+            return False
+        return (
+            self.conn.execute(
+                """
+                select 1 from decisions d
+                join wallpaper_analyses wa on wa.wallpaper_id = d.wallpaper_id
+                join analyses a on a.id = wa.analysis_id
+                where d.id = (select max(id) from decisions) and a.model = ?
+                limit 1
+                """,
+                (self.review_model,),
+            ).fetchone()
+            is not None
+        )
 
     def _show_preview(self, path: str) -> None:
         if not path or path == self._preview_path:

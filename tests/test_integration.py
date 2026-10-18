@@ -30,7 +30,7 @@ class Clock:
         self.moment += timedelta(days=days)
 
 
-def _config(tmp_path):
+def _config(tmp_path, review_top_n=0):
     path = tmp_path / "config.toml"
     path.write_text(
         f"""
@@ -45,8 +45,14 @@ bing_enabled = false
 
 [vision]
 screen_model = "{MODEL}"
+review_model = "review-model"
+review_top_n = {review_top_n}
 
 [vision.pricing."{MODEL}"]
+input_cny_per_million = 1.0
+output_cny_per_million = 2.0
+
+[vision.pricing."review-model"]
 input_cny_per_million = 1.0
 output_cny_per_million = 2.0
 
@@ -313,3 +319,90 @@ def test_low_quality_candidates_are_gated_out(tmp_path):
 
     assert machine.tick().action == "kept"
     assert conn.execute("select count(*) from change_log").fetchone()[0] == 0
+
+
+class ModelProvider:
+    """Returns a different score per model so the review is observable."""
+
+    def __init__(self, by_model):
+        self.by_model = by_model
+        self.calls = []
+
+    def analyze(self, image_path, model, extra_instruction=""):
+        self.calls.append(model)
+        return VisionCallResult(
+            scores=self.by_model[model], tokens_in=10, tokens_out=5, latency_ms=1
+        )
+
+
+class CountingBudget:
+    def __init__(self, allowed):
+        self.allowed = allowed
+        self.checks = 0
+
+    def check(self, estimate):
+        self.checks += 1
+        return self.checks <= self.allowed
+
+    def warn_if_needed(self):
+        return False
+
+
+def _review_pipeline(tmp_path, review_top_n=5, allowed=100):
+    cfg = _config(tmp_path, review_top_n=review_top_n)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    provider = ModelProvider({"glm-4.6v-flash": _scores(70, 20), "review-model": _scores(91, 5)})
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    budget = CountingBudget(allowed)
+    pipeline = RealPipeline(
+        cfg, conn, ImageSession(), [Source(_candidates())], vision, budget
+    )
+    return conn, pipeline, provider
+
+
+def test_review_replaces_the_screen_scores(tmp_path):
+    conn, pipeline, provider = _review_pipeline(tmp_path)
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert pipeline.shortlist[0].reviewed is True
+    assert pipeline.shortlist[0].scores.quality == 91
+    assert "review-model" in provider.calls
+
+
+def test_review_stops_when_the_budget_is_gone(tmp_path):
+    # 3 screen checks pass, then the budget runs out before the reviews.
+    conn, pipeline, provider = _review_pipeline(tmp_path, allowed=4)
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert sum(1 for decision in pipeline.shortlist if decision.reviewed) == 1
+
+
+def test_review_top_n_zero_skips_review(tmp_path):
+    conn, pipeline, provider = _review_pipeline(tmp_path, review_top_n=0)
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert all(not decision.reviewed for decision in pipeline.shortlist)
+    assert "review-model" not in provider.calls
+
+
+def test_build_pipeline_requires_pricing_for_every_model(tmp_path):
+    from dataclasses import replace
+
+    import pytest
+
+    from dailywallpaper.app import build_pipeline
+    from dailywallpaper.config import VisionPricing
+
+    cfg = _config(tmp_path)
+    broken = replace(
+        cfg,
+        vision=replace(
+            cfg.vision, pricing={"glm-4.6v-flash": VisionPricing(1.0, 2.0)}
+        ),
+    )
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+
+    with pytest.raises(ValueError, match="review-model"):
+        build_pipeline(broken, conn)

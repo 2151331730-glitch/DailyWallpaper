@@ -25,6 +25,7 @@ class UiShell:
             budget_cny=budget_cny,
             config=getattr(command_service, "full_config", None),
             config_path=getattr(command_service, "config_path", None),
+            review_model=getattr(command_service, "review_model", None),
         )
         self.tray = TrayIcon(
             command_service,
@@ -118,6 +119,7 @@ def build_gui(cfg, config_path=None) -> int:
     )
     service.full_config = cfg
     service.config_path = resolved_path
+    service.review_model = cfg.vision.review_model
     app = QApplication.instance() or QApplication(sys.argv)
     shell = UiShell(
         service, machine, on_quit=app.quit, worker=worker,

@@ -6,6 +6,7 @@ import ctypes
 import json
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import keyring
@@ -40,6 +41,9 @@ ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
+
+# Per-call estimate handed to the budget guard before any paid work.
+ESTIMATE_CNY = 0.003
 
 
 class SingleInstance:
@@ -215,6 +219,7 @@ class RealPipeline:
                         scores.personalize,
                         scores.final,
                         record.scores.reason,
+                        candidate.source,
                     )
                 )
             except Exception as exc:
@@ -223,10 +228,59 @@ class RealPipeline:
                 continue
 
         self.shortlist = rank(self.shortlist, now.date().isoformat())
+        if self.cfg.vision.review_top_n > 0 and self.shortlist:
+            self._review_top(profile, recent, weather_code)
+            self.shortlist = rank(self.shortlist, now.date().isoformat())
         self.conn.execute(
             "insert or replace into state(key,value) values(?,?)", (prepared_key, "1")
         )
         self.conn.commit()
+
+    def _review_top(self, profile, recent, weather_code) -> None:
+        """Re-score the strongest candidates with the paid model.
+
+        A failure or an exhausted budget stops the loop and keeps whatever
+        was reviewed so far; the free screen scores stay valid for the rest.
+        """
+        reviewed: list = []
+        reviewed_ids: set = set()
+        for decision in self.shortlist[: self.cfg.vision.review_top_n]:
+            if not self.budget.check(ESTIMATE_CNY):
+                logger.warning("review stopped: budget exhausted")
+                break
+            image_hash = Path(decision.image_path).stem
+            try:
+                record = self.vision.analyze_or_cache(
+                    decision.wallpaper_id,
+                    image_hash,
+                    decision.image_path,
+                    self.cfg.vision.review_model,
+                )
+            except Exception as exc:
+                logger.warning(f"review failed for {decision.wallpaper_id}: {exc}")
+                break
+            if hard_gate(record.scores):
+                continue
+            scores = final_score(
+                record.scores, decision.source, profile, recent, weather_code
+            )
+            reviewed.append(
+                replace(
+                    decision,
+                    scores=record.scores,
+                    explore=scores.explore,
+                    personalize=scores.personalize,
+                    final=scores.final,
+                    reviewed=True,
+                )
+            )
+            reviewed_ids.add(decision.wallpaper_id)
+        rest = [
+            decision
+            for decision in self.shortlist
+            if decision.wallpaper_id not in reviewed_ids
+        ]
+        self.shortlist = reviewed + rest
 
     def pick(self, now):
         if not self.shortlist:
@@ -255,6 +309,9 @@ class RealPipeline:
 
 
 def build_pipeline(cfg, conn):
+    for name in (cfg.vision.screen_model, cfg.vision.review_model):
+        if name not in cfg.vision.pricing:
+            raise ValueError(f"[vision.pricing.{name!r}] is missing from the config")
     session = requests.Session()
     sources = []
     if cfg.sources.wallhaven_enabled:
