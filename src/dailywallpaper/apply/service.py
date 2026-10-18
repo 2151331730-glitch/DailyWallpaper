@@ -69,7 +69,7 @@ class ApplyService:
             (
                 self._change_date(),
                 wallpaper_id,
-                state.wallpaper,
+                getattr(state, "wallpaper", "") or getattr(state, "file", ""),
                 json.dumps({"file": we_before}, ensure_ascii=False),
                 "manual" if trigger == "manual" else method,
                 now_iso(),

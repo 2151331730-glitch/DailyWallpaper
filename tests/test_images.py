@@ -117,3 +117,22 @@ def test_canonicalize_leaves_no_temp_file_behind(tmp_path):
     canonicalize(src, out)
 
     assert list(out.glob("tmp*")) == []
+
+
+def test_download_copies_a_local_candidate(tmp_path):
+    source = tmp_path / "workshop" / "preview.jpg"
+    source.parent.mkdir()
+    source.write_bytes(b"local-bytes")
+    dest = tmp_path / "cache" / "1.jpg"
+
+    download(None, str(source), dest)
+
+    assert dest.read_bytes() == b"local-bytes"
+
+
+def test_download_rejects_an_oversized_local_file(tmp_path):
+    source = tmp_path / "big.jpg"
+    source.write_bytes(b"x" * 100)
+
+    with pytest.raises(ValueError):
+        download(None, str(source), tmp_path / "out.jpg", max_bytes=10)

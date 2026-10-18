@@ -56,3 +56,16 @@ def test_video_projects_are_typed_as_video(tmp_path):
 
 def test_missing_root_returns_empty(tmp_path):
     assert WorkshopSource(tmp_path / "nope").scan() == []
+
+
+def test_fetch_is_the_pipeline_interface(tmp_path):
+    _project(tmp_path, "111")
+
+    assert len(WorkshopSource(tmp_path).fetch(10)) == 1
+
+
+def test_fetch_respects_the_limit(tmp_path):
+    for pid in ("1", "2", "3"):
+        _project(tmp_path, pid)
+
+    assert len(WorkshopSource(tmp_path).fetch(2)) == 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,14 @@ def download(session, url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES)
     an aborted or oversized download never leaves a truncated image for the
     next reader to choke on."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    local = Path(url)
+    if local.is_file():
+        # Wallpaper Engine workshop candidates already sit on disk.
+        if local.stat().st_size > max_bytes:
+            raise ValueError("download too large")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local, dest)
+        return dest
     part = dest.with_suffix(dest.suffix + ".part")
     try:
         with session.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:

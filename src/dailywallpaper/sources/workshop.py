@@ -21,6 +21,11 @@ class WorkshopSource:
         self.root = Path(workshop_root)
         self.allow_mature = allow_mature
 
+    def fetch(self, limit: int | None = None) -> list[Candidate]:
+        """Adapter interface: the pipeline calls fetch(), not scan()."""
+        items = self.scan()
+        return items if limit is None else items[:limit]
+
     def scan(self) -> list[Candidate]:
         if not self.root.exists():
             return []

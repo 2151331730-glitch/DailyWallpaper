@@ -105,7 +105,11 @@ class DailyStateMachine:
             return TickResult("dry_run", decision.reason, decision.wallpaper_id)
 
         trigger = "manual" if manual else "auto"
-        ok = self.apply_service.apply(decision.wallpaper_id, decision.image_path, trigger)
+        ok = self.apply_service.apply(
+            decision.wallpaper_id,
+            decision.apply_path or decision.image_path,
+            trigger,
+        )
         return TickResult(
             "applied" if ok else "apply_failed", "", decision.wallpaper_id
         )

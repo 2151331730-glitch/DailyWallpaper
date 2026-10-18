@@ -1,4 +1,6 @@
 # tests/test_apply.py
+from pathlib import Path
+
 from dailywallpaper.apply.service import ApplyService
 from dailywallpaper.apply.windows_static import ApplyResult, WallpaperState
 from dailywallpaper.db import connect, migrate
@@ -196,3 +198,41 @@ def test_a_dynamic_wallpaper_uses_the_we_applier(tmp_path):
     assert static.restored == [] and dynamic.restored == []
     row = conn.execute("select method from change_log").fetchone()
     assert row[0] == "we"
+
+
+def test_a_real_we_applier_works_through_the_service(tmp_path):
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    project = tmp_path / "111" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+
+    class Control:
+        def __init__(self):
+            self.current_value = "D:/we/old/project.json"
+            self.opened = []
+
+        def current(self):
+            return self.current_value
+
+        def open(self, file, monitor=0):
+            self.opened.append(Path(file))
+            self.current_value = str(Path(file).parent / "scene.pkg")
+            return True
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,media_type,created_at)"
+                 " values('we_workshop','111','scene','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(
+        conn, _FakeApplier(), dynamic_applier=WeApplier(Control(), sleep=lambda s: None)
+    )
+
+    assert service.apply(wid, project) is True
+
+    row = conn.execute("select method, previous_wallpaper, success from change_log").fetchone()
+    assert row["method"] == "we"
+    assert row["success"] == 1
+    assert row["previous_wallpaper"] == "D:/we/old/project.json"

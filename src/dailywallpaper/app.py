@@ -272,6 +272,11 @@ class RealPipeline:
                         scores.final,
                         reason,
                         candidate.source,
+                        apply_path=(
+                            Path(candidate.file_url)
+                            if Path(candidate.file_url).is_file()
+                            else canonical
+                        ),
                     )
                 )
             except Exception as exc:

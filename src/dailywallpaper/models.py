@@ -20,3 +20,4 @@ class Decision:
     reason: str
     source: str = ""
     reviewed: bool = False
+    apply_path: Path | None = None
