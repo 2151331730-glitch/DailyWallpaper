@@ -24,6 +24,9 @@ def test_redact_removes_key_shapes():
     assert "sk-abc123" not in redact("key sk-abc123")
     assert "xyz" not in redact("Authorization: Bearer xyz")
     assert "api_key=secret" not in redact("api_key=secret")
+    assert "ABCDEF0123456789" not in redact(
+        "https://api.steampowered.com/x/v1/?key=ABCDEF0123456789&appid=431960"
+    )
 
 
 def test_redacts_secrets_written_to_the_log(tmp_path):

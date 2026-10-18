@@ -11,6 +11,9 @@ PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]+"),
     re.compile(r"Bearer\s+\S+"),
     re.compile(r"api[_-]?key[\"']?\s*[:=]\s*\S+", re.I),
+    # Steam Web API carries the key as a query/form field, and requests
+    # exceptions quote the full URL.
+    re.compile(r"([?&]key=)[^\s&\"']+"),
     re.compile(r"[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"),
 ]
 
