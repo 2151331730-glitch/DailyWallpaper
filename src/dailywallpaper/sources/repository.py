@@ -48,6 +48,14 @@ def upsert_wallpaper(conn, candidate: Candidate) -> int:
     return int(row[0])
 
 
+def set_local_path(conn, wallpaper_id: int, path) -> None:
+    """Remember where the canonical image lives (history thumbnails read it)."""
+    conn.execute(
+        "update wallpapers set local_path=? where id=?", (str(path), wallpaper_id)
+    )
+    conn.commit()
+
+
 def set_phash(conn, wallpaper_id: int, phash: str) -> None:
     """Store the perceptual hash so later runs can reject near-duplicates."""
     conn.execute("update wallpapers set phash=? where id=?", (phash, wallpaper_id))

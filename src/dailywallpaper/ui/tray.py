@@ -27,7 +27,7 @@ def _dot(colour: str) -> QIcon:
 
 
 class TrayIcon(QSystemTrayIcon):
-    def __init__(self, service, on_open, on_quit, parent=None):
+    def __init__(self, service, on_open, on_quit, parent=None, on_rate=None):
         super().__init__(_dot(STATE_COLOURS["idle"]), parent)
         self.service = service
         self.on_open = on_open
@@ -40,6 +40,14 @@ class TrayIcon(QSystemTrayIcon):
         self.change_action.triggered.connect(self._change_now)
         self.undo_action = QAction("撤销上一张", self.menu)
         self.undo_action.triggered.connect(self._undo)
+        self.like_action = QAction("喜欢", self.menu)
+        self.like_action.triggered.connect(
+            lambda: on_rate(1) if on_rate else None
+        )
+        self.dislike_action = QAction("不喜欢", self.menu)
+        self.dislike_action.triggered.connect(
+            lambda: on_rate(-1) if on_rate else None
+        )
 
         self.pause_action = QAction("暂停自动更换", self.menu)
         self.pause_menu = QMenu("暂停自动更换", self.menu)
@@ -57,6 +65,8 @@ class TrayIcon(QSystemTrayIcon):
             self.today_action,
             self.change_action,
             self.undo_action,
+            self.like_action,
+            self.dislike_action,
             self.pause_action,
             self.settings_action,
         ):

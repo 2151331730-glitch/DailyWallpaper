@@ -39,6 +39,12 @@ class _Service:
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+    # Widgets outliving the QApplication crash the interpreter at exit under
+    # the offscreen platform; tear them down while the app is still alive.
+    app.closeAllWindows()
+    for widget in QApplication.allWidgets():
+        widget.deleteLater()
+    app.processEvents()
 
 
 def test_tray_has_the_documented_menu(qapp):
@@ -46,7 +52,9 @@ def test_tray_has_the_documented_menu(qapp):
 
     labels = [action.text() for action in tray.menu.actions() if action.text()]
 
-    assert labels[:5] == ["今日壁纸", "换一张", "撤销上一张", "暂停自动更换", "设置"]
+    assert labels[:7] == [
+        "今日壁纸", "换一张", "撤销上一张", "喜欢", "不喜欢", "暂停自动更换", "设置"
+    ]
     assert labels[-1] == "退出"
 
 
@@ -208,3 +216,90 @@ def test_worker_ignores_a_second_manual_request_while_busy():
 
     assert worker.change_now() is True
     assert worker.change_now() is False
+
+
+def test_rating_dialog_saves_like_and_reason(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.rating_dialog import RatingDialog
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.commit()
+
+    dialog = RatingDialog(RatingsService(conn), wid)
+    dialog.reason_buttons["太暗"].click()
+    dialog.like_button.click()
+
+    assert dialog.chosen == 1
+    row = conn.execute("select rating, comment from ratings").fetchone()
+    assert row["rating"] == 1
+    assert "太暗" in row["comment"]
+
+
+def test_rating_dialog_exposes_the_documented_reasons(qapp):
+    from dailywallpaper.ui.rating_dialog import QUICK_REASONS
+
+    assert QUICK_REASONS == [
+        "太花哨", "太暗", "不喜欢动漫", "想要风景",
+        "想要暗色", "想要简约", "想要人物", "其他",
+    ]
+
+
+def test_history_page_lists_recent_decisions(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.history_page import HistoryPage
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,created_at) values('bing','1','历史图','x')"
+    )
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-17',?,'70','80','74.5','r','applied','x')",
+        (wid,),
+    )
+    conn.commit()
+
+    page = HistoryPage(RatingsService(conn), on_undo=lambda: True)
+    page.refresh()
+
+    assert page.row_count == 1
+
+
+def test_main_window_has_today_and_history_tabs(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    window = MainWindow(_Service(), conn)
+
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["今日", "历史"]
+
+
+def test_tray_exposes_like_and_dislike(qapp):
+    tray = TrayIcon(_Service(), on_open=lambda: None, on_quit=lambda: None)
+
+    labels = [action.text() for action in tray.menu.actions() if action.text()]
+
+    assert "喜欢" in labels
+    assert "不喜欢" in labels
+
+
+def test_tray_rate_action_calls_back(qapp):
+    seen = []
+    tray = TrayIcon(
+        _Service(), on_open=lambda: None, on_quit=lambda: None, on_rate=seen.append
+    )
+
+    tray.like_action.trigger()
+    tray.dislike_action.trigger()
+
+    assert seen == [1, -1]

@@ -28,7 +28,11 @@ from dailywallpaper.models import Decision
 from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
-from dailywallpaper.sources.repository import set_phash, upsert_wallpaper
+from dailywallpaper.sources.repository import (
+    set_local_path,
+    set_phash,
+    upsert_wallpaper,
+)
 from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
@@ -190,6 +194,7 @@ class RealPipeline:
                 if not check.ok:
                     continue
                 set_phash(self.conn, wallpaper_id, check.dhash)
+                set_local_path(self.conn, wallpaper_id, canonical)
                 if not self.budget.check(0.003):
                     break
                 record = self.vision.analyze_or_cache(

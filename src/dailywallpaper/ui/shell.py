@@ -19,7 +19,12 @@ class UiShell:
         self.on_quit = on_quit
         self.worker = worker
         self.window = MainWindow(command_service, command_service.conn)
-        self.tray = TrayIcon(command_service, on_open=self.show_window, on_quit=self._quit)
+        self.tray = TrayIcon(
+            command_service,
+            on_open=self.show_window,
+            on_quit=self._quit,
+            on_rate=self.rate,
+        )
         self._notified_for = None
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self._poll)
@@ -28,6 +33,28 @@ class UiShell:
     def show_window(self) -> None:
         self.window.show()
         self.window.raise_()
+
+    def rate(self, rating) -> None:
+        from dailywallpaper.recommend.ratings import RatingsService
+
+        row = self.service.conn.execute(
+            "select wallpaper_id from decisions order by id desc limit 1"
+        ).fetchone()
+        if not row:
+            return
+        service = RatingsService(self.service.conn)
+        if rating is not None:
+            try:
+                service.rate(row["wallpaper_id"], rating)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(f"rating failed: {exc}")
+        else:
+            from dailywallpaper.ui.rating_dialog import RatingDialog
+
+            RatingDialog(service, row["wallpaper_id"], self.window).exec()
+        self.window.refresh()
 
     def _poll(self) -> None:
         self.window.refresh()
