@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from pathlib import Path
+
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -40,6 +42,9 @@ class MainWindow(QWidget):
         self.conn = conn
         self.review_model = review_model
         self.setWindowTitle("每日壁纸")
+        icon_path = Path(__file__).resolve().parents[3] / "assets" / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.resize(560, 660)
 
         self.tabs = QTabWidget()
