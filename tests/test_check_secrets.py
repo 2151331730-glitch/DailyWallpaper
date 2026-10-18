@@ -45,3 +45,13 @@ def test_a_key_on_a_line_containing_angle_brackets_is_still_reported(tmp_path):
     source.write_text('<meta content="sk-abcdefghijklmnopqrstuvwx">\n', encoding="utf-8")
 
     assert _module().scan([source])
+
+
+def test_a_key_next_to_the_word_example_is_still_reported(tmp_path):
+    source = tmp_path / "conf.py"
+    source.write_text(
+        'base_url = "https://api.example.com"  # api_key="sk-abcdefghijklmnopqrstuvwx"\n',
+        encoding="utf-8",
+    )
+
+    assert _module().scan([source])

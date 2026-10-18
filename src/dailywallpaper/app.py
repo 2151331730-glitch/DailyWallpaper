@@ -116,6 +116,7 @@ class RealPipeline:
         self.budget = budget
         self.power = power
         self.shortlist = []
+        self._ffmpeg_ok = None
         # In-memory only: the prepared shortlist does not survive a restart,
         # so persisting this would strand the day exactly like the dry-run bug.
         self._prepared_on = None
@@ -226,12 +227,16 @@ class RealPipeline:
             primary, data_dir, profile, recent, weather_code, weather_text,
             recent_hashes, counters,
         )
-        if not self.shortlist and secondary:
+        fallback = secondary
+        if on_battery and self.cfg.wallpaper.dynamic_requires_ac:
+            # Never fall back INTO a live wallpaper while on battery.
+            fallback = [c for c in secondary if c.media_type not in ("scene", "video")]
+        if not self.shortlist and fallback:
             # Spec 9.2.1: fall back only when nothing of the planned type
             # actually PASSED, not merely when none were fetched.
             logger.info(f"no {kind} candidate qualified; falling back")
             self._evaluate(
-                secondary, data_dir, profile, recent, weather_code, weather_text,
+                fallback, data_dir, profile, recent, weather_code, weather_text,
                 recent_hashes, counters,
             )
 
@@ -240,6 +245,19 @@ class RealPipeline:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
         self._prepared_on = prepared_key
+
+    def _ffmpeg_available(self) -> bool:
+        """A missing ffmpeg must not silently drop every video candidate."""
+        if self._ffmpeg_ok is None:
+            import shutil
+
+            self._ffmpeg_ok = shutil.which(self.cfg.tools.ffmpeg_path) is not None
+            if not self._ffmpeg_ok:
+                logger.warning(
+                    f"ffmpeg not found ({self.cfg.tools.ffmpeg_path}); "
+                    "video candidates will be scored from their poster image"
+                )
+        return self._ffmpeg_ok
 
     def _evaluate(self, candidates, data_dir, profile, recent, weather_code,
                   weather_text, recent_hashes, counters) -> None:
@@ -254,7 +272,11 @@ class RealPipeline:
                 if not candidate.preview_url:
                     continue
                 asset = Path(candidate.file_url)
-                if candidate.media_type == "video" and asset.is_file():
+                if (
+                    candidate.media_type == "video"
+                    and asset.is_file()
+                    and self._ffmpeg_available()
+                ):
                     # Spec 4.3: score a video from three frames, not its poster.
                     preview = video_contact_sheet(
                         asset,

@@ -43,10 +43,9 @@ def scan(paths) -> list[tuple[str, int, str]]:
         except (OSError, UnicodeDecodeError):
             continue
         for number, line in enumerate(text.splitlines(), start=1):
-            if _looks_placeholder(line):
-                continue
             for pattern in PATTERNS:
-                if pattern.search(line):
+                match = pattern.search(line)
+                if match and not _looks_placeholder(match.group(0)):
                     findings.append((name, number, pattern.pattern))
                     break
     return findings

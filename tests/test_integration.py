@@ -551,3 +551,50 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
 
     assert calls == [video_file]
     assert len(pipeline.shortlist) == 1
+
+
+def test_battery_never_falls_back_into_a_dynamic_wallpaper(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    scene = Candidate("we_workshop", "s1", "场景", "", "https://img/day1/0.png",
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
+
+    class _Battery:
+        def on_battery(self):
+            return True
+
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="static_only"))
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene])], vision, CountingBudget(100),
+        power=_Battery(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert pipeline.shortlist == []
+
+
+def test_video_falls_back_to_the_poster_without_ffmpeg(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes(b"fake")
+    video = Candidate("we_workshop", "v1", "视频", "", str(video_file),
+                      "https://img/day1/1.png", "video", 0, 0, 0, [], {})
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100)
+    )
+    pipeline._ffmpeg_ok = False
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert len(pipeline.shortlist) == 1
