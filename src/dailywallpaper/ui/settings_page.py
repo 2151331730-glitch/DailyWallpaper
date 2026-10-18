@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dailywallpaper.app_autostart import AutostartService
+from dailywallpaper.app_autostart import AutostartService, default_command
 from dailywallpaper.config import save_config
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,9 @@ class SettingsPage(QWidget):
 
     def _apply_autostart(self, wanted: bool) -> None:
         try:
-            service = self.autostart or AutostartService()
+            service = self.autostart or AutostartService(
+                command=default_command(self.config_path)
+            )
             if wanted and not service.enabled():
                 service.enable()
             elif not wanted and service.enabled():

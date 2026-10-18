@@ -51,3 +51,12 @@ def test_disable_when_absent_is_a_noop():
     service.disable()
 
     assert service.enabled() is False
+
+
+def test_default_command_carries_an_absolute_config_path(tmp_path):
+    from dailywallpaper.app_autostart import default_command
+
+    command = default_command(tmp_path / "config.toml")
+
+    assert "--config" in command
+    assert str((tmp_path / "config.toml").absolute()) in command

@@ -52,3 +52,17 @@ def test_saved_defaults_reload_unchanged(tmp_path):
     save_config(tmp_path / "c.toml", original)
 
     assert load_config(tmp_path / "c.toml") == original
+
+
+def test_save_preserves_sections_the_app_does_not_model(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        '[app]\ndaily_time = "08:30"\n[proxy]\nurl = "http://127.0.0.1:7890"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+
+    save_config(path, cfg)
+
+    assert "[proxy]" in path.read_text(encoding="utf-8")
+    assert "http://127.0.0.1:7890" in path.read_text(encoding="utf-8")

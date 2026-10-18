@@ -149,7 +149,15 @@ def load_config(path: Path) -> Config:
 
 
 
+KNOWN_SECTIONS = (
+    "app", "sources", "budget", "weather", "wallpaper",
+    "wallpaper_engine", "tools", "retention", "vision",
+)
+
+
 def _toml_value(value) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
@@ -200,4 +208,40 @@ def save_config(path: Path, cfg: Config) -> None:
             f"output_cny_per_million = {_toml_value(price.output_cny_per_million)}"
         )
 
+    lines.extend(_unknown_sections(path))
     path.write_text(NEWLINE.join(lines) + NEWLINE, encoding="utf-8")
+
+
+def _unknown_sections(path: Path) -> list[str]:
+    """Re-emit top-level tables this app does not model.
+
+    Dropping them would silently destroy a user's hand-written section the
+    first time they changed anything in the settings page.
+    """
+    if not path.exists():
+        return []
+    import tomllib
+
+    with path.open("rb") as handle:
+        raw = tomllib.load(handle)
+    extra = {key: value for key, value in raw.items() if key not in KNOWN_SECTIONS}
+    if not extra:
+        return []
+    lines = ["", "# Preserved verbatim from the previous file."]
+    for name, table in extra.items():
+        lines.extend(_dump_table(name, table))
+    return lines
+
+
+def _dump_table(prefix: str, table: dict) -> list[str]:
+    lines = []
+    scalars = {key: value for key, value in table.items() if not isinstance(value, dict)}
+    nested = {key: value for key, value in table.items() if isinstance(value, dict)}
+    if scalars or not nested:
+        lines.append(f"[{prefix}]")
+        for key, value in scalars.items():
+            lines.append(f"{key} = {_toml_value(value)}")
+        lines.append("")
+    for key, value in nested.items():
+        lines.extend(_dump_table(f"{prefix}.{key}", value))
+    return lines

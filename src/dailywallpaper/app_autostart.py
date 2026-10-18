@@ -9,12 +9,19 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "DailyWallpaper"
 
 
-def default_command() -> str:
-    """Prefer pythonw.exe so startup does not flash a console window."""
+def default_command(config_path=None) -> str:
+    """Prefer pythonw.exe so startup does not flash a console window.
+
+    The Run key starts the process with an unrelated working directory, so
+    the config path must be absolute or the app would look for ./config.toml.
+    """
     executable = Path(sys.executable)
     pythonw = executable.with_name("pythonw.exe")
     launcher = pythonw if pythonw.exists() else executable
-    return f'"{launcher}" -m dailywallpaper --headless'
+    command = f'"{launcher}" -m dailywallpaper --headless'
+    if config_path is not None:
+        command += f' --config "{Path(config_path).absolute()}"'
+    return command
 
 
 class _WinRegistry:
