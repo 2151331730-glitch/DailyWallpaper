@@ -56,7 +56,7 @@ def _looks_placeholder(line: str) -> bool:
     lowered = line.lower()
     return any(
         marker in lowered
-        for marker in ("example", "placeholder", "your-", "<", "redacted", "***")
+        for marker in ("example", "placeholder", "your-", "redacted", "changeme", "***")
     )
 
 

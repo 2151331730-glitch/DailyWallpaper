@@ -236,3 +236,44 @@ def test_a_real_we_applier_works_through_the_service(tmp_path):
     assert row["method"] == "we"
     assert row["success"] == 1
     assert row["previous_wallpaper"] == "D:/we/old/project.json"
+
+
+def test_a_static_apply_releases_wallpaper_engine(tmp_path):
+    we = _FakeWe()
+    conn, wid, service = _service(tmp_path, we=we)
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert we.closed == 1
+
+
+def test_a_dynamic_apply_does_not_close_wallpaper_engine_first(tmp_path):
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class Control:
+        def __init__(self):
+            self.current_value = "D:/we/old/project.json"
+
+        def current(self):
+            return self.current_value
+
+        def open(self, file, monitor=0):
+            self.current_value = str(Path(file).parent / "scene.pkg")
+            return True
+
+        def close(self):
+            raise AssertionError("must not close WE before opening a WE project")
+
+    project = tmp_path / "111" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,media_type,created_at)"
+                 " values('we_workshop','1','scene','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(
+        conn, _FakeApplier(), we=Control(), dynamic_applier=WeApplier(Control(), sleep=lambda s: None)
+    )
+
+    assert service.apply(wid, project) is True

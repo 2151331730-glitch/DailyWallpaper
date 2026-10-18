@@ -38,3 +38,10 @@ def test_tests_and_docs_are_skipped(tmp_path):
 def test_the_real_repository_is_clean():
     module = _module()
     assert module.scan(module.tracked_files()) == []
+
+
+def test_a_key_on_a_line_containing_angle_brackets_is_still_reported(tmp_path):
+    source = tmp_path / "page.html"
+    source.write_text('<meta content="sk-abcdefghijklmnopqrstuvwx">\n', encoding="utf-8")
+
+    assert _module().scan([source])

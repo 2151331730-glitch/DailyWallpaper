@@ -13,6 +13,7 @@ import keyring
 import requests
 
 from dailywallpaper.analysis.images import canonicalize, download
+from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
 from dailywallpaper.analysis.prefilter import prefilter
 from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
 from dailywallpaper.analysis.vision import (
@@ -178,13 +179,9 @@ class RealPipeline:
             on_battery,
         )
         wanted = {"scene", "video"} if kind == "dynamic" else {"image"}
-        matching = [candidate for candidate in raw if candidate.media_type in wanted]
-        if not matching:
-            # Spec 9.2.1: fall back to the other media type rather than skip the day.
-            other = {"image"} if wanted != {"image"} else {"scene", "video"}
-            matching = [candidate for candidate in raw if candidate.media_type in other]
-        raw = matching
-        logger.info(f"media plan: {kind} day, {len(raw)} candidate(s)")
+        primary = [candidate for candidate in raw if candidate.media_type in wanted]
+        secondary = [candidate for candidate in raw if candidate.media_type not in wanted]
+        logger.info(f"media plan: {kind} day, {len(primary)} candidate(s)")
 
         recent = self._recent_styles()
         profile = self._profile(now)
@@ -224,22 +221,57 @@ class RealPipeline:
 
         data_dir = Path(self.cfg.app.data_dir)
         self.shortlist = []
-        downloads = analyses = 0
-        for candidate in raw:
-            if downloads >= self.cfg.app.max_downloads_per_day:
+        counters = {"downloads": 0, "analyses": 0}
+        self._evaluate(
+            primary, data_dir, profile, recent, weather_code, weather_text,
+            recent_hashes, counters,
+        )
+        if not self.shortlist and secondary:
+            # Spec 9.2.1: fall back only when nothing of the planned type
+            # actually PASSED, not merely when none were fetched.
+            logger.info(f"no {kind} candidate qualified; falling back")
+            self._evaluate(
+                secondary, data_dir, profile, recent, weather_code, weather_text,
+                recent_hashes, counters,
+            )
+
+        self.shortlist = rank(self.shortlist, now.date().isoformat())
+        if self.cfg.vision.review_top_n > 0 and self.shortlist:
+            self._review_top(profile, recent, weather_code)
+            self.shortlist = rank(self.shortlist, now.date().isoformat())
+        self._prepared_on = prepared_key
+
+    def _evaluate(self, candidates, data_dir, profile, recent, weather_code,
+                  weather_text, recent_hashes, counters) -> None:
+        """Screen and score one group of candidates into ``self.shortlist``."""
+        for candidate in candidates:
+            if counters["downloads"] >= self.cfg.app.max_downloads_per_day:
                 break
-            if analyses >= self.cfg.app.max_analyses_per_day:
+            if counters["analyses"] >= self.cfg.app.max_analyses_per_day:
                 break
             try:
                 wallpaper_id = upsert_wallpaper(self.conn, candidate)
                 if not candidate.preview_url:
                     continue
-                preview = download(
-                    self.session,
-                    candidate.preview_url,
-                    data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
-                )
-                downloads += 1
+                asset = Path(candidate.file_url)
+                if candidate.media_type == "video" and asset.is_file():
+                    # Spec 4.3: score a video from three frames, not its poster.
+                    preview = video_contact_sheet(
+                        asset,
+                        data_dir / "cache" / "sheets" / f"{wallpaper_id}.jpg",
+                        ffmpeg=self.cfg.tools.ffmpeg_path,
+                    )
+                elif asset.is_file() and asset.suffix.lower() == ".gif":
+                    preview = gif_first_frame(
+                        asset, data_dir / "cache" / "sheets" / f"{wallpaper_id}.jpg"
+                    )
+                else:
+                    preview = download(
+                        self.session,
+                        candidate.preview_url,
+                        data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
+                    )
+                counters["downloads"] += 1
                 canonical, image_hash = canonicalize(
                     preview, data_dir / "cache" / "normalized"
                 )
@@ -248,12 +280,12 @@ class RealPipeline:
                     continue
                 set_phash(self.conn, wallpaper_id, check.dhash)
                 set_local_path(self.conn, wallpaper_id, canonical)
-                if not self.budget.check(0.003):
+                if not self.budget.check(ESTIMATE_CNY):
                     break
                 record = self.vision.analyze_or_cache(
                     wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
                 )
-                analyses += 1
+                counters["analyses"] += 1
                 if hard_gate(record.scores):
                     continue
                 scores = final_score(
@@ -261,7 +293,7 @@ class RealPipeline:
                 )
                 reason = record.scores.reason
                 if weather_text:
-                    reason = f"{reason}；天气：{weather_text}" 
+                    reason = f"{reason}；天气：{weather_text}"
                 self.shortlist.append(
                     Decision(
                         wallpaper_id,
@@ -283,12 +315,6 @@ class RealPipeline:
                 # One broken preview or vision response must not end the run.
                 logger.warning(f"candidate {candidate.source_id} skipped: {exc}")
                 continue
-
-        self.shortlist = rank(self.shortlist, now.date().isoformat())
-        if self.cfg.vision.review_top_n > 0 and self.shortlist:
-            self._review_top(profile, recent, weather_code)
-            self.shortlist = rank(self.shortlist, now.date().isoformat())
-        self._prepared_on = prepared_key
 
     def _review_top(self, profile, recent, weather_code) -> None:
         """Re-score the strongest candidates with the paid model.
@@ -404,20 +430,22 @@ def build_application(cfg):
     migrate(conn)
     pipeline = build_pipeline(cfg, conn)
     dynamic_applier = None
+    we_control = None
     if cfg.wallpaper_engine.install_dir:
         from dailywallpaper.apply.we_applier import WeApplier
         from dailywallpaper.apply.we_control import WeControl
 
         install = Path(cfg.wallpaper_engine.install_dir)
         config_path = Path(cfg.wallpaper_engine.config_path or install / "config.json")
-        dynamic_applier = WeApplier(WeControl(install, config_path))
+        we_control = WeControl(install, config_path)
+        dynamic_applier = WeApplier(we_control)
     machine = DailyStateMachine(
         conn=conn,
         config=cfg,
         clock=SystemClock(),
         pipeline=pipeline,
         apply_service=ApplyService(
-            conn, WindowsStaticApplier(), dynamic_applier=dynamic_applier
+            conn, WindowsStaticApplier(), we=we_control, dynamic_applier=dynamic_applier
         ),
     )
     return Application(machine)

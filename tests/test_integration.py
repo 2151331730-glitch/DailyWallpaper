@@ -482,3 +482,72 @@ def test_a_lost_shortlist_can_be_rebuilt_the_same_day(tmp_path):
                          budget)
     fresh.prepare(clock.now())
     assert fresh.pick(clock.now()) is not None
+
+
+def test_a_dynamic_day_falls_back_when_every_scene_fails_prefilter(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    scene = Candidate("we_workshop", "s1", "场景", "", "https://img/blur.png",
+                      "https://img/blur.png", "scene", 0, 0, 0, [], {})
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+
+    class BlurSession(SynthSession):
+        def get(self, url, stream=True, timeout=30):
+            if "blur" in url:
+                buffer = io.BytesIO()
+                Image.new("RGB", (320, 512), (128, 128, 128)).save(buffer, "PNG")
+                return _Response(buffer.getvalue())
+            return super().get(url, stream=stream, timeout=timeout)
+
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    pipeline = RealPipeline(
+        cfg, conn, BlurSession(), [Source([scene, still])], vision, CountingBudget(100)
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert len(pipeline.shortlist) == 1
+    assert pipeline.shortlist[0].scores is not None
+
+
+def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
+    from dataclasses import replace
+    import dailywallpaper.app as app_module
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes(b"fake")
+    video = Candidate("we_workshop", "v1", "视频", "", str(video_file),
+                      str(video_file), "video", 0, 0, 0, [], {})
+
+    calls = []
+    original = app_module.video_contact_sheet
+
+    def fake_sheet(asset, dest, ffmpeg="ffmpeg"):
+        calls.append(Path(asset))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        buffer = io.BytesIO()
+        _checkerboard(8).save(buffer, "PNG")
+        Path(dest).write_bytes(buffer.getvalue())
+        return Path(dest)
+
+    app_module.video_contact_sheet = fake_sheet
+    try:
+        vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+        cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+        pipeline = RealPipeline(
+            cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100)
+        )
+        pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+    finally:
+        app_module.video_contact_sheet = original
+
+    assert calls == [video_file]
+    assert len(pipeline.shortlist) == 1

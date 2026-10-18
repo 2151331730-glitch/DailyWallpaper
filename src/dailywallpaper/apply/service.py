@@ -44,19 +44,21 @@ class ApplyService:
         chosen, method = self._applier_for(wallpaper_id)
         state = chosen.snapshot()
         we_before = self.we.current() if self.we else ""
-        if self.we and we_before:
-            if not self.we.close():
-                return False
+        # A WE apply switches the project itself; only a static one has to
+        # release the live wallpaper first (spec 9.1).
+        close_we = bool(self.we and we_before and method == "static")
+        if close_we and not self.we.close():
+            return False
 
         try:
             result = chosen.apply(image_path)
         except Exception as exc:
             # An applier that raises is a failed apply; do not leave WE closed.
-            if self.we and we_before:
+            if close_we:
                 self.we.open(Path(we_before))
             return False
         if not result.ok:
-            if self.we and we_before:
+            if close_we:
                 self.we.open(Path(we_before))
             return False
 
