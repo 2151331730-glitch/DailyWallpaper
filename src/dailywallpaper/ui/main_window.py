@@ -17,6 +17,7 @@ from dailywallpaper.cost.report import CostService
 from dailywallpaper.recommend.ratings import RatingsService
 from dailywallpaper.state.machine import SystemClock
 from dailywallpaper.ui.cost_page import CostPage
+from dailywallpaper.ui.settings_page import SettingsPage
 from dailywallpaper.ui.history_page import HistoryPage
 
 PREVIEW_HEIGHT = 280
@@ -32,7 +33,8 @@ order by d.id desc limit 1
 class MainWindow(QWidget):
     """Read-only view of the newest decision plus the manual actions."""
 
-    def __init__(self, service, conn, parent=None, budget_cny=10.0):
+    def __init__(self, service, conn, parent=None, budget_cny=10.0,
+                 config=None, config_path=None):
         super().__init__(parent)
         self.service = service
         self.conn = conn
@@ -47,6 +49,10 @@ class MainWindow(QWidget):
         self.tabs.addTab(self.today, "今日")
         self.tabs.addTab(self.history, "历史")
         self.tabs.addTab(self.cost, "成本")
+        self.settings = None
+        if config is not None and config_path is not None:
+            self.settings = SettingsPage(config, config_path)
+            self.tabs.addTab(self.settings, "设置")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._polls = 0
 

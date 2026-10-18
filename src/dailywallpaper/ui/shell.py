@@ -18,7 +18,12 @@ class UiShell:
         self.machine = machine
         self.on_quit = on_quit
         self.worker = worker
-        self.window = MainWindow(command_service, command_service.conn)
+        self.window = MainWindow(
+            command_service,
+            command_service.conn,
+            config=getattr(command_service, "full_config", None),
+            config_path=getattr(command_service, "config_path", None),
+        )
         self.tray = TrayIcon(
             command_service,
             on_open=self.show_window,
@@ -98,6 +103,8 @@ def build_gui(cfg) -> int:
     # The worker builds its own application inside its own thread: a sqlite
     # connection may only be used from the thread that created it.
     worker = Worker(machine_factory=lambda: build_application(cfg).machine)
+    from dailywallpaper.config import default_config_path
+
     service = CommandService(
         machine.conn,
         cfg.app,
@@ -106,6 +113,8 @@ def build_gui(cfg) -> int:
         machine.apply_service,
         runner=worker,
     )
+    service.full_config = cfg
+    service.config_path = default_config_path()
     app = QApplication.instance() or QApplication(sys.argv)
     shell = UiShell(service, machine, on_quit=app.quit, worker=worker)
     shell.start()

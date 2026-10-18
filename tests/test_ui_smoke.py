@@ -352,3 +352,56 @@ def test_cost_page_handles_an_empty_ledger(qapp, tmp_path):
 
     assert "0.00" in page.spent_label.text()
     assert page.table.rowCount() == 0
+
+
+def _config_file(tmp_path):
+    from dailywallpaper.config import (
+        AppSection, BudgetSection, Config, RetentionSection, SourcesSection,
+        ToolsSection, VisionSection, WallpaperEngineSection, WallpaperSection,
+        WeatherSection, save_config,
+    )
+
+    cfg = Config(
+        AppSection(), SourcesSection(), VisionSection(), BudgetSection(),
+        WeatherSection(), WallpaperSection(), WallpaperEngineSection(),
+        ToolsSection(), RetentionSection(),
+    )
+    path = tmp_path / "config.toml"
+    save_config(path, cfg)
+    return cfg, path
+
+
+def test_settings_page_saves_a_valid_change(qapp, tmp_path):
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path)
+    page.daily_time_edit.setText("07:15")
+
+    assert page.save() is True
+    assert load_config(path).app.daily_time == "07:15"
+
+
+def test_settings_page_rejects_an_invalid_time(qapp, tmp_path):
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path)
+    page.daily_time_edit.setText("25:99")
+
+    assert page.save() is False
+    assert load_config(path).app.daily_time == "08:30"
+
+
+def test_settings_page_toggles_a_source(qapp, tmp_path):
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path)
+    page.wallhaven_check.setChecked(False)
+
+    assert page.save() is True
+    assert load_config(path).sources.wallhaven_enabled is False
