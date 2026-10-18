@@ -483,3 +483,15 @@ def test_today_tab_shows_the_four_sub_scores(qapp, tmp_path):
 
     assert "93" in window.subscore_label.text()
     assert "18" in window.subscore_label.text()
+
+
+def test_settings_page_toggles_the_manual_override(qapp, tmp_path):
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path)
+    page.manual_override_check.setChecked(True)
+
+    assert page.save() is True
+    assert load_config(path).app.allow_manual_override_after_daily_change is True

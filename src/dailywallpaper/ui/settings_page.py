@@ -52,6 +52,10 @@ class SettingsPage(QWidget):
         self.manual_counts_check.setChecked(
             config.app.manual_change_counts_toward_daily_limit
         )
+        self.manual_override_check = QCheckBox("今日已换过后仍允许手动再换")
+        self.manual_override_check.setChecked(
+            config.app.allow_manual_override_after_daily_change
+        )
         self.autostart_check = QCheckBox("开机自动启动")
         self.autostart_check.setChecked(config.app.start_with_windows)
 
@@ -63,6 +67,7 @@ class SettingsPage(QWidget):
         form.addRow(self.wallhaven_check)
         form.addRow(self.bing_check)
         form.addRow(self.manual_counts_check)
+        form.addRow(self.manual_override_check)
         form.addRow(self.autostart_check)
 
         self.save_button = QPushButton("保存")
@@ -99,6 +104,9 @@ class SettingsPage(QWidget):
                 daily_time=self.daily_time_edit.text().strip(),
                 latest_change_time=self.latest_time_edit.text().strip(),
                 manual_change_counts_toward_daily_limit=self.manual_counts_check.isChecked(),
+                allow_manual_override_after_daily_change=(
+                    self.manual_override_check.isChecked()
+                ),
                 start_with_windows=self.autostart_check.isChecked(),
             ),
             sources=replace(
