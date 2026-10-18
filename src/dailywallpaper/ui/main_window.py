@@ -65,10 +65,13 @@ class MainWindow(QWidget):
         self.change_button.clicked.connect(self._change_now)
         self.undo_button = QPushButton("撤销上一张")
         self.undo_button.clicked.connect(self._undo)
+        self.rate_button = QPushButton("评分…")
+        self.rate_button.clicked.connect(self._open_rating)
 
         actions = QHBoxLayout()
         actions.addWidget(self.change_button)
         actions.addWidget(self.undo_button)
+        actions.addWidget(self.rate_button)
 
         layout = QVBoxLayout(self.today)
         layout.addWidget(self.preview_label)
@@ -84,6 +87,17 @@ class MainWindow(QWidget):
 
     def _undo(self):
         self.service.undo()
+        self.refresh()
+
+    def _open_rating(self):
+        from dailywallpaper.ui.rating_dialog import RatingDialog
+
+        row = self.conn.execute(
+            "select wallpaper_id from decisions order by id desc limit 1"
+        ).fetchone()
+        if not row:
+            return
+        RatingDialog(RatingsService(self.conn), row["wallpaper_id"], self).exec()
         self.refresh()
 
     def refresh(self) -> None:

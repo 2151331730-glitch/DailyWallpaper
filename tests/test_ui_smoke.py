@@ -52,7 +52,9 @@ def test_tray_has_the_documented_menu(qapp):
 
     labels = [action.text() for action in tray.menu.actions() if action.text()]
 
-    assert labels[:5] == ["今日壁纸", "换一张", "撤销上一张", "暂停自动更换", "设置"]
+    assert labels[:7] == [
+        "今日壁纸", "换一张", "撤销上一张", "喜欢", "不喜欢", "暂停自动更换", "设置"
+    ]
     assert labels[-1] == "退出"
 
 
@@ -280,3 +282,24 @@ def test_main_window_has_today_and_history_tabs(qapp, tmp_path):
     window = MainWindow(_Service(), conn)
 
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["今日", "历史"]
+
+
+def test_tray_exposes_like_and_dislike(qapp):
+    tray = TrayIcon(_Service(), on_open=lambda: None, on_quit=lambda: None)
+
+    labels = [action.text() for action in tray.menu.actions() if action.text()]
+
+    assert "喜欢" in labels
+    assert "不喜欢" in labels
+
+
+def test_tray_rate_action_calls_back(qapp):
+    seen = []
+    tray = TrayIcon(
+        _Service(), on_open=lambda: None, on_quit=lambda: None, on_rate=seen.append
+    )
+
+    tray.like_action.trigger()
+    tray.dislike_action.trigger()
+
+    assert seen == [1, -1]
