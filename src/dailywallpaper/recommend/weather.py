@@ -2,8 +2,9 @@
 """Open-Meteo weather lookup and WMO-code to mood-tag mapping (spec 8.8)."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 import requests
@@ -87,3 +88,45 @@ def fetch_weather(session: requests.Session, latitude: float, longitude: float) 
         code=code,
         fetched_at=datetime.now(timezone.utc),
     )
+
+
+def cached_weather(
+    session, conn, latitude: float, longitude: float, cache_minutes: int, now=None
+) -> WeatherNow:
+    """Return weather for a coordinate pair, reusing a recent cached reading.
+
+    The reading lives in the ``state`` table so a restart inside the cache
+    window still avoids a network call.
+    """
+    moment = now or datetime.now(timezone.utc)
+    key = f"weather_{latitude}_{longitude}"
+    row = conn.execute("select value from state where key=?", (key,)).fetchone()
+    if row:
+        try:
+            data = json.loads(row["value"])
+            fetched_at = datetime.fromisoformat(data["fetched_at"])
+            if moment - fetched_at < timedelta(minutes=cache_minutes):
+                return WeatherNow(
+                    temperature=float(data["temperature"]),
+                    code=int(data["code"]),
+                    fetched_at=fetched_at,
+                )
+        except (ValueError, KeyError, TypeError):
+            pass
+    weather = fetch_weather(session, latitude, longitude)
+    conn.execute(
+        "INSERT INTO state(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (
+            key,
+            json.dumps(
+                {
+                    "temperature": weather.temperature,
+                    "code": weather.code,
+                    "fetched_at": weather.fetched_at.isoformat(),
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    return weather

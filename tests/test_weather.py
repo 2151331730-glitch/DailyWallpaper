@@ -1,8 +1,12 @@
 # tests/test_weather.py
 import pytest
 import requests
+from datetime import timedelta
+
+from dailywallpaper.db import connect, migrate
 from dailywallpaper.recommend.weather import (
     WeatherError,
+    cached_weather,
     fetch_weather,
     weather_fit,
     weather_tags,
@@ -88,3 +92,42 @@ def test_fetch_weather_http_error_raises():
 def test_fetch_weather_malformed_payload_raises_weather_error():
     with pytest.raises(WeatherError):
         fetch_weather(FakeSession({"current": {}}), 0.0, 0.0)
+
+
+def _current_payload(temperature=21.5, code=3):
+    return {"current": {"temperature_2m": temperature, "weather_code": code}}
+
+
+def test_cached_weather_reuses_a_recent_reading(tmp_path):
+    conn = connect(tmp_path / "app.db"); migrate(conn)
+    first = cached_weather(FakeSession(_current_payload()), conn, 39.9, 116.4, 60)
+
+    class Boom:
+        def get(self, *args, **kwargs):
+            raise AssertionError("cache should have answered")
+
+    second = cached_weather(
+        Boom(), conn, 39.9, 116.4, 60, now=first.fetched_at + timedelta(minutes=30)
+    )
+
+    assert second.temperature == 21.5
+    assert second.code == 3
+
+
+def test_cached_weather_refetches_after_the_window(tmp_path):
+    conn = connect(tmp_path / "app.db"); migrate(conn)
+    first = cached_weather(FakeSession(_current_payload()), conn, 39.9, 116.4, 60)
+
+    calls = []
+
+    class S:
+        def get(self, *args, **kwargs):
+            calls.append(1)
+            return FakeResponse(_current_payload(5.0, 71))
+
+    second = cached_weather(
+        S(), conn, 39.9, 116.4, 60, now=first.fetched_at + timedelta(minutes=120)
+    )
+
+    assert calls == [1]
+    assert second.temperature == 5.0
