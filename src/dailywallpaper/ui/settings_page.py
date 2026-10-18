@@ -134,7 +134,12 @@ class SettingsPage(QWidget):
         updated = self.collect()
         if updated is None:
             return False
-        save_config(self.config_path, updated)
+        try:
+            save_config(self.config_path, updated)
+        except Exception as exc:  # a write failure must not look like success
+            logger.warning(f"config save failed: {exc}")
+            self.status.setText("保存失败：无法写入 config.toml")
+            return False
         self._apply_autostart(updated.app.start_with_windows)
         self.config = updated
         self.status.setText("已保存")

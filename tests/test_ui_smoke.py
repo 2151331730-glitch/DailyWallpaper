@@ -533,3 +533,18 @@ def test_worker_runs_a_manual_request_without_waiting_for_the_interval():
         assert calls == [False, True]
     finally:
         worker.stop()
+
+
+def test_settings_page_reports_a_write_failure(qapp, tmp_path, monkeypatch):
+    from dailywallpaper.ui import settings_page as module
+
+    cfg, path = _config_file(tmp_path)
+
+    def boom(_path, _cfg):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(module, "save_config", boom)
+    page = module.SettingsPage(cfg, path)
+
+    assert page.save() is False
+    assert "保存失败" in page.status.text()
