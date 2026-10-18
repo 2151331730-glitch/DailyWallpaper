@@ -406,3 +406,44 @@ def test_build_pipeline_requires_pricing_for_every_model(tmp_path):
 
     with pytest.raises(ValueError, match="review-model"):
         build_pipeline(broken, conn)
+
+
+def test_a_dynamic_day_only_keeps_scene_and_video(tmp_path):
+    from datetime import date
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    scene = Candidate("we_workshop", "s1", "场景", "", "f", "https://img/day1/0.png",
+                      "scene", 0, 0, 0, [], {})
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = CountingBudget(100)
+    from dataclasses import replace
+
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([scene, still])], vision, budget)
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    types = {row["media_type"] for row in conn.execute("select media_type from wallpapers")}
+    assert types == {"scene"}
+    assert len(pipeline.shortlist) == 1
+
+
+def test_a_static_day_falls_back_when_only_dynamic_exists(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    scene = Candidate("we_workshop", "s1", "场景", "", "f", "https://img/day1/0.png",
+                      "scene", 0, 0, 0, [], {})
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="static_only"))
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([scene])], vision, CountingBudget(100))
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert len(pipeline.shortlist) == 1
