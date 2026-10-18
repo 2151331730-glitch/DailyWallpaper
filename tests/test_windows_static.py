@@ -184,3 +184,17 @@ def test_current_wallpaper_reads_the_desktop(tmp_path):
     applier.apply(img)
 
     assert applier.current_wallpaper() == spi.path
+
+
+def test_apply_resolves_a_relative_image_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    img = Path("wall.jpg")
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    spi = FakeSpi()
+    applier = WindowsStaticApplier(spi, FakeRegistry())
+
+    assert applier.apply(img).ok
+
+    # Explorer resolves the wallpaper path against its own cwd, so a
+    # relative path renders as a black desktop.
+    assert os.path.isabs(spi.path)

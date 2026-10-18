@@ -136,6 +136,10 @@ class WindowsStaticApplier:
         return self.spi.get_wallpaper()
 
     def apply(self, image: Path, style: str = "fill") -> ApplyResult:
+        # Windows stores whatever path it is given, and Explorer resolves a
+        # relative one against its own working directory, which paints the
+        # desktop black. Always hand it an absolute path.
+        image = Path(image).resolve()
         # Remember the mode so a failed apply can undo the mode switch too.
         previous_mode = self.background_type.get() if self.background_type else None
         refusal = self._leave_slideshow_mode()
