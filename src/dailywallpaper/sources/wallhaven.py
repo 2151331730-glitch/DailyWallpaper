@@ -15,6 +15,8 @@ USER_AGENT = "DailyWallpaper/0.1 (local app)"
 PAGE_SIZE = 24
 REQUEST_TIMEOUT = 30
 REQUEST_SPACING_SECONDS = 1.0
+# Spec 4.1: mix sorts so the pool is not only popular/template images.
+SORT_PLAN = ("toplist", "toplist", "random", "date_added")
 
 
 class WallhavenSource:
@@ -51,19 +53,26 @@ class WallhavenSource:
             page += 1
         return results
 
+    def _sort_for_page(self, page: int) -> tuple[str, str | None]:
+        """Return (sorting, topRange) for a 1-based page number."""
+        sorting = SORT_PLAN[(page - 1) % len(SORT_PLAN)]
+        return sorting, ("1M" if sorting == "toplist" else None)
+
     def _search(self, page: int) -> dict:
         if self._requests_made:
             time.sleep(REQUEST_SPACING_SECONDS)
         self._requests_made += 1
+        sorting, top_range = self._sort_for_page(page)
         params = {
             "purity": "100",
             "categories": self.config.wallhaven_categories,
             "atleast": f"{self.config.min_width}x{self.config.min_height}",
             "ratios": "16x9",
-            "sorting": "toplist",
-            "topRange": "1M",
+            "sorting": sorting,
             "page": page,
         }
+        if top_range:
+            params["topRange"] = top_range
         try:
             response = self.session.get(
                 SEARCH_URL,

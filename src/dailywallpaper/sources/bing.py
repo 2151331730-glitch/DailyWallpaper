@@ -29,7 +29,7 @@ class BingSource:
     def __init__(self, session: requests.Session):
         self.session = session
 
-    def fetch(self) -> list[Candidate]:
+    def fetch(self, limit: int | None = None) -> list[Candidate]:
         try:
             response = self.session.get(
                 ARCHIVE_URL,
