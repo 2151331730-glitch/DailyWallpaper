@@ -55,7 +55,10 @@ class SingleInstance:
 
     def __enter__(self):
         kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
         self.handle = kernel32.CreateMutexW(None, False, self.name)
+        if not self.handle:
+            raise RuntimeError("could not create the single-instance mutex")
         if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
             kernel32.CloseHandle(self.handle)
             self.handle = None

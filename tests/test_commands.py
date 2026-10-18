@@ -1,5 +1,7 @@
 # tests/test_commands.py
 import threading
+
+import pytest
 from datetime import datetime
 
 from dailywallpaper.config import AppSection
@@ -223,3 +225,10 @@ def test_manual_change_bypasses_pause_with_the_real_machine(tmp_path):
 
     assert result.action == "applied"
     assert apply_service.triggers == ["manual"]
+
+
+def test_pause_zero_days_is_rejected(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+
+    with pytest.raises(ValueError):
+        service.pause(0)

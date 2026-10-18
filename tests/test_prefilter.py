@@ -72,3 +72,13 @@ def test_wrong_aspect_rejected(tmp_path):
     result = prefilter(path, _candidate(3000, 5000), SourcesSection(), [])
 
     assert "aspect" in result.reasons
+
+
+def test_scene_without_dimensions_is_not_rejected_for_aspect(tmp_path):
+    path = tmp_path / "scene.png"
+    _checkerboard().save(path)
+
+    result = prefilter(path, _candidate(0, 0, media_type="scene"), SourcesSection(), [])
+
+    assert "aspect" not in result.reasons
+    assert "resolution" not in result.reasons

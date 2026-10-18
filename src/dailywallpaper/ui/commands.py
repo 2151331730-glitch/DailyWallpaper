@@ -56,7 +56,9 @@ class CommandService:
             return False
 
     def pause(self, days: int | None) -> None:
-        span = days if days else FOREVER_YEARS * 365
+        if days is not None and days <= 0:
+            raise ValueError("pause days must be positive, or None for forever")
+        span = days if days is not None else FOREVER_YEARS * 365
         until = self.clock.now() + timedelta(days=span)
         self.conn.execute(
             "insert or replace into state(key,value) values(?,?)",

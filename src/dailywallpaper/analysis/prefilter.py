@@ -32,10 +32,11 @@ def prefilter(path: Path, candidate, cfg, recent_hashes) -> PrefilterResult:
     if candidate.media_type == "image":
         if candidate.width < cfg.min_width or candidate.height < cfg.min_height:
             reasons.append("resolution")
-
-    ratio = candidate.width / candidate.height if candidate.height else 0
-    if not (cfg.aspect_min <= ratio <= cfg.aspect_max):
-        reasons.append("aspect")
+        ratio = candidate.width / candidate.height if candidate.height else 0
+        if not (cfg.aspect_min <= ratio <= cfg.aspect_max):
+            reasons.append("aspect")
+    # scene/video carry no preview dimensions; spec 8.2 says not to hard-filter
+    # them by aspect (a scene is rendered live and a video is measured later).
 
     with Image.open(path) as im:
         if im.width < MIN_DECODED_SIDE or im.height < MIN_DECODED_SIDE:
