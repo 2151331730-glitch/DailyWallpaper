@@ -26,6 +26,8 @@ from dailywallpaper.apply.windows_static import WindowsStaticApplier
 from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
+from dailywallpaper.power import PowerStatus
+from dailywallpaper.recommend.media_plan import MediaPlan
 from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
@@ -104,13 +106,14 @@ class Application:
 class RealPipeline:
     """Fetch, screen, analyze and rank one day's candidates."""
 
-    def __init__(self, cfg, conn, session, sources, vision, budget):
+    def __init__(self, cfg, conn, session, sources, vision, budget, power=None):
         self.cfg = cfg
         self.conn = conn
         self.session = session
         self.sources = sources
         self.vision = vision
         self.budget = budget
+        self.power = power
         self.shortlist = []
 
     def _recent_styles(self):
@@ -161,6 +164,24 @@ class RealPipeline:
                 logger.warning(f"source {name} unavailable today: {exc}")
                 mark_source_down(self.conn, name, today)
                 continue
+
+        on_battery = False
+        if self.cfg.wallpaper.dynamic_requires_ac:
+            on_battery = (self.power or PowerStatus()).on_battery()
+        kind = MediaPlan.decide(
+            now.date(),
+            self.cfg.wallpaper.media_strategy,
+            self.cfg.wallpaper.dynamic_every_n_days,
+            on_battery,
+        )
+        wanted = {"scene", "video"} if kind == "dynamic" else {"image"}
+        matching = [candidate for candidate in raw if candidate.media_type in wanted]
+        if not matching:
+            # Spec 9.2.1: fall back to the other media type rather than skip the day.
+            other = {"image"} if wanted != {"image"} else {"scene", "video"}
+            matching = [candidate for candidate in raw if candidate.media_type in other]
+        raw = matching
+        logger.info(f"media plan: {kind} day, {len(raw)} candidate(s)")
 
         recent = self._recent_styles()
         profile = self._profile(now)
