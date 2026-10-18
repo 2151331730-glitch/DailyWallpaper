@@ -172,3 +172,12 @@ def test_build_prefetcher_needs_an_account_and_steamcmd(tmp_path):
         ),
     )
     assert build_prefetcher(ready, lambda: connect(tmp_path / "app.db")) is not None
+
+
+def test_a_missing_cache_directory_is_not_an_error(tmp_path):
+    _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+
+    prefetcher = _prefetcher(tmp_path, FakeSteamCmd(root))
+
+    assert prefetcher.run_once() == []

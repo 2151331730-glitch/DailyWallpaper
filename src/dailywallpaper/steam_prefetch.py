@@ -83,6 +83,8 @@ class Prefetcher:
 
     def _evict(self, conn) -> None:
         """Keep the cache under max_cache_gb, newest items first."""
+        if not self.download_root.is_dir():
+            return
         limit = max(0.0, self.max_cache_gb) * 1024 ** 3
         entries = []
         for folder in self.download_root.iterdir():
