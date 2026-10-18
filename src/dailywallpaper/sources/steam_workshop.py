@@ -92,6 +92,8 @@ class SteamWorkshopSource:
         # visibility 0 is public; anything else needs the owner's session.
         if item.get("visibility") not in (None, 0):
             return None
+        if item.get("banned"):
+            return None
         tags = _tag_names(item)
         mature = any(tag.lower() in MATURE for tag in tags)
         if mature and not self.allow_mature:

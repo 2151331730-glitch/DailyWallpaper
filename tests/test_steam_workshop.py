@@ -95,6 +95,12 @@ def test_private_items_are_skipped(tmp_path):
     assert SteamWorkshopSource(client, tmp_path).fetch() == []
 
 
+def test_banned_items_are_skipped(tmp_path):
+    client = FakeClient([_item(banned=1, ban_reason="")])
+
+    assert SteamWorkshopSource(client, tmp_path).fetch() == []
+
+
 def test_query_asks_for_wallpaper_engine_items(tmp_path):
     client = FakeClient([])
     SteamWorkshopSource(client, tmp_path, query_type=9, days=7, per_page=5).fetch()
