@@ -281,7 +281,9 @@ def test_main_window_has_today_and_history_tabs(qapp, tmp_path):
     migrate(conn)
     window = MainWindow(_Service(), conn)
 
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["今日", "历史"]
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
+        "今日", "历史", "成本"
+    ]
 
 
 def test_tray_exposes_like_and_dislike(qapp):
@@ -303,3 +305,50 @@ def test_tray_rate_action_calls_back(qapp):
     tray.dislike_action.trigger()
 
     assert seen == [1, -1]
+
+
+def test_cost_page_shows_spend_and_models(qapp, tmp_path):
+    from datetime import datetime
+
+    from dailywallpaper.cost.report import CostService
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.cost_page import CostPage
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into api_usage(ts,provider,model,purpose,cost_cny,status_code)"
+        " values('2026-10-02T09:00:00','zhipu','glm-x','screen',0.5,200)"
+    )
+    conn.commit()
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 18, 12, 0)
+
+    page = CostPage(CostService(conn, _Clock()), 10.0)
+    page.refresh()
+
+    assert "0.50" in page.spent_label.text()
+    assert page.table.rowCount() == 1
+
+
+def test_cost_page_handles_an_empty_ledger(qapp, tmp_path):
+    from datetime import datetime
+
+    from dailywallpaper.cost.report import CostService
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.cost_page import CostPage
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 18, 12, 0)
+
+    page = CostPage(CostService(conn, _Clock()), 10.0)
+    page.refresh()
+
+    assert "0.00" in page.spent_label.text()
+    assert page.table.rowCount() == 0
