@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -45,6 +46,9 @@ class ApplyService:
         self.sleep = sleep or time.sleep
         self.spawn = spawn or _spawn_daemon
         self.style = style
+        # The recheck runs on another thread; sqlite connections are
+        # thread-bound, so it opens its own to read the epoch.
+        self._db_path = self._database_path()
 
     def _change_date(self) -> str:
         # Follow the state machine's clock when one is supplied, so a
@@ -77,11 +81,31 @@ class ApplyService:
             logger.warning(f"WE open failed: {exc}")
             return False
 
+    def _database_path(self) -> str:
+        try:
+            row = self.conn.execute("PRAGMA database_list").fetchone()
+            return str(row[2]) if row is not None and row[2] else ""
+        except Exception:
+            return ""
+
     def _epoch(self) -> int:
-        row = self.conn.execute(
-            "select value from state where key='apply_epoch'"
-        ).fetchone()
-        return int(row[0]) if row is not None and str(row[0]).isdigit() else 0
+        """Read the shared epoch from a short-lived connection.
+
+        The recheck thread must not reuse the connection the worker created.
+        """
+        if not self._db_path:
+            return 0
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=5)
+            try:
+                row = conn.execute(
+                    "select value from state where key='apply_epoch'"
+                ).fetchone()
+            finally:
+                conn.close()
+            return int(row[0]) if row is not None and str(row[0]).isdigit() else 0
+        except Exception:
+            return 0
 
     def _bump_epoch(self) -> int:
         """Invalidate pending rechecks; shared through the DB so the UI's

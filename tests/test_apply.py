@@ -619,3 +619,27 @@ def test_an_undo_in_another_service_cancels_the_recheck(tmp_path):
     targets[0]()
 
     assert len(service_a.applier.applied) == applied_before
+
+
+def test_the_recheck_can_read_the_epoch_from_another_thread(tmp_path):
+    import threading
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    targets = []
+    service = ApplyService(
+        conn, _FakeApplier(), we=_FakeWe(),
+        recheck_delays=(5, 30), sleep=lambda s: None, spawn=targets.append,
+    )
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+
+    worker = threading.Thread(target=targets[0])
+    worker.start()
+    worker.join(2)
+
+    # Two rechecks ran (and saw a live WE current), so the image was applied
+    # twice more; a thread-bound connection error would have stopped at one.
+    assert len(service.applier.applied) == 3
