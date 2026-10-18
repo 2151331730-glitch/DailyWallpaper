@@ -2,6 +2,7 @@
 """The settings tab (spec 11.2)."""
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import time
 
@@ -15,7 +16,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dailywallpaper.app_autostart import AutostartService
 from dailywallpaper.config import save_config
+
+logger = logging.getLogger(__name__)
 
 
 def _valid_time(text: str) -> bool:
@@ -29,11 +33,12 @@ def _valid_time(text: str) -> bool:
 class SettingsPage(QWidget):
     """Edits the handful of config values a user actually changes."""
 
-    def __init__(self, config, config_path, on_saved=None, parent=None):
+    def __init__(self, config, config_path, on_saved=None, parent=None, autostart=None):
         super().__init__(parent)
         self.config = config
         self.config_path = config_path
         self.on_saved = on_saved
+        self.autostart = autostart
 
         self.daily_time_edit = QLineEdit(config.app.daily_time)
         self.latest_time_edit = QLineEdit(config.app.latest_change_time)
@@ -105,11 +110,22 @@ class SettingsPage(QWidget):
             budget=replace(self.config.budget, monthly_cny=budget),
         )
 
+    def _apply_autostart(self, wanted: bool) -> None:
+        try:
+            service = self.autostart or AutostartService()
+            if wanted and not service.enabled():
+                service.enable()
+            elif not wanted and service.enabled():
+                service.disable()
+        except Exception as exc:  # a locked registry must not lose the config
+            logger.warning(f"autostart toggle failed: {exc}")
+
     def save(self) -> bool:
         updated = self.collect()
         if updated is None:
             return False
         save_config(self.config_path, updated)
+        self._apply_autostart(updated.app.start_with_windows)
         self.config = updated
         self.status.setText("已保存")
         if self.on_saved is not None:
