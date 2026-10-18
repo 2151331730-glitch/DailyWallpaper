@@ -430,6 +430,11 @@ class RealPipeline:
         if not decision.ready:
             # Defensive: prepare() filters these out; never apply a preview.
             return self.pick(now, dry_run=dry_run)
+        if decision.source == "steam_workshop" and (
+            decision.apply_path is None or not Path(decision.apply_path).is_file()
+        ):
+            # The prefetcher may have evicted the folder after prepare.
+            return self.pick(now, dry_run=dry_run)
         # Recorded before the apply so tomorrow's diversity term can see it.
         self.conn.execute(
             """

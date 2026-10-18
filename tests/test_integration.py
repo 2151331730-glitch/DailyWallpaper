@@ -733,3 +733,35 @@ def test_an_unready_remote_item_does_not_block_the_fallback(tmp_path):
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
     assert [d.source for d in pipeline.shortlist] == ["bing"]
+
+
+def test_a_steam_item_evicted_between_prepare_and_pick_is_skipped(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    root = tmp_path / "steam_workshop"
+    (root / "123").mkdir(parents=True)
+    (root / "123" / "project.json").write_text("{}", encoding="utf-8")
+    remote = Candidate(
+        "steam_workshop", "123", "Neon", "", str(root / "123" / "project.json"),
+        "https://img/0.png", "scene", 0, 0, 0, [], {},
+    )
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+
+    class _Ac:
+        def on_battery(self):
+            return False
+
+    pipeline = RealPipeline(
+        cfg, conn, ImageSession(), [Source([remote])], vision,
+        CountingBudget(100), power=_Ac(),
+    )
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+    assert len(pipeline.shortlist) == 1
+
+    (root / "123" / "project.json").unlink()
+
+    assert pipeline.pick(datetime(2026, 10, 18, 9, 0)) is None
