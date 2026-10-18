@@ -27,14 +27,18 @@ from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
 from dailywallpaper.recommend.profile import PreferenceProfile
+from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
 from dailywallpaper.sources.repository import (
+    mark_source_down,
     set_local_path,
     set_phash,
+    source_is_down,
     upsert_wallpaper,
 )
 from dailywallpaper.sources.wallhaven import WallhavenSource
+from dailywallpaper.sources.workshop import WorkshopSource
 from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
 ERROR_ALREADY_EXISTS = 183
@@ -145,10 +149,17 @@ class RealPipeline:
             return
 
         raw = []
+        today = now.date().isoformat()
         for source in self.sources:
+            name = type(source).__name__
+            if source_is_down(self.conn, name, today):
+                continue
             try:
                 raw.extend(source.fetch(self.cfg.app.max_analyses_per_day))
-            except Exception:
+            except Exception as exc:
+                # Remember it for the day: no proxy, no repeated waits.
+                logger.warning(f"source {name} unavailable today: {exc}")
+                mark_source_down(self.conn, name, today)
                 continue
 
         recent = self._recent_styles()
@@ -163,6 +174,7 @@ class RealPipeline:
         self.budget.warn_if_needed()
 
         weather_code = 0
+        weather_text = ""
         if self.cfg.weather.enabled:
             try:
                 weather = cached_weather(
@@ -173,6 +185,7 @@ class RealPipeline:
                     self.cfg.weather.cache_minutes,
                 )
                 weather_code = weather.code
+                weather_text = weather_label(weather.code)
             except Exception as exc:
                 logger.warning(f"weather unavailable, scoring neutral: {exc}")
 
@@ -213,6 +226,9 @@ class RealPipeline:
                 scores = final_score(
                     record.scores, candidate.source, profile, recent, weather_code
                 )
+                reason = record.scores.reason
+                if weather_text:
+                    reason = f"{reason}；天气：{weather_text}" 
                 self.shortlist.append(
                     Decision(
                         wallpaper_id,
@@ -221,7 +237,7 @@ class RealPipeline:
                         scores.explore,
                         scores.personalize,
                         scores.final,
-                        record.scores.reason,
+                        reason,
                         candidate.source,
                     )
                 )
@@ -311,6 +327,15 @@ class RealPipeline:
         return decision
 
 
+def workshop_root(install_dir) -> Path | None:
+    """<steamapps>/common/wallpaper_engine -> <steamapps>/workshop/content/431960."""
+    path = Path(install_dir)
+    parents = path.parents
+    if len(parents) > 1 and parents[1].name.lower() == "steamapps":
+        return parents[1] / "workshop" / "content" / "431960"
+    return None
+
+
 def build_pipeline(cfg, conn):
     for name in (cfg.vision.screen_model, cfg.vision.review_model):
         if name not in cfg.vision.pricing:
@@ -320,7 +345,10 @@ def build_pipeline(cfg, conn):
     if cfg.sources.wallhaven_enabled:
         sources.append(WallhavenSource(session))
     if cfg.sources.bing_enabled:
-        sources.append(BingSource(session))
+        sources.append(BingSource(session, cfg.sources))
+    root = workshop_root(cfg.wallpaper_engine.install_dir) if cfg.wallpaper_engine.install_dir else None
+    if root is not None and root.exists():
+        sources.append(WorkshopSource(root, allow_mature=cfg.sources.allow_mature))
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
         raise RuntimeError("Zhipu key missing; run scripts/set_key.py")
@@ -340,11 +368,21 @@ def build_application(cfg):
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
     pipeline = build_pipeline(cfg, conn)
+    dynamic_applier = None
+    if cfg.wallpaper_engine.install_dir:
+        from dailywallpaper.apply.we_applier import WeApplier
+        from dailywallpaper.apply.we_control import WeControl
+
+        install = Path(cfg.wallpaper_engine.install_dir)
+        config_path = Path(cfg.wallpaper_engine.config_path or install / "config.json")
+        dynamic_applier = WeApplier(WeControl(install, config_path))
     machine = DailyStateMachine(
         conn=conn,
         config=cfg,
         clock=SystemClock(),
         pipeline=pipeline,
-        apply_service=ApplyService(conn, WindowsStaticApplier()),
+        apply_service=ApplyService(
+            conn, WindowsStaticApplier(), dynamic_applier=dynamic_applier
+        ),
     )
     return Application(machine)

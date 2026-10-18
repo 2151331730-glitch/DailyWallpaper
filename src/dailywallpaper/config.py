@@ -39,6 +39,7 @@ class SourcesSection:
     max_image_mb: int = 40
     max_video_mb: int = 500
     wallhaven_pages: int = 4
+    connect_timeout: int = 5
 
 
 @dataclass(frozen=True)

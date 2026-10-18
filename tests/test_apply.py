@@ -180,3 +180,19 @@ def test_applier_exception_is_treated_as_failure(tmp_path):
     assert service.apply(wid, tmp_path / "new.jpg") is False
     assert we.opened == ["D:/we/scene.pkg"]
     assert conn.execute("select count(*) from change_log").fetchone()[0] == 0
+
+
+def test_a_dynamic_wallpaper_uses_the_we_applier(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,media_type,created_at)"
+                 " values('we_workshop','1','video','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    static, dynamic = _FakeApplier(), _FakeApplier()
+    service = ApplyService(conn, static, dynamic_applier=dynamic)
+
+    assert service.apply(wid, tmp_path / "clip.mp4") is True
+    assert static.restored == [] and dynamic.restored == []
+    row = conn.execute("select method from change_log").fetchone()
+    assert row[0] == "we"

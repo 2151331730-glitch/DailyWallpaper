@@ -62,6 +62,18 @@ def set_phash(conn, wallpaper_id: int, phash: str) -> None:
     conn.commit()
 
 
+def source_is_down(conn, name: str, day: str) -> bool:
+    """A source that failed today is not retried: no proxy, no waiting."""
+    key = f"source_down_{name}_{day}"
+    return conn.execute("select 1 from state where key=?", (key,)).fetchone() is not None
+
+
+def mark_source_down(conn, name: str, day: str) -> None:
+    key = f"source_down_{name}_{day}"
+    conn.execute("insert or replace into state(key,value) values(?,?)", (key, "1"))
+    conn.commit()
+
+
 def fetch_all(sources, limit: int) -> list[Candidate]:
     """Fetch from every source; one failing source does not abort the rest."""
     items: list[Candidate] = []

@@ -80,7 +80,7 @@ class WallhavenSource:
                 SEARCH_URL,
                 params=params,
                 headers={"User-Agent": USER_AGENT},
-                timeout=REQUEST_TIMEOUT,
+                timeout=(self.config.connect_timeout, REQUEST_TIMEOUT),
             )
         except requests.RequestException as exc:
             raise SourceError(f"wallhaven request failed: {exc}") from exc

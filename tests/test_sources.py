@@ -132,3 +132,28 @@ def test_fetch_all_continues_when_one_source_raises():
 
     items = fetch_all([Boom(), Ok()], 10)
     assert len(items) == 1
+
+
+def test_source_is_not_retried_after_a_failure_today(tmp_path):
+    from dailywallpaper.sources.repository import mark_source_down, source_is_down
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+
+    assert source_is_down(conn, "WallhavenSource", "2026-10-18") is False
+    mark_source_down(conn, "WallhavenSource", "2026-10-18")
+    assert source_is_down(conn, "WallhavenSource", "2026-10-18") is True
+    assert source_is_down(conn, "WallhavenSource", "2026-10-19") is False
+
+
+def test_wallhaven_uses_the_short_connect_timeout():
+    seen = {}
+
+    class S:
+        def get(self, url, params, headers, timeout):
+            seen["timeout"] = timeout
+            return FakeResponse({"data": []})
+
+    WallhavenSource(S(), SourcesSection(connect_timeout=5))._search(1)
+
+    assert seen["timeout"] == (5, 30)

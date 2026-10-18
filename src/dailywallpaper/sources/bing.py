@@ -26,8 +26,9 @@ class BingSource:
     (no 1080p fallback), per the design spec.
     """
 
-    def __init__(self, session: requests.Session):
+    def __init__(self, session: requests.Session, config=None):
         self.session = session
+        self.config = config
 
     def fetch(self, limit: int | None = None) -> list[Candidate]:
         try:
@@ -35,7 +36,7 @@ class BingSource:
                 ARCHIVE_URL,
                 params={"format": "js", "idx": 0, "n": 1, "mkt": "zh-CN"},
                 headers={"User-Agent": BROWSER_USER_AGENT},
-                timeout=REQUEST_TIMEOUT,
+                timeout=(getattr(self.config, "connect_timeout", 5), REQUEST_TIMEOUT),
             )
         except requests.RequestException as exc:
             raise SourceError(f"bing request failed: {exc}") from exc

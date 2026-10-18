@@ -130,3 +130,27 @@ def cached_weather(
     )
     conn.commit()
     return weather
+
+
+_WEATHER_LABELS = (
+    ((0, 1), "晴"),
+    ((2, 3), "多云"),
+    ((45, 48), "雾"),
+    ((51, 67), "雨"),
+    ((71, 77), "雪"),
+    ((80, 82), "阵雨"),
+    ((85, 86), "阵雪"),
+    ((95, 99), "雷雨"),
+)
+
+
+def weather_label(code: int) -> str:
+    """Short Chinese label for the recommendation reason."""
+    try:
+        value = int(code)
+    except (TypeError, ValueError):
+        return ""
+    for (low, high), label in _WEATHER_LABELS:
+        if low <= value <= high:
+            return label
+    return ""
