@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from dailywallpaper.app import SingleInstance
+from dailywallpaper.app import AlreadyRunning, SingleInstance
 from dailywallpaper.config import default_config_path, load_config
 from dailywallpaper.logging_setup import setup_logging
 
@@ -38,17 +38,27 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
 
         app_factory = build_application
 
-    with SingleInstance(instance_name or INSTANCE_NAME):
-        application = app_factory(cfg)
-        if args.once:
-            return application.run_once(dry_run=args.dry_run)
-        if args.headless:
+    def run_inside():
+        # Build the application only for the modes that use it: the GUI shell
+        # builds its own (and the worker builds a third in its own thread).
+        if args.once or args.headless:
+            application = app_factory(cfg)
+            if args.once:
+                return application.run_once(dry_run=args.dry_run)
             return application.run_forever()
-        if run_gui is None:
+        gui = run_gui
+        if gui is None:
             from dailywallpaper.ui.shell import build_gui
 
-            run_gui = build_gui
-        return run_gui(cfg, args.config)
+            gui = build_gui
+        return gui(cfg, args.config)
+
+    try:
+        with SingleInstance(instance_name or INSTANCE_NAME):
+            return run_inside()
+    except AlreadyRunning:
+        print("另一个 DailyWallpaper 实例已经在运行，本次启动已退出。")
+        return 1
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from dailywallpaper.analysis.vision import (
     ZhipuVision,
 )
 from dailywallpaper.apply.service import ApplyService
-from dailywallpaper.apply.windows_static import WindowsStaticApplier
+from dailywallpaper.apply.windows_static import Win32BackgroundType, WindowsStaticApplier
 from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
@@ -53,6 +53,10 @@ logger = logging.getLogger(__name__)
 ESTIMATE_CNY = 0.003
 
 
+class AlreadyRunning(RuntimeError):
+    """Another process owns the single-instance mutex."""
+
+
 class SingleInstance:
     """Windows named-mutex guard so two schedulers cannot run at once."""
 
@@ -69,7 +73,7 @@ class SingleInstance:
         if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
             kernel32.CloseHandle(self.handle)
             self.handle = None
-            raise RuntimeError("another DailyWallpaper instance is running")
+            raise AlreadyRunning("another DailyWallpaper instance is running")
         return self
 
     def __exit__(self, *exc):
@@ -267,6 +271,11 @@ class RealPipeline:
                 break
             if counters["analyses"] >= self.cfg.app.max_analyses_per_day:
                 break
+            # Check the budget before downloading: once it is gone the analysis
+            # cannot happen, so the preview would be a wasted download (and a
+            # fallback group would pay for exactly one before noticing).
+            if not self.budget.check(ESTIMATE_CNY):
+                break
             try:
                 wallpaper_id = upsert_wallpaper(self.conn, candidate)
                 if not candidate.preview_url:
@@ -302,8 +311,6 @@ class RealPipeline:
                     continue
                 set_phash(self.conn, wallpaper_id, check.dhash)
                 set_local_path(self.conn, wallpaper_id, canonical)
-                if not self.budget.check(ESTIMATE_CNY):
-                    break
                 record = self.vision.analyze_or_cache(
                     wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
                 )
@@ -469,7 +476,11 @@ def build_application(cfg):
         clock=SystemClock(),
         pipeline=pipeline,
         apply_service=ApplyService(
-            conn, WindowsStaticApplier(), we=we_control, dynamic_applier=dynamic_applier
+            conn,
+            WindowsStaticApplier(background_type=Win32BackgroundType()),
+            we=we_control,
+            dynamic_applier=dynamic_applier,
+            recheck_delays=(5, 30),
         ),
     )
     return Application(machine)

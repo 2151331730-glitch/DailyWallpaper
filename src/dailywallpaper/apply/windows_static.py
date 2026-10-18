@@ -23,6 +23,35 @@ class SpiLike(Protocol):
     def set_wallpaper(self, path: Path) -> bool: ...
     def get_wallpaper(self) -> str: ...
 
+class BackgroundTypeLike(Protocol):
+    def get(self) -> int | None: ...
+    def set_picture(self) -> bool: ...
+
+class Win32BackgroundType:
+    """Read/write the Windows slideshow/Spotlight switch (spec 9.1)."""
+    KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers"
+    VALUE = "BackgroundType"
+    SLIDESHOW = 2
+    SPOTLIGHT = 3
+
+    def get(self) -> int | None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.KEY) as k:
+                return int(winreg.QueryValueEx(k, self.VALUE)[0])
+        except OSError:
+            # Missing key: plain picture mode has nothing to switch.
+            return None
+
+    def set_picture(self) -> bool:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, self.KEY, 0, winreg.KEY_SET_VALUE
+            ) as k:
+                winreg.SetValueEx(k, self.VALUE, 0, winreg.REG_DWORD, 0)
+            return True
+        except OSError:
+            return False
+
 class Win32Registry:
     KEY = r"Control Panel\Desktop"
     def get(self, name: str) -> str:
@@ -66,9 +95,25 @@ def convert_to_jpeg(src: Path, dest: Path) -> Path:
     return dest
 
 class WindowsStaticApplier:
-    def __init__(self, spi: SpiLike | None = None, registry: RegistryLike | None = None):
+    def __init__(self, spi: SpiLike | None = None, registry: RegistryLike | None = None,
+                 background_type: BackgroundTypeLike | None = None):
         self.spi = spi or Win32Spi()
         self.registry = registry or Win32Registry()
+        self.background_type = background_type
+
+    def _leave_slideshow_mode(self) -> str:
+        """Return "" when a picture-mode apply can proceed, else a message."""
+        if self.background_type is None:
+            return ""
+        mode = self.background_type.get()
+        if mode not in (Win32BackgroundType.SLIDESHOW, Win32BackgroundType.SPOTLIGHT):
+            return ""
+        if self.background_type.set_picture():
+            return ""
+        return (
+            "当前桌面是幻灯片/Spotlight 模式，无法自动切回“图片”，"
+            "请在 设置 → 个性化 → 背景 中手动改成“图片”后重试"
+        )
 
     def snapshot(self) -> WallpaperState:
         return WallpaperState(
@@ -78,6 +123,9 @@ class WindowsStaticApplier:
         )
 
     def apply(self, image: Path, style: str = "fill") -> ApplyResult:
+        refusal = self._leave_slideshow_mode()
+        if refusal:
+            return ApplyResult(ok=False, error=refusal)
         state = self.snapshot()
         try:
             jpeg = convert_to_jpeg(image, image.with_suffix(".apply.jpg"))

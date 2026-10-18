@@ -168,3 +168,30 @@ def test_dry_run_with_headless_does_not_loop_real_applies(tmp_path):
     main(["--config", str(cfg), "--headless", "--dry-run"], app_factory=lambda c: _App(calls), instance_name=INSTANCE, run_gui=lambda cfg, path: 0)
 
     assert calls == [("once", True)]
+
+
+def test_a_second_instance_exits_cleanly_with_a_message(tmp_path, capsys):
+    name = "DailyWallpaperTest_" + uuid.uuid4().hex[:8]
+    cfg = _config(tmp_path)
+
+    with SingleInstance(name):
+        code = main(["--config", str(cfg), "--once"],
+                    app_factory=lambda c: _App([]), instance_name=name)
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "已经在运行" in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_gui_mode_does_not_build_an_unused_application(tmp_path):
+    built = []
+    cfg = _config(tmp_path)
+
+    code = main(["--config", str(cfg)],
+                app_factory=lambda c: built.append(1),
+                instance_name=INSTANCE,
+                run_gui=lambda cfg, path: 0)
+
+    assert code == 0
+    assert built == []

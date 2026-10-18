@@ -11,11 +11,13 @@ class _FakeApplier:
         self.ok = ok
         self.current = WallpaperState(wallpaper=wallpaper, style="22", tile="0")
         self.restored = []
+        self.applied = []
 
     def snapshot(self):
         return self.current
 
     def apply(self, image, style="fill"):
+        self.applied.append(image)
         if self.ok:
             self.current = WallpaperState(wallpaper=str(image), style="22", tile="0")
             return ApplyResult(ok=True)
@@ -277,3 +279,116 @@ def test_a_dynamic_apply_does_not_close_wallpaper_engine_first(tmp_path):
     )
 
     assert service.apply(wid, project) is True
+
+
+def _recheck_service(tmp_path, we, delays=(5, 30)):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    old = tmp_path / "old.jpg"
+    old.write_bytes(b"x")
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    slept = []
+    service = ApplyService(
+        conn,
+        _FakeApplier(wallpaper=str(old)),
+        we=we,
+        recheck_delays=delays,
+        sleep=slept.append,
+        spawn=lambda target: target(),
+    )
+    return service, wid, slept
+
+
+def test_a_static_apply_rechecks_for_a_we_takeover_at_5s_and_30s(tmp_path):
+    we = _FakeWe()
+    service, wid, slept = _recheck_service(tmp_path, we)
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+
+    assert slept == [5, 25]
+    # Once before the static apply, then once per recheck.
+    assert we.closed == 3
+    assert len(service.applier.applied) == 3
+
+
+def test_no_recheck_happens_when_we_has_no_wallpaper(tmp_path):
+    we = _FakeWe(current="")
+    service, wid, slept = _recheck_service(tmp_path, we)
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+
+    assert slept == [5, 25]
+    assert we.closed == 0
+    assert len(service.applier.applied) == 1
+
+
+def test_a_dynamic_apply_is_not_rechecked(tmp_path):
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class Control:
+        def __init__(self):
+            self.current_value = "D:/we/old/project.json"
+
+        def current(self):
+            return self.current_value
+
+        def open(self, file, monitor=0):
+            self.current_value = str(Path(file).parent / "scene.pkg")
+            return True
+
+    project = tmp_path / "111" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,media_type,created_at)"
+                 " values('we_workshop','111','scene','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    control = Control()
+    slept = []
+    service = ApplyService(
+        conn,
+        _FakeApplier(),
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None),
+        recheck_delays=(5, 30),
+        sleep=slept.append,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, project) is True
+    assert slept == []
+
+
+def test_a_failing_recheck_is_swallowed(tmp_path):
+    class Flaky(_FakeApplier):
+        def __init__(self, fail_from=1):
+            super().__init__()
+            self.calls = 0
+            self.fail_from = fail_from
+
+        def apply(self, image, style="fill"):
+            self.calls += 1
+            if self.calls > self.fail_from:
+                raise OSError("WE came back mid-recheck")
+            return super().apply(image, style)
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(
+        conn,
+        Flaky(),
+        we=_FakeWe(),
+        recheck_delays=(5, 30),
+        sleep=lambda s: None,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert conn.execute("select count(*) from change_log").fetchone()[0] == 1

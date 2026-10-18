@@ -25,6 +25,22 @@ class FakeSpi:
     def get_wallpaper(self):
         return self.path
 
+class FakeBackground:
+    def __init__(self, mode, switch_ok=True):
+        self.mode = mode
+        self.switch_ok = switch_ok
+        self.switches = 0
+
+    def get(self):
+        return self.mode
+
+    def set_picture(self):
+        self.switches += 1
+        if self.switch_ok:
+            self.mode = 0
+        return self.switch_ok
+
+
 class AbsolutePathSpi(FakeSpi):
     """Mimics SPI_GETDESKWALLPAPER returning an absolute, uppercase path."""
     def set_wallpaper(self, path):
@@ -74,3 +90,51 @@ def test_apply_accepts_absolute_case_different_spi_path(tmp_path, monkeypatch):
     result = applier.apply(img)
     assert result.ok
     assert spi.path == os.path.abspath(str(img.with_suffix(".apply.jpg"))).upper()
+
+
+def test_slideshow_background_is_switched_back_to_picture(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg, spi = FakeBackground(2), FakeSpi()
+    applier = WindowsStaticApplier(spi, FakeRegistry(), background_type=bg)
+
+    result = applier.apply(img)
+
+    assert result.ok
+    assert bg.switches == 1
+    assert bg.mode == 0
+
+
+def test_spotlight_background_is_switched_back_to_picture(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg = FakeBackground(3)
+    applier = WindowsStaticApplier(FakeSpi(), FakeRegistry(), background_type=bg)
+
+    result = applier.apply(img)
+
+    assert result.ok
+    assert bg.mode == 0
+
+
+def test_a_slideshow_is_refused_when_it_cannot_be_switched_back(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg, spi = FakeBackground(2, switch_ok=False), FakeSpi()
+    applier = WindowsStaticApplier(spi, FakeRegistry(), background_type=bg)
+
+    result = applier.apply(img)
+
+    assert not result.ok
+    assert "幻灯片" in result.error and "Spotlight" in result.error
+    assert spi.calls == []
+
+
+def test_picture_mode_is_left_alone(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg = FakeBackground(0)
+    applier = WindowsStaticApplier(FakeSpi(), FakeRegistry(), background_type=bg)
+
+    assert applier.apply(img).ok
+    assert bg.switches == 0

@@ -630,3 +630,38 @@ def test_a_dry_run_records_a_shortlist_not_an_apply(tmp_path):
 
     statuses = [row["status"] for row in conn.execute("select status from decisions")]
     assert statuses == ["shortlisted"]
+
+
+def test_no_download_is_wasted_once_the_budget_is_gone(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    scenes = [
+        Candidate("we_workshop", "s1", "场景", "", "f",
+                  "https://img/0.png", "scene", 0, 0, 0, [], {}),
+        Candidate("we_workshop", "s2", "场景", "", "f",
+                  "https://img/1.png", "scene", 0, 0, 0, [], {}),
+    ]
+    still = Candidate("bing", "i1", "图片", "", "f",
+                      "https://img/2.png", "image", 3840, 2160, 0, [], {})
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    vision = VisionClient(Provider([_scores(10, 90)]), conn, cfg.vision.pricing)
+    session = ImageSession()
+
+    class _Ac:
+        def on_battery(self):
+            return False
+
+    # Two screen calls are allowed; both scenes are gated out, so the static
+    # fallback would download a third preview before noticing the budget is gone.
+    pipeline = RealPipeline(
+        cfg, conn, session, [Source(scenes + [still])], vision,
+        CountingBudget(2), power=_Ac(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert pipeline.shortlist == []
+    assert session.calls == 2
