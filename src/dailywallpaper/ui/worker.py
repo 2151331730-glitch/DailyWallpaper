@@ -39,6 +39,11 @@ class Worker:
     def _loop(self) -> None:
         # The connection is created here, in the thread that will use it.
         self._machine = self.machine_factory()
+        pipeline = getattr(self._machine, "pipeline", None)
+        if pipeline is not None:
+            pipeline.should_stop = lambda: (
+                self._manual.is_set() or self._stop.is_set()
+            )
         self._maybe_cleanup()
         self._ensure_visible()
         self._tick_once()

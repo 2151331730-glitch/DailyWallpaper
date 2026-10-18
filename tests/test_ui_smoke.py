@@ -548,3 +548,31 @@ def test_settings_page_reports_a_write_failure(qapp, tmp_path, monkeypatch):
 
     assert page.save() is False
     assert "保存失败" in page.status.text()
+
+
+def test_change_action_tells_the_user_when_it_is_ignored(qapp):
+    class _Busy(_Service):
+        def change_now(self):
+            return False
+
+    tray = TrayIcon(_Busy(), on_open=lambda: None, on_quit=lambda: None)
+    notes = []
+    tray.notify = lambda title, message: notes.append(message)
+
+    tray.change_action.trigger()
+
+    assert notes and "忽略" in notes[0]
+
+
+def test_undo_action_tells_the_user_when_there_is_nothing_to_undo(qapp):
+    class _NoUndo(_Service):
+        def undo(self):
+            return False
+
+    tray = TrayIcon(_NoUndo(), on_open=lambda: None, on_quit=lambda: None)
+    notes = []
+    tray.notify = lambda title, message: notes.append(message)
+
+    tray.undo_action.trigger()
+
+    assert notes and "没有可撤销" in notes[0]

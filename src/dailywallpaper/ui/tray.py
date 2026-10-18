@@ -81,11 +81,16 @@ class TrayIcon(QSystemTrayIcon):
         self.refresh()
 
     def _change_now(self):
-        self.service.change_now()
+        accepted = self.service.change_now()
+        if accepted is False:
+            self.notify("换一张", "上一次更换还没结束，这次点击已忽略")
+        elif accepted is True:
+            self.notify("换一张", "已开始准备候选，可能需要几分钟")
         self.refresh()
 
     def _undo(self):
-        self.service.undo()
+        if not self.service.undo():
+            self.notify("撤销上一张", "没有可撤销的记录，或原壁纸文件已不存在")
         self.refresh()
 
     def _pause(self, days):

@@ -159,6 +159,8 @@ class RealPipeline:
         self.power = power
         self.shortlist = []
         self._ffmpeg_ok = None
+        # The worker sets this so a manual click can cut a long prepare short.
+        self.should_stop = lambda: False
         # In-memory only: the prepared shortlist does not survive a restart,
         # so persisting this would strand the day exactly like the dry-run bug.
         self._prepared_on = None
@@ -389,6 +391,8 @@ class RealPipeline:
             if counters["downloads"] >= self.cfg.app.max_downloads_per_day:
                 break
             if counters["analyses"] >= self.cfg.app.max_analyses_per_day:
+                break
+            if self.should_stop():
                 break
             # Check the budget before downloading: once it is gone the analysis
             # cannot happen, so the preview would be a wasted download (and a

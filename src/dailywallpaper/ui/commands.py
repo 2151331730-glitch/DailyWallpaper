@@ -91,8 +91,7 @@ class CommandService:
         try:
             if self.runner is not None:
                 # Never touch the network from the UI thread: hand it over.
-                self.runner.change_now()
-                return None
+                return bool(self.runner.change_now())
             result = self.machine.tick(dry_run=False, manual=True)
             self._last_action = result.action
             self._last_reason = result.reason

@@ -232,3 +232,21 @@ def test_pause_zero_days_is_rejected(tmp_path):
 
     with pytest.raises(ValueError):
         service.pause(0)
+
+
+def test_change_now_reports_a_rejected_runner_request(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+
+    class _BusyRunner:
+        def change_now(self):
+            return False
+
+    service.runner = _BusyRunner()
+    assert service.change_now() is False
+
+    class _AcceptedRunner:
+        def change_now(self):
+            return True
+
+    service.runner = _AcceptedRunner()
+    assert service.change_now() is True

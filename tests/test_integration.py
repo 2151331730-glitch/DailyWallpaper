@@ -859,3 +859,14 @@ def test_a_candidate_rejected_by_the_paid_review_is_dropped(tmp_path):
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
     assert pipeline.shortlist == []
+
+
+def test_prepare_stops_when_asked_so_a_manual_click_is_not_stuck(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, ImageSession(), provider, clock)
+    pipeline.should_stop = lambda: provider.calls >= 1
+
+    pipeline.prepare(clock.now())
+
+    assert provider.calls == 1
