@@ -89,6 +89,18 @@ class UiShell:
             self.worker.start()
 
 
+def _start_prefetcher(cfg) -> None:
+    """Fill the Steam workshop cache off the UI and tick threads."""
+    from dailywallpaper.steam_prefetch import start_prefetcher
+
+    try:
+        start_prefetcher(cfg)
+    except Exception as exc:  # prefetch is optional; never block the shell
+        import logging
+
+        logging.getLogger(__name__).warning(f"prefetcher not started: {exc}")
+
+
 def build_gui(cfg, config_path=None) -> int:
     """Composition root for the desktop shell."""
     import sys
@@ -106,6 +118,7 @@ def build_gui(cfg, config_path=None) -> int:
     # The worker builds its own application inside its own thread: a sqlite
     # connection may only be used from the thread that created it.
     worker = Worker(machine_factory=lambda: build_application(cfg).machine)
+    _start_prefetcher(cfg)
     from dailywallpaper.config import default_config_path
 
     resolved_path = config_path or default_config_path()

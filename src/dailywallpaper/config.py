@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -105,6 +105,19 @@ class RetentionSection:
 
 
 @dataclass(frozen=True)
+class SteamWorkshopSection:
+    enabled: bool = False
+    query_type: int = 3          # IPublishedFileService: 3 = trend
+    days: int = 30
+    per_page: int = 20
+    prefetch_top_n: int = 2
+    max_cache_gb: float = 3.0
+    steamcmd_path: str = ""      # empty -> <data_dir>/tools/steamcmd/steamcmd.exe
+    steam_account: str = ""      # username only; the password is never stored
+    download_timeout: int = 1800
+
+
+@dataclass(frozen=True)
 class Config:
     app: AppSection
     sources: SourcesSection
@@ -115,6 +128,7 @@ class Config:
     wallpaper_engine: WallpaperEngineSection
     tools: ToolsSection
     retention: RetentionSection
+    steam_workshop: SteamWorkshopSection = field(default_factory=SteamWorkshopSection)
 
 
 def _section(cls: type[T], raw: dict[str, Any]) -> T:
@@ -134,8 +148,16 @@ def load_config(path: Path) -> Config:
     vision_raw = dict(raw.get("vision", {}))
     pricing_raw = vision_raw.pop("pricing", {})
     pricing = {name: VisionPricing(**p) for name, p in pricing_raw.items()}
+    app_section = _section(AppSection, raw.get("app", {}))
+    if not Path(app_section.data_dir).is_absolute():
+        # The Run key starts the process in an unrelated working directory,
+        # so a relative data_dir must mean "next to the config file".
+        app_section = replace(
+            app_section,
+            data_dir=str((Path(path).parent / app_section.data_dir).resolve()),
+        )
     return Config(
-        app=_section(AppSection, raw.get("app", {})),
+        app=app_section,
         sources=_section(SourcesSection, raw.get("sources", {})),
         vision=VisionSection(**{**{k: v for k, v in vision_raw.items() if k in
                                   {f.name for f in fields(VisionSection)}},
@@ -146,13 +168,14 @@ def load_config(path: Path) -> Config:
         wallpaper_engine=_section(WallpaperEngineSection, raw.get("wallpaper_engine", {})),
         tools=_section(ToolsSection, raw.get("tools", {})),
         retention=_section(RetentionSection, raw.get("retention", {})),
+        steam_workshop=_section(SteamWorkshopSection, raw.get("steam_workshop", {})),
     )
 
 
 
 KNOWN_SECTIONS = (
     "app", "sources", "budget", "weather", "wallpaper",
-    "wallpaper_engine", "tools", "retention", "vision",
+    "wallpaper_engine", "tools", "retention", "vision", "steam_workshop",
 )
 
 
@@ -187,6 +210,7 @@ def save_config(path: Path, cfg: Config) -> None:
         ("wallpaper_engine", cfg.wallpaper_engine),
         ("tools", cfg.tools),
         ("retention", cfg.retention),
+        ("steam_workshop", cfg.steam_workshop),
     )
     for name, section in sections:
         lines.append(f"[{name}]")

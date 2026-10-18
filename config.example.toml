@@ -72,3 +72,18 @@ wallpapers_days = 90
 cache_days = 180
 log_mb = 5
 log_backups = 5
+
+# Online Wallpaper Engine workshop items. One-time setup:
+#   1. scripts/set_steam_key.py   (free key from steamcommunity.com/dev/apikey)
+#   2. scripts/install_steamcmd.py
+#   3. scripts/steam_login.py     (account that owns Wallpaper Engine)
+[steam_workshop]
+enabled = false
+query_type = 3          # 3 = trend, 9 = most subscriptions
+days = 30
+per_page = 20
+prefetch_top_n = 2
+max_cache_gb = 3.0
+steamcmd_path = ""      # empty -> <data>/tools/steamcmd/steamcmd.exe
+steam_account = ""      # username only; the password is never stored
+download_timeout = 1800

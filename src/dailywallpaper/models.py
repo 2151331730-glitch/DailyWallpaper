@@ -21,3 +21,5 @@ class Decision:
     source: str = ""
     reviewed: bool = False
     apply_path: Path | None = None
+    # A remote Steam item is only ready once its project.json exists locally.
+    ready: bool = True

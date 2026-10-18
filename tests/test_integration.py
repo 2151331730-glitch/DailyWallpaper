@@ -665,3 +665,41 @@ def test_no_download_is_wasted_once_the_budget_is_gone(tmp_path):
 
     assert pipeline.shortlist == []
     assert session.calls == 2
+
+
+def test_a_remote_workshop_item_waits_for_its_download(tmp_path):
+    from dataclasses import replace
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    root = tmp_path / "steam_workshop"
+    remote = Candidate(
+        "steam_workshop", "123", "Neon", "", str(root / "123" / "project.json"),
+        "https://img/0.png", "scene", 0, 0, 0, [], {},
+    )
+    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+
+    class _Ac:
+        def on_battery(self):
+            return False
+
+    first = RealPipeline(
+        cfg, conn, ImageSession(), [Source([remote])], vision,
+        CountingBudget(100), power=_Ac(),
+    )
+    first.prepare(datetime(2026, 10, 18, 9, 0))
+    assert first.shortlist == []
+
+    (root / "123").mkdir(parents=True)
+    (root / "123" / "project.json").write_text("{}", encoding="utf-8")
+    second = RealPipeline(
+        cfg, conn, ImageSession(), [Source([remote])], vision,
+        CountingBudget(100), power=_Ac(),
+    )
+    second.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert len(second.shortlist) == 1
+    assert second.shortlist[0].ready is True
+    assert second.shortlist[0].apply_path == root / "123" / "project.json"

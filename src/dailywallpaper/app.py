@@ -40,12 +40,17 @@ from dailywallpaper.sources.repository import (
     source_is_down,
     upsert_wallpaper,
 )
+from dailywallpaper.sources.steam_workshop import (
+    SteamWorkshopClient,
+    SteamWorkshopSource,
+)
 from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.sources.workshop import WorkshopSource
 from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
+STEAM_KEY_ACCOUNT = "steam_api_key"
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +110,14 @@ class Application:
                 service.ensure_visible()
             except Exception as exc:  # a bad startup check must not end the run
                 logger.warning(f"startup wallpaper check failed: {exc}")
+        config = getattr(self.machine, "config", None)
+        if config is not None and config.steam_workshop.enabled:
+            try:
+                from dailywallpaper.steam_prefetch import start_prefetcher
+
+                start_prefetcher(config)
+            except Exception as exc:
+                logger.warning(f"prefetcher not started: {exc}")
         while True:
             try:
                 self.machine.tick()
@@ -251,6 +264,10 @@ class RealPipeline:
             )
 
         self.shortlist = rank(self.shortlist, now.date().isoformat())
+        # A remote Steam item that has not been downloaded yet must not be
+        # picked: applying it would either use the preview thumbnail or block
+        # the tick on a download. The prefetcher makes it ready for later.
+        self.shortlist = [decision for decision in self.shortlist if decision.ready]
         if self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
@@ -344,6 +361,10 @@ class RealPipeline:
                             if Path(candidate.file_url).is_file()
                             else canonical
                         ),
+                        ready=(
+                            candidate.source != "steam_workshop"
+                            or Path(candidate.file_url).is_file()
+                        ),
                     )
                 )
             except Exception as exc:
@@ -401,6 +422,9 @@ class RealPipeline:
         if not self.shortlist:
             return None
         decision = self.shortlist.pop(0)
+        if not decision.ready:
+            # Defensive: prepare() filters these out; never apply a preview.
+            return self.pick(now, dry_run=dry_run)
         # Recorded before the apply so tomorrow's diversity term can see it.
         self.conn.execute(
             """
@@ -447,6 +471,21 @@ def build_pipeline(cfg, conn):
         root = workshop_root(cfg.wallpaper_engine.install_dir)
     if root is not None and root.exists():
         sources.append(WorkshopSource(root, allow_mature=cfg.sources.allow_mature))
+    if cfg.steam_workshop.enabled:
+        steam_key = keyring.get_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT)
+        if not steam_key:
+            logger.warning(
+                "steam workshop is on but has no API key; run scripts/set_steam_key.py"
+            )
+        else:
+            sources.append(SteamWorkshopSource(
+                SteamWorkshopClient(steam_key, session),
+                Path(cfg.app.data_dir) / "steam_workshop",
+                allow_mature=cfg.sources.allow_mature,
+                query_type=cfg.steam_workshop.query_type,
+                days=cfg.steam_workshop.days,
+                per_page=cfg.steam_workshop.per_page,
+            ))
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
         raise RuntimeError("Zhipu key missing; run scripts/set_key.py")

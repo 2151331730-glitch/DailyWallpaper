@@ -47,11 +47,19 @@ def test_saved_file_is_marked_as_generated(tmp_path):
 
 
 def test_saved_defaults_reload_unchanged(tmp_path):
+    from dataclasses import replace
+
     original = _default_config()
 
     save_config(tmp_path / "c.toml", original)
 
-    assert load_config(tmp_path / "c.toml") == original
+    # A relative data_dir means "next to the config file", so the reloaded
+    # config carries the resolved absolute path.
+    expected = replace(
+        original,
+        app=replace(original.app, data_dir=str((tmp_path / "data").resolve())),
+    )
+    assert load_config(tmp_path / "c.toml") == expected
 
 
 def test_save_preserves_sections_the_app_does_not_model(tmp_path):
