@@ -42,6 +42,8 @@ class MainWindow(QWidget):
         self.history = HistoryPage(RatingsService(conn), on_undo=self._undo)
         self.tabs.addTab(self.today, "今日")
         self.tabs.addTab(self.history, "历史")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._polls = 0
 
         outer = QVBoxLayout(self)
         outer.addWidget(self.tabs)
@@ -117,7 +119,14 @@ class MainWindow(QWidget):
             self.reason_label.setText(row["reason"] or "")
             self._show_preview(row["local_path"])
         self.change_button.setEnabled(self.service.snapshot().can_change)
-        self.history.refresh()
+        # Rebuilding 90 thumbnails on every 2 s poll would freeze the UI.
+        self._polls += 1
+        if self.tabs.currentWidget() is self.history and self._polls % 15 == 0:
+            self.history.refresh()
+
+    def _on_tab_changed(self, index):
+        if self.tabs.currentWidget() is self.history:
+            self.history.refresh()
 
     def _show_preview(self, path: str) -> None:
         if not path or path == self._preview_path:

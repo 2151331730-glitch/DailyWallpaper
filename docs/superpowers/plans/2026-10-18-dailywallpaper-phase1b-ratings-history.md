@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让用户能给当前壁纸打分（喜欢/不喜欢/中性 + 快捷理由 + 自由文本），并在历史页回看最近 90 天、撤销任意一天。
+**Goal:** 让用户能给当前壁纸打分（喜欢/不喜欢/中性 + 快捷理由 + 自由文本），并在历史页回看最近 90 天，以及从历史页撤销最近一次更换。
 
 **Architecture:** 评分写入与查询放进 Qt-free 的 `RatingsService`（可纯 pytest 测）；评分窗和历史页只负责收集输入与渲染。评分落 `ratings` 表（每张壁纸一行，`ux_ratings_wallpaper` 唯一），`derived_tags_json` 取该壁纸最新一次分析的主标签，供 `PreferenceProfile` 直接消费。
 

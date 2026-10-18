@@ -44,7 +44,12 @@ class UiShell:
             return
         service = RatingsService(self.service.conn)
         if rating is not None:
-            service.rate(row["wallpaper_id"], rating)
+            try:
+                service.rate(row["wallpaper_id"], rating)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(f"rating failed: {exc}")
         else:
             from dailywallpaper.ui.rating_dialog import RatingDialog
 

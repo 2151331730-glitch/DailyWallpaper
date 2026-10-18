@@ -73,11 +73,18 @@ class RatingDialog(QDialog):
         return [reason for reason, button in self.reason_buttons.items() if button.isChecked()]
 
     def _save(self, rating: int) -> None:
-        self.service.rate(
-            self.wallpaper_id,
-            rating,
-            comment=self.comment_edit.text(),
-            reasons=self.selected_reasons(),
-        )
+        try:
+            self.service.rate(
+                self.wallpaper_id,
+                rating,
+                comment=self.comment_edit.text(),
+                reasons=self.selected_reasons(),
+            )
+        except Exception as exc:  # a DB hiccup must not lose the dialog
+            import logging
+
+            logging.getLogger(__name__).warning(f"rating failed: {exc}")
+            self.hint_label.setText(f"保存失败：{exc}")
+            return
         self.chosen = rating
         self.accept()
