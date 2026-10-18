@@ -454,3 +454,32 @@ def test_today_tab_marks_an_unreviewed_wallpaper(qapp, tmp_path):
     window.refresh()
 
     assert "已复核" not in window.reviewed_label.text()
+
+
+def test_today_tab_shows_the_four_sub_scores(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,title,created_at)"
+                 " values('bing','1','分数图','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-18',?,'70','80','74.5','r','applied','x')", (wid,))
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,created_at)"
+        " values('m','v1','h','{}',93,71,64,18,'x')")
+    aid = conn.execute("select id from analyses").fetchone()[0]
+    conn.execute("insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+                 " values(?,?,'x')", (wid, aid))
+    conn.commit()
+
+    window = MainWindow(_Service(), conn)
+    window.refresh()
+
+    assert "93" in window.subscore_label.text()
+    assert "18" in window.subscore_label.text()

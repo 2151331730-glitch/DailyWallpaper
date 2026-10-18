@@ -72,6 +72,7 @@ class MainWindow(QWidget):
         self.reason_label = QLabel("")
         self.reason_label.setWordWrap(True)
         self.reviewed_label = QLabel("")
+        self.subscore_label = QLabel("")
         # Decoding a multi-MB wallpaper every 2 s poll is wasteful; the
         # normalised cache file is content-addressed, so the path is the key.
         self._preview_path = None
@@ -94,6 +95,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.meta_label)
         layout.addWidget(self.score_label)
         layout.addWidget(self.reason_label)
+        layout.addWidget(self.subscore_label)
         layout.addWidget(self.reviewed_label)
         layout.addLayout(actions)
 
@@ -132,6 +134,7 @@ class MainWindow(QWidget):
             )
             self.reason_label.setText(row["reason"] or "")
             self._show_preview(row["local_path"])
+        self.subscore_label.setText(self._subscores())
         self.reviewed_label.setText(
             "已复核（付费模型）" if self._latest_is_reviewed() else ""
         )
@@ -146,6 +149,24 @@ class MainWindow(QWidget):
             self.history.refresh()
         elif self.tabs.currentWidget() is self.cost:
             self.cost.refresh()
+
+    def _subscores(self) -> str:
+        row = self.conn.execute(
+            """
+            select a.quality, a.creativity, a.novelty, a.formulaic
+            from decisions d
+            join wallpaper_analyses wa on wa.wallpaper_id = d.wallpaper_id
+            join analyses a on a.id = wa.analysis_id
+            where d.id = (select max(id) from decisions)
+            order by a.id desc limit 1
+            """
+        ).fetchone()
+        if not row:
+            return ""
+        return (
+            f"画质 {row['quality']:.0f} · 创意 {row['creativity']:.0f}"
+            f" · 新颖 {row['novelty']:.0f} · 套路 {row['formulaic']:.0f}"
+        )
 
     def _latest_is_reviewed(self) -> bool:
         if not self.review_model:

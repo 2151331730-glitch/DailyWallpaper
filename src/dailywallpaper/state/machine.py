@@ -2,6 +2,7 @@
 """Decide, once per tick, whether today's wallpaper should change."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Protocol
@@ -20,8 +21,16 @@ class Pipeline(Protocol):
     def pick(self, now: datetime): ...
 
 
-def parse_time(value: str) -> time:
-    return time.fromisoformat(value)
+logger = logging.getLogger(__name__)
+
+
+def parse_time(value: str, fallback: str = "00:00") -> time:
+    """Parse a configured HH:MM, falling back instead of crashing every tick."""
+    try:
+        return time.fromisoformat(value)
+    except (TypeError, ValueError):
+        logger.warning(f"bad time in config: {value!r}; using {fallback}")
+        return time.fromisoformat(fallback)
 
 
 @dataclass(frozen=True)
@@ -80,10 +89,10 @@ class DailyStateMachine:
                 return TickResult("paused")
             if self._changed_today(now.date()):
                 return TickResult("already_changed")
-            if now.time() < parse_time(self.config.app.daily_time):
+            if now.time() < parse_time(self.config.app.daily_time, "08:30"):
                 self.pipeline.prepare(now)
                 return TickResult("background")
-            if now.time() > parse_time(self.config.app.latest_change_time):
+            if now.time() > parse_time(self.config.app.latest_change_time, "22:00"):
                 return TickResult("too_late")
 
         decision = self.pipeline.pick(now)

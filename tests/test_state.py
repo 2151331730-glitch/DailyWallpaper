@@ -185,3 +185,19 @@ def test_seven_day_loop_writes_one_success_per_day(tmp_path):
     assert len(rows) == 7
     assert all(row["success"] == 1 for row in rows)
     assert len({row["change_date"] for row in rows}) == 7
+
+
+def test_malformed_daily_time_does_not_crash(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(
+        tmp_path, datetime(2026, 10, 18, 9, 0), app=AppSection(daily_time="25:99")
+    )
+
+    assert machine.tick().action in {"applied", "kept", "background", "too_late"}
+
+
+def test_malformed_latest_change_time_does_not_crash(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(
+        tmp_path, datetime(2026, 10, 18, 9, 0), app=AppSection(latest_change_time="oops")
+    )
+
+    assert machine.tick().action in {"applied", "kept", "background", "too_late"}
