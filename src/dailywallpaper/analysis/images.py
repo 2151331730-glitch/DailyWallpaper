@@ -17,17 +17,27 @@ DHASH_SIZE = (9, 8)
 
 
 def download(session, url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES) -> Path:
-    """Stream one URL to ``dest``, refusing payloads above ``max_bytes``."""
+    """Stream one URL to ``dest``, refusing payloads above ``max_bytes``.
+
+    Bytes land in a ``.part`` sibling and only become ``dest`` on success, so
+    an aborted or oversized download never leaves a truncated image for the
+    next reader to choke on."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with session.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
-        response.raise_for_status()
-        total = 0
-        with dest.open("wb") as handle:
-            for chunk in response.iter_content(DOWNLOAD_CHUNK):
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError("download too large")
-                handle.write(chunk)
+    part = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with session.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+            response.raise_for_status()
+            total = 0
+            with part.open("wb") as handle:
+                for chunk in response.iter_content(DOWNLOAD_CHUNK):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError("download too large")
+                    handle.write(chunk)
+        part.replace(dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
     return dest
 
 

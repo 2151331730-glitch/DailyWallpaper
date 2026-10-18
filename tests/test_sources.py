@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import pytest
 import requests
+from dailywallpaper.config import SourcesSection
 from dailywallpaper.db import connect, migrate
 from dailywallpaper.sources.base import Candidate, SourceError
 from dailywallpaper.sources.repository import fetch_all, upsert_wallpaper
@@ -87,6 +88,37 @@ def test_wallhaven_sends_toprange_only_for_toplist():
 def test_wallhaven_malformed_payload_raises_source_error():
     with pytest.raises(SourceError):
         WallhavenSource(FakeSession(["not", "a", "dict"])).fetch(24)
+
+
+def _wh_item(page, index):
+    return {
+        "id": f"p{page}-{index}",
+        "url": "u",
+        "path": "f",
+        "thumbs": {"large": "v"},
+        "dimension_x": 3840,
+        "dimension_y": 2160,
+        "file_size": 1000,
+        "category": "general",
+    }
+
+
+def test_wallhaven_fetches_every_configured_page_and_mixes_sorts():
+    calls = []
+
+    class S:
+        def get(self, url, params, headers, timeout):
+            calls.append(dict(params))
+            page = int(params["page"])
+            return FakeResponse({"data": [_wh_item(page, i) for i in range(24)]})
+
+    src = WallhavenSource(S(), SourcesSection(wallhaven_pages=4))
+    items = src.fetch(40)
+
+    assert [c["sorting"] for c in calls] == ["toplist", "toplist", "random", "date_added"]
+    assert len(items) == 40
+    # Pages are interleaved, so a small limit still spans every sort type.
+    assert [item.source_id for item in items[:4]] == ["p1-0", "p2-0", "p3-0", "p4-0"]
 
 
 def test_fetch_all_continues_when_one_source_raises():

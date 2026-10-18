@@ -92,3 +92,18 @@ def test_download_rejects_oversized_payload(tmp_path):
             tmp_path / "y.jpg",
             max_bytes=15,
         )
+
+
+def test_download_leaves_no_partial_file_on_oversize(tmp_path):
+    dest = tmp_path / "y.jpg"
+
+    with pytest.raises(ValueError):
+        download(
+            _FakeSession([b"x" * 10, b"y" * 10]),
+            "https://x/y.jpg",
+            dest,
+            max_bytes=15,
+        )
+
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.part")) == []

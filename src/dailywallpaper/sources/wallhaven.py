@@ -35,23 +35,25 @@ class WallhavenSource:
     def fetch(self, limit: int = PAGE_SIZE) -> list[Candidate]:
         if limit <= 0:
             return []
-        cap = min(limit, PAGE_SIZE * self.config.wallhaven_pages)
-        results: list[Candidate] = []
-        page = 1
-        while len(results) < cap and page <= self.config.wallhaven_pages:
+        pages: list[list[Candidate]] = []
+        for page in range(1, self.config.wallhaven_pages + 1):
             payload = self._search(page)
             data = payload.get("data")
             if not isinstance(data, list):
                 raise SourceError("wallhaven response is missing the data list")
-            for item in data:
-                if len(results) >= cap:
-                    break
-                results.append(_to_candidate(item))
+            pages.append([_to_candidate(item) for item in data])
             # A short page means the result set is exhausted.
             if len(data) < PAGE_SIZE:
                 break
-            page += 1
-        return results
+        # Interleave the pages so a small limit still spans every sort type.
+        # Concatenating would let the two toplist pages fill the whole cap and
+        # leave the random/date_added diversity dead at the default settings.
+        merged: list[Candidate] = []
+        for index in range(max((len(page_items) for page_items in pages), default=0)):
+            for page_items in pages:
+                if index < len(page_items):
+                    merged.append(page_items[index])
+        return merged[:limit]
 
     def _sort_for_page(self, page: int) -> tuple[str, str | None]:
         """Return (sorting, topRange) for a 1-based page number."""
