@@ -75,6 +75,40 @@ install_dir = "D:\\games\\steam\\steamapps\\common\\wallpaper_engine"
 
 工坊目录会自动从 Steam 库推导（`steamapps/workshop/content/431960`）。
 
+### 让 Steam 在线工坊参与推荐（可选）
+
+除了本机已订阅的工坊项目，程序还能从 Steam 在线工坊发现新壁纸，并在后台用
+SteamCMD 提前下载好，换壁纸时零等待。
+
+一次性准备：
+
+```powershell
+# 1. Steam Web API key（免费）：登录 steamcommunity.com/dev/apikey 申请
+.venv\Scripts\python scripts\set_steam_key.py
+
+# 2. 下载 Valve 官方的 SteamCMD 到 data/tools/steamcmd
+.venv\Scripts\python scripts\install_steamcmd.py
+
+# 3. 用拥有 Wallpaper Engine 的 Steam 账号登录一次（密码和 Steam Guard 在
+#    控制台里手动输入，程序不保存密码；SteamCMD 自己缓存登录票证）
+.venv\Scripts\python scripts\steam_login.py
+```
+
+然后在 `config.toml` 填账号名：
+
+```toml
+[steam_workshop]
+enabled = true
+steam_account = "你的 Steam 用户名"   # 只填用户名，不是密码
+```
+
+工作方式：
+
+- 在线候选和本地候选一样参与评分；**没下载完的候选永远不会被选中**，所以到点换壁纸不会被下载卡住。
+- 后台预取线程把评分最高的前 `prefetch_top_n` 个下到 `data/steam_workshop/`，缓存超过 `max_cache_gb` 时按最久未用淘汰，正在用的不删。
+- 下载失败、没登录、网络不可用都只影响在线候选，本地/静态候选照常工作。
+- SteamCMD 不会在 Steam 客户端里留下订阅；下载的是你账号本来就有权访问的内容。
+
 ---
 
 ## 运行
