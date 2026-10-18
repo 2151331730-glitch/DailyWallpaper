@@ -301,6 +301,10 @@ def test_pick_records_a_decision_row(tmp_path):
     assert decision is not None
     row = conn.execute("select * from decisions").fetchone()
     assert row["wallpaper_id"] == decision.wallpaper_id
+    # The status only becomes 'applied' after the desktop actually changed.
+    assert row["status"] == "shortlisted"
+    pipeline.mark_applied(decision)
+    row = conn.execute("select * from decisions").fetchone()
     assert row["status"] == "applied"
     assert row["decision_date"] == "2026-10-18"
 
@@ -414,8 +418,10 @@ def test_a_dynamic_day_only_keeps_scene_and_video(tmp_path):
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
-    scene = Candidate("we_workshop", "s1", "场景", "", "f", "https://img/day1/0.png",
-                      "scene", 0, 0, 0, [], {})
+    asset = tmp_path / "scene.pkg"
+    asset.write_bytes(b"x")
+    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
     still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
                       "image", 3840, 2160, 0, [], {})
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
@@ -438,8 +444,10 @@ def test_a_static_day_falls_back_when_only_dynamic_exists(tmp_path):
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
-    scene = Candidate("we_workshop", "s1", "场景", "", "f", "https://img/day1/0.png",
-                      "scene", 0, 0, 0, [], {})
+    asset = tmp_path / "scene.pkg"
+    asset.write_bytes(b"x")
+    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="static_only"))
     pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([scene])], vision, CountingBudget(100))
@@ -825,6 +833,27 @@ def test_a_candidate_without_a_full_image_is_not_applied(tmp_path):
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     pipeline = RealPipeline(
         cfg, conn, _two_size_session(), [Source([candidate])], vision, CountingBudget(100)
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert pipeline.shortlist == []
+
+
+def test_a_candidate_rejected_by_the_paid_review_is_dropped(tmp_path):
+    from dataclasses import replace as dreplace
+
+    cfg = _config(tmp_path, review_top_n=5)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    nsfw_review = dreplace(_scores(91, 5), nsfw=True)
+    provider = ModelProvider({
+        "glm-4.6v-flash": _scores(90, 10),
+        "review-model": nsfw_review,
+    })
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, ImageSession(), [Source(_candidates())], vision, CountingBudget(100)
     )
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))

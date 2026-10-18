@@ -20,6 +20,10 @@ class Pipeline(Protocol):
 
     def pick(self, now: datetime, dry_run: bool = False): ...
 
+    def mark_applied(self, decision) -> None: ...
+
+    def mark_failed(self, decision) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +114,9 @@ class DailyStateMachine:
             decision.apply_path or decision.image_path,
             trigger,
         )
+        marker = getattr(self.pipeline, "mark_applied" if ok else "mark_failed", None)
+        if marker is not None:
+            marker(decision)
         return TickResult(
             "applied" if ok else "apply_failed", "", decision.wallpaper_id
         )

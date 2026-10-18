@@ -9,12 +9,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dailywallpaper.config import default_config_path, load_config  # noqa: E402
+from dailywallpaper.config import load_config  # noqa: E402
 from dailywallpaper.steam_prefetch import steamcmd_path  # noqa: E402
 
 
 def main() -> int:
-    cfg = load_config(default_config_path())
+    ROOT = Path(__file__).resolve().parents[1]
+    cfg = load_config(ROOT / "config.toml")
     exe = steamcmd_path(cfg)
     if exe is None:
         print("steamcmd not found; run scripts/install_steamcmd.py first", file=sys.stderr)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -234,7 +235,9 @@ def save_config(path: Path, cfg: Config) -> None:
         )
 
     lines.extend(_unknown_sections(path))
-    path.write_text(NEWLINE.join(lines) + NEWLINE, encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(NEWLINE.join(lines) + NEWLINE, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _unknown_sections(path: Path) -> list[str]:
@@ -253,20 +256,75 @@ def _unknown_sections(path: Path) -> list[str]:
     if not extra:
         return []
     lines = ["", "# Preserved verbatim from the previous file."]
-    for name, table in extra.items():
-        lines.extend(_dump_table(name, table))
+    for name, value in extra.items():
+        lines.extend(_dump_value(name, value))
     return lines
+
+
+def _toml_key(name: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return name
+    return json.dumps(name, ensure_ascii=False)
+
+
+def _is_table_array(value) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, dict) for item in value)
+    )
+
+
+def _dump_array(prefix: str, value: list) -> list[str]:
+    lines = []
+    for item in value:
+        lines.append(f"[[{prefix}]]")
+        nested = {}
+        for key, sub in item.items():
+            if isinstance(sub, (dict, list)) and (
+                isinstance(sub, dict) or _is_table_array(sub)
+            ):
+                nested[key] = sub
+            else:
+                lines.append(f"{_toml_key(key)} = {_toml_value(sub)}")
+        lines.append("")
+        for key, sub in nested.items():
+            child = f"{prefix}.{_toml_key(key)}"
+            if isinstance(sub, dict):
+                lines.extend(_dump_table(child, sub))
+            else:
+                lines.extend(_dump_array(child, sub))
+    return lines
+
+
+def _dump_value(prefix: str, value) -> list[str]:
+    """Serialize one unknown top-level entry of any TOML shape."""
+    if isinstance(value, dict):
+        return _dump_table(prefix, value)
+    if _is_table_array(value):
+        return _dump_array(prefix, value)
+    return [f"{_toml_key(prefix)} = {_toml_value(value)}", ""]
 
 
 def _dump_table(prefix: str, table: dict) -> list[str]:
     lines = []
-    scalars = {key: value for key, value in table.items() if not isinstance(value, dict)}
-    nested = {key: value for key, value in table.items() if isinstance(value, dict)}
-    if scalars or not nested:
+    scalars = {}
+    nested = {}
+    arrays = {}
+    for key, value in table.items():
+        if isinstance(value, dict):
+            nested[key] = value
+        elif _is_table_array(value):
+            arrays[key] = value
+        else:
+            scalars[key] = value
+    if scalars or (not nested and not arrays):
         lines.append(f"[{prefix}]")
         for key, value in scalars.items():
-            lines.append(f"{key} = {_toml_value(value)}")
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
         lines.append("")
+    for key, value in arrays.items():
+        lines.extend(_dump_array(f"{prefix}.{_toml_key(key)}", value))
     for key, value in nested.items():
-        lines.extend(_dump_table(f"{prefix}.{key}", value))
+        lines.extend(_dump_table(f"{prefix}.{_toml_key(key)}", value))
     return lines

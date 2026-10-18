@@ -262,3 +262,31 @@ def test_a_timeout_does_not_abort_the_pass(tmp_path):
     prefetcher = _prefetcher(tmp_path, _Timeout(root))
 
     assert prefetcher.run_once() == ["222"]
+
+
+def test_a_failed_item_is_not_retried_immediately(tmp_path):
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    _remote(conn, "222", 70, root)
+    fake = FakeSteamCmd(root, fail={"111"})
+
+    assert _prefetcher(tmp_path, fake, top_n=1).run_once() == ["222"]
+    fake.calls.clear()
+
+    assert _prefetcher(tmp_path, fake, top_n=1).run_once() == []
+    assert "111" not in fake.calls
+
+
+def test_no_download_into_a_full_cache(tmp_path):
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    cached = root / "999"
+    cached.mkdir(parents=True)
+    (cached / "blob.bin").write_bytes(b"x" * 4096)
+    fake = FakeSteamCmd(root)
+    prefetcher = _prefetcher(tmp_path, fake, max_cache_gb=0.000001)
+
+    assert prefetcher.run_once() == []
+    assert fake.calls == []

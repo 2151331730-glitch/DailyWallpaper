@@ -11,14 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dailywallpaper.config import default_config_path, load_config  # noqa: E402
+from dailywallpaper.config import load_config  # noqa: E402
 
 URL = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
 TIMEOUT = 120
 
 
 def main() -> int:
-    cfg = load_config(default_config_path())
+    ROOT = Path(__file__).resolve().parents[1]
+    cfg = load_config(ROOT / "config.toml")
     target = Path(cfg.app.data_dir) / "tools" / "steamcmd"
     target.mkdir(parents=True, exist_ok=True)
     exe = target / "steamcmd.exe"

@@ -57,6 +57,7 @@ DEFAULT_INTERVAL_SECONDS = 60
 STEAM_KEY_ACCOUNT = "steam_api_key"
 # Only the head of the ranked list needs a full-resolution download.
 MATERIALIZE_TOP_N = 3
+VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,18 @@ class Application:
             except Exception as exc:  # a bad startup check must not end the run
                 logger.warning(f"startup wallpaper check failed: {exc}")
         config = getattr(self.machine, "config", None)
+        if config is not None:
+            try:
+                from pathlib import Path as _Path
+
+                from dailywallpaper.retention import maybe_cleanup
+
+                maybe_cleanup(
+                    _Path(config.app.data_dir), config, self.machine.conn,
+                    self.machine.clock.now().date().isoformat(),
+                )
+            except Exception as exc:
+                logger.warning(f"retention cleanup failed: {exc}")
         if config is not None and config.steam_workshop.enabled:
             try:
                 from dailywallpaper.steam_prefetch import start_prefetcher
@@ -159,6 +172,11 @@ class RealPipeline:
             join wallpaper_analyses wa on wa.wallpaper_id = w.id
             join analyses a on a.id = wa.analysis_id
             where d.status = 'applied'
+              and a.id = (
+                select max(a2.id) from wallpaper_analyses wa2
+                join analyses a2 on a2.id = wa2.analysis_id
+                where wa2.wallpaper_id = w.id
+              )
             order by d.id desc limit 30
             """
         ).fetchall()
@@ -184,6 +202,15 @@ class RealPipeline:
         if self._prepared_on == prepared_key:
             # One pass per day: the resident loop ticks every 60 s.
             return
+        throttle = self.conn.execute(
+            "select value from state where key='empty_prepare_at'"
+        ).fetchone()
+        if throttle is not None:
+            try:
+                if time.time() - float(throttle[0]) < 1800:
+                    return
+            except (TypeError, ValueError):
+                pass
 
         raw = []
         today = now.date().isoformat()
@@ -280,7 +307,18 @@ class RealPipeline:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
         self._materialize(data_dir, counters)
-        self._prepared_on = prepared_key
+        if raw:
+            self.conn.execute("delete from state where key='empty_prepare_at'")
+            self.conn.commit()
+            self._prepared_on = prepared_key
+        else:
+            # No source returned anything: probably a transient network
+            # failure at login. Retry in half an hour rather than skip the day.
+            self.conn.execute(
+                "insert or replace into state(key,value) values('empty_prepare_at',?)",
+                (str(time.time()),),
+            )
+            self.conn.commit()
 
     def _materialize(self, data_dir: Path, counters: dict) -> None:
         """Download the full image for the candidates that could be applied.
@@ -297,10 +335,10 @@ class RealPipeline:
                 # Already a file on disk, or a local path with nothing better.
                 kept.append(decision)
                 continue
-            if (
-                made >= MATERIALIZE_TOP_N
-                or counters["downloads"] >= self.cfg.app.max_downloads_per_day
-            ):
+            # This is the last download of the day for this candidate and it
+            # decides whether the wallpaper is sharp, so it may exceed the
+            # preview quota by at most MATERIALIZE_TOP_N.
+            if made >= MATERIALIZE_TOP_N:
                 continue
             row = self.conn.execute(
                 "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
@@ -365,6 +403,7 @@ class RealPipeline:
                 if (
                     candidate.media_type == "video"
                     and asset.is_file()
+                    and asset.suffix.lower() in VIDEO_SUFFIXES
                     and self._ffmpeg_available()
                 ):
                     # Spec 4.3: score a video from three frames, not its poster.
@@ -437,6 +476,7 @@ class RealPipeline:
         """
         reviewed: list = []
         reviewed_ids: set = set()
+        rejected: set = set()
         for decision in self.shortlist[: self.cfg.vision.review_top_n]:
             if not self.budget.check(ESTIMATE_CNY):
                 logger.warning("review stopped: budget exhausted")
@@ -453,6 +493,7 @@ class RealPipeline:
                 logger.warning(f"review failed for {decision.wallpaper_id}: {exc}")
                 break
             if hard_gate(record.scores):
+                rejected.add(decision.wallpaper_id)
                 continue
             scores = final_score(
                 record.scores, decision.source, profile, recent, weather_code
@@ -472,6 +513,7 @@ class RealPipeline:
             decision
             for decision in self.shortlist
             if decision.wallpaper_id not in reviewed_ids
+            and decision.wallpaper_id not in rejected
         ]
         self.shortlist = reviewed + rest
 
@@ -487,8 +529,9 @@ class RealPipeline:
         ):
             # The prefetcher may have evicted the folder after prepare.
             return self.pick(now, dry_run=dry_run)
-        # Recorded before the apply so tomorrow's diversity term can see it.
-        self.conn.execute(
+        # Recorded before the apply; promoted to 'applied' only once the
+        # desktop actually changed.
+        cursor = self.conn.execute(
             """
             insert into decisions(decision_date,wallpaper_id,explore_score,
               personalize_score,final_score,reason,status,created_at)
@@ -501,12 +544,30 @@ class RealPipeline:
                 decision.personalize,
                 decision.final,
                 decision.reason,
-                "shortlisted" if dry_run else "applied",
+                "shortlisted",
                 now_iso(),
             ),
         )
         self.conn.commit()
-        return decision
+        return replace(decision, decision_id=cursor.lastrowid)
+
+    def mark_applied(self, decision) -> None:
+        if decision.decision_id is None:
+            return
+        self.conn.execute(
+            "update decisions set status='applied' where id=?",
+            (decision.decision_id,),
+        )
+        self.conn.commit()
+
+    def mark_failed(self, decision) -> None:
+        if decision.decision_id is None:
+            return
+        self.conn.execute(
+            "update decisions set status='apply_failed' where id=?",
+            (decision.decision_id,),
+        )
+        self.conn.commit()
 
 
 def _apply_path_for(candidate, canonical: Path) -> Path | None:
@@ -520,6 +581,10 @@ def _apply_path_for(candidate, canonical: Path) -> Path | None:
     if source and Path(source).is_file():
         return Path(source)
     if source.startswith(("http://", "https://")):
+        return None
+    if candidate.source in ("we_workshop", "steam_workshop"):
+        # The asset vanished after the scan; the screening copy is not a
+        # wallpaper and the project itself is gone.
         return None
     return canonical
 
@@ -611,6 +676,7 @@ def build_application(cfg):
             we=we_control,
             dynamic_applier=dynamic_applier,
             recheck_delays=(5, 30),
+            style=cfg.wallpaper.style,
         ),
     )
     return Application(machine)

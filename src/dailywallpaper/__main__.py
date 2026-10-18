@@ -30,7 +30,12 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         args.once = True
 
     cfg = load_config(args.config)
-    setup_logging(cfg.app.data_dir, cfg.app.log_level)
+    setup_logging(
+        cfg.app.data_dir,
+        cfg.app.log_level,
+        max_mb=cfg.retention.log_mb,
+        backups=cfg.retention.log_backups,
+    )
 
     if app_factory is None:
         # The composition root lands in Task 1.11; tests inject a fake factory.

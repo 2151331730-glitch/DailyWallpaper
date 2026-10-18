@@ -72,7 +72,15 @@ class WeControl:
         return WeConfig.from_file(self.config_path).current_file()
 
     def _run(self, *args: str) -> bool:
-        result = self.runner([str(self.exe), *args], capture_output=True, text=True, timeout=15)
+        result = self.runner(
+            [str(self.exe), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            creationflags=getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0),
+        )
         return getattr(result, "returncode", 1) == 0
 
     def open(self, file: Path, monitor: int = 0) -> bool:

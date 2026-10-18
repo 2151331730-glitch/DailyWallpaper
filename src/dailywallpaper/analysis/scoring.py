@@ -51,7 +51,9 @@ def explore_score(scores: VisionScores, source: str, recent) -> float:
     primary = scores.style_tags[0]
     count = sum(1 for _, style in recent if style == primary)
     rarity = 100 * (1 - min(count, RARITY_WINDOW) / RARITY_WINDOW)
-    last_source, last_style = recent[-1] if recent else ("", "")
+    # recent is newest-first; the diversity term compares against the very
+    # last applied wallpaper, not the oldest one in the window.
+    last_source, last_style = recent[0] if recent else ("", "")
     diversity = 100
     if last_source == source:
         diversity -= 50

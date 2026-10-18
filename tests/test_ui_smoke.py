@@ -101,13 +101,24 @@ def test_state_switch_does_not_crash(qapp):
         tray.set_state(kind)
 
 
-def test_paused_service_hides_the_pause_menu(qapp):
+def test_paused_service_offers_resume_instead_of_the_menu(qapp):
     service = _Service()
     service.paused = True
     tray = TrayIcon(service, on_open=lambda: None, on_quit=lambda: None)
 
     assert tray.pause_action.text() == "恢复自动更换"
-    assert tray.pause_menu.isEnabled() is False
+    assert tray.pause_action.menu() is None
+    tray.pause_action.trigger()
+    assert service.paused is False
+
+
+def test_settings_action_opens_the_window(qapp):
+    opened = []
+    tray = TrayIcon(_Service(), on_open=lambda: opened.append(1), on_quit=lambda: None)
+
+    tray.settings_action.trigger()
+
+    assert opened == [1]
 
 
 def test_main_window_shows_the_latest_decision(qapp, tmp_path):
@@ -495,3 +506,30 @@ def test_settings_page_toggles_the_manual_override(qapp, tmp_path):
 
     assert page.save() is True
     assert load_config(path).app.allow_manual_override_after_daily_change is True
+
+
+def test_worker_runs_a_manual_request_without_waiting_for_the_interval():
+    import time as _time
+
+    from dailywallpaper.ui.worker import Worker
+
+    calls = []
+
+    class _M:
+        def tick(self, dry_run=False, manual=False):
+            calls.append(manual)
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker.start()
+    try:
+        deadline = _time.time() + 2
+        while not calls and _time.time() < deadline:
+            _time.sleep(0.01)
+        assert calls == [False]
+        assert worker.change_now() is True
+        deadline = _time.time() + 2
+        while len(calls) < 2 and _time.time() < deadline:
+            _time.sleep(0.01)
+        assert calls == [False, True]
+    finally:
+        worker.stop()

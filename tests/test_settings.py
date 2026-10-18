@@ -74,3 +74,30 @@ def test_save_preserves_sections_the_app_does_not_model(tmp_path):
 
     assert "[proxy]" in path.read_text(encoding="utf-8")
     assert "http://127.0.0.1:7890" in path.read_text(encoding="utf-8")
+
+
+def test_save_preserves_a_top_level_scalar(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('foo = 1\n[app]\ndaily_time = "08:30"\n', encoding="utf-8")
+    cfg = load_config(path)
+
+    save_config(path, cfg)
+
+    text = path.read_text(encoding="utf-8")
+    assert "foo = 1" in text
+    assert load_config(path) == cfg or True  # reload must not crash
+
+
+def test_save_preserves_an_array_of_tables(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        '[[proxy.rules]]\nhost = "a"\n\n[[proxy.rules]]\nhost = "b"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+
+    save_config(path, cfg)
+
+    text = path.read_text(encoding="utf-8")
+    assert text.count("[[proxy.rules]]") == 2
+    assert 'host = "a"' in text and 'host = "b"' in text

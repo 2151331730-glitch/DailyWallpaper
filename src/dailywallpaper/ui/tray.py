@@ -56,8 +56,12 @@ class TrayIcon(QSystemTrayIcon):
             action.triggered.connect(lambda _checked=False, span=days: self._pause(span))
             self.pause_menu.addAction(action)
         self.pause_action.setMenu(self.pause_menu)
+        # While paused the submenu is removed, so a click resumes instead of
+        # silently doing nothing (the "until manual" option never expires).
+        self.pause_action.triggered.connect(self._pause_or_resume)
 
         self.settings_action = QAction("设置", self.menu)
+        self.settings_action.triggered.connect(lambda: self.on_open())
         self.quit_action = QAction("退出", self.menu)
         self.quit_action.triggered.connect(lambda: self.on_quit())
 
@@ -88,11 +92,16 @@ class TrayIcon(QSystemTrayIcon):
         self.service.pause(days)
         self.refresh()
 
+    def _pause_or_resume(self):
+        if self.service.snapshot().paused:
+            self.service.resume()
+        self.refresh()
+
     def refresh(self) -> None:
         snapshot = self.service.snapshot()
         self.change_action.setEnabled(snapshot.can_change)
         self.pause_action.setText("恢复自动更换" if snapshot.paused else "暂停自动更换")
-        self.pause_menu.setEnabled(not snapshot.paused)
+        self.pause_action.setMenu(None if snapshot.paused else self.pause_menu)
 
     def set_state(self, kind: str) -> None:
         self.setIcon(_dot(STATE_COLOURS.get(kind, STATE_COLOURS["idle"])))

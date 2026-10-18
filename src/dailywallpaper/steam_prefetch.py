@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 APP_ID = 431960
 INTERVAL_SECONDS = 900
 CANDIDATE_WINDOW = 50
+FAILURE_RETRY_SECONDS = 6 * 3600
 
 
 class Prefetcher:
@@ -56,24 +57,33 @@ class Prefetcher:
             # The items we would prefetch next must survive eviction, or the
             # cache thrashes: best-ranked is downloaded first, then evicted
             # as the oldest, then downloaded again.
+            # Protect exactly what we would prefetch; a wider window cannot
+            # fit in max_cache_gb and would just be evicted again.
             protected = {str(row["source_id"]) for row in rows[: max(1, self.top_n)]}
             downloaded = []
+            # Downloading into a full cache only makes the next eviction
+            # delete the same item again.
+            room = self._cache_bytes() < self._limit_bytes()
             for row in rows:
-                if len(downloaded) >= self.top_n:
+                if len(downloaded) >= self.top_n or not room:
                     break
                 file_id = str(row["source_id"])
                 if Path(row["file_url"]).is_file():
+                    continue
+                if self._recently_failed(conn, file_id):
                     continue
                 try:
                     project = self.steamcmd.download_item(
                         self.account, file_id, self.staging
                     )
                     self._install(Path(project).parent, file_id)
+                    self._clear_failure(conn, file_id)
                     downloaded.append(file_id)
                     logger.info(f"steam workshop prefetch: {file_id} ready")
                 except Exception as exc:
                     # One bad item (timeout, missing exe, disk error) must not
                     # cost the rest of the pass.
+                    self._mark_failure(conn, file_id)
                     logger.warning(f"steam workshop prefetch {file_id} failed: {exc}")
             self._evict(conn, protected)
             return downloaded
@@ -87,11 +97,45 @@ class Prefetcher:
         self.download_root.mkdir(parents=True, exist_ok=True)
         shutil.move(str(item_dir), str(dest))
 
+    def _limit_bytes(self) -> float:
+        return max(0.0, self.max_cache_gb) * 1024 ** 3
+
+    def _cache_bytes(self) -> float:
+        if not self.download_root.is_dir():
+            return 0.0
+        return sum(
+            sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
+            for folder in self.download_root.iterdir()
+            if folder.is_dir() and folder != self.staging
+        )
+
+    def _recently_failed(self, conn, file_id: str) -> bool:
+        row = conn.execute(
+            "select value from state where key=?", (f"steam_failed_{file_id}",)
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            return time.time() - float(row[0]) < FAILURE_RETRY_SECONDS
+        except (TypeError, ValueError):
+            return False
+
+    def _mark_failure(self, conn, file_id: str) -> None:
+        conn.execute(
+            "insert or replace into state(key,value) values(?,?)",
+            (f"steam_failed_{file_id}", str(time.time())),
+        )
+        conn.commit()
+
+    def _clear_failure(self, conn, file_id: str) -> None:
+        conn.execute("delete from state where key=?", (f"steam_failed_{file_id}",))
+        conn.commit()
+
     def _evict(self, conn, protected_ids=()) -> None:
         """Keep the cache under max_cache_gb, newest items first."""
         if not self.download_root.is_dir():
             return
-        limit = max(0.0, self.max_cache_gb) * 1024 ** 3
+        limit = self._limit_bytes()
         entries = []
         for folder in self.download_root.iterdir():
             if not folder.is_dir() or folder == self.staging:

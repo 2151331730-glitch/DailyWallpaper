@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +39,45 @@ class Worker:
     def _loop(self) -> None:
         # The connection is created here, in the thread that will use it.
         self._machine = self.machine_factory()
+        self._maybe_cleanup()
         self._ensure_visible()
         self._tick_once()
-        while not self._stop.wait(self.interval):
+        while True:
+            manual = self._wait_for_work()
+            if manual is None:  # stopped
+                return
+            self._tick_once(manual=manual)
+            with self._lock:
+                self._manual_busy = False
+
+    def _wait_for_work(self) -> bool | None:
+        """Sleep until the interval elapses or a manual change arrives."""
+        deadline = time.monotonic() + self.interval
+        while not self._stop.is_set():
             if self._manual.is_set():
                 self._manual.clear()
-                self._tick_once(manual=True)
-            else:
-                self._tick_once()
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._stop.wait(min(0.25, remaining))
+        return None
+
+    def _maybe_cleanup(self) -> None:
+        """Honour [retention] once a day, in this thread's connection."""
+        cfg = getattr(self._machine, "config", None)
+        conn = getattr(self._machine, "conn", None)
+        clock = getattr(self._machine, "clock", None)
+        if cfg is None or conn is None or clock is None:
+            return
+        try:
+            from dailywallpaper.retention import maybe_cleanup
+
+            maybe_cleanup(
+                Path(cfg.app.data_dir), cfg, conn, clock.now().date().isoformat()
+            )
+        except Exception as exc:  # cleanup is housekeeping, never fatal
+            logger.warning(f"retention cleanup failed: {exc}")
 
     def _ensure_visible(self) -> None:
         """Put the last wallpaper back if WE grabbed the desktop at login."""
@@ -70,11 +103,4 @@ class Worker:
                 return False
             self._manual_busy = True
         self._manual.set()
-        # Clear the flag once the loop has consumed it; a wrong guess only
-        # costs one extra no-op tick.
-        threading.Timer(1.0, self._release_manual).start()
         return True
-
-    def _release_manual(self) -> None:
-        with self._lock:
-            self._manual_busy = False

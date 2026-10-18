@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 
 from .base import Candidate, SourceError
@@ -62,15 +63,31 @@ def set_phash(conn, wallpaper_id: int, phash: str) -> None:
     conn.commit()
 
 
+SOURCE_RETRY_SECONDS = 1800
+
+
 def source_is_down(conn, name: str, day: str) -> bool:
-    """A source that failed today is not retried: no proxy, no waiting."""
+    """Skip a failed source for a while, then let it try again.
+
+    A login can reach the network before the proxy or Wi-Fi is up; locking a
+    source out for the whole day would waste the day for no reason.
+    """
     key = f"source_down_{name}_{day}"
-    return conn.execute("select 1 from state where key=?", (key,)).fetchone() is not None
+    row = conn.execute("select value from state where key=?", (key,)).fetchone()
+    if row is None:
+        return False
+    try:
+        return time.time() - float(row[0]) < SOURCE_RETRY_SECONDS
+    except (TypeError, ValueError):
+        return True
 
 
 def mark_source_down(conn, name: str, day: str) -> None:
     key = f"source_down_{name}_{day}"
-    conn.execute("insert or replace into state(key,value) values(?,?)", (key, "1"))
+    conn.execute(
+        "insert or replace into state(key,value) values(?,?)",
+        (key, str(time.time())),
+    )
     conn.commit()
 
 

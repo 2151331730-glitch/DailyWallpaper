@@ -33,7 +33,7 @@ class ApplyService:
     """
 
     def __init__(self, conn, applier, we=None, clock=None, dynamic_applier=None,
-                 recheck_delays=(), sleep=None, spawn=None):
+                 recheck_delays=(), sleep=None, spawn=None, style="fill"):
         self.conn = conn
         self.applier = applier
         self.dynamic_applier = dynamic_applier
@@ -44,8 +44,7 @@ class ApplyService:
         self.recheck_delays = tuple(recheck_delays)
         self.sleep = sleep or time.sleep
         self.spawn = spawn or _spawn_daemon
-        # A newer apply or an undo invalidates any recheck still sleeping.
-        self._epoch = 0
+        self.style = style
 
     def _change_date(self) -> str:
         # Follow the state machine's clock when one is supplied, so a
@@ -53,6 +52,47 @@ class ApplyService:
         if self.clock is None:
             return today_iso()
         return self.clock.now().date().isoformat()
+
+    def _we_current(self) -> str:
+        if self.we is None:
+            return ""
+        try:
+            return self.we.current() or ""
+        except Exception as exc:
+            # A missing or unreadable WE config must not stop a static apply.
+            logger.warning(f"WE state unavailable: {exc}")
+            return ""
+
+    def _we_close(self) -> bool:
+        try:
+            return bool(self.we and self.we.close())
+        except Exception as exc:
+            logger.warning(f"WE close failed: {exc}")
+            return False
+
+    def _we_open(self, path: Path) -> bool:
+        try:
+            return bool(self.we and self.we.open(path))
+        except Exception as exc:
+            logger.warning(f"WE open failed: {exc}")
+            return False
+
+    def _epoch(self) -> int:
+        row = self.conn.execute(
+            "select value from state where key='apply_epoch'"
+        ).fetchone()
+        return int(row[0]) if row is not None and str(row[0]).isdigit() else 0
+
+    def _bump_epoch(self) -> int:
+        """Invalidate pending rechecks; shared through the DB so the UI's
+        ApplyService and the worker's agree."""
+        epoch = self._epoch() + 1
+        self.conn.execute(
+            "insert or replace into state(key,value) values('apply_epoch',?)",
+            (str(epoch),),
+        )
+        self.conn.commit()
+        return epoch
 
     def _applier_for(self, wallpaper_id: int):
         if self.dynamic_applier is None:
@@ -67,23 +107,26 @@ class ApplyService:
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         chosen, method = self._applier_for(wallpaper_id)
         state = chosen.snapshot()
-        we_before = self.we.current() if self.we else ""
+        we_before = self._we_current()
         # A WE apply switches the project itself; only a static one has to
         # release the live wallpaper first (spec 9.1).
         close_we = bool(self.we and we_before and method == "static")
-        if close_we and not self.we.close():
+        if close_we and not self._we_close():
             return False
 
         try:
-            result = chosen.apply(image_path)
-        except Exception as exc:
+            if method == "static":
+                result = chosen.apply(image_path, style=self.style)
+            else:
+                result = chosen.apply(image_path)
+        except Exception:
             # An applier that raises is a failed apply; do not leave WE closed.
             if close_we:
-                self.we.open(Path(we_before))
+                self._we_open(Path(we_before))
             return False
         if not result.ok:
             if close_we:
-                self.we.open(Path(we_before))
+                self._we_open(Path(we_before))
             return False
 
         self.conn.execute(
@@ -109,8 +152,7 @@ class ApplyService:
         )
         self.conn.commit()
         if method == "static" and self.we is not None and self.recheck_delays:
-            self._epoch += 1
-            epoch = self._epoch
+            epoch = self._bump_epoch()
             self.spawn(lambda: self._recheck_static(chosen, image_path, epoch))
         return True
 
@@ -119,20 +161,20 @@ class ApplyService:
         elapsed = 0
         target = image_path.with_suffix(".apply.jpg")
         for delay in self.recheck_delays:
-            if epoch != self._epoch:
+            if epoch != self._epoch():
                 return
             try:
                 self.sleep(delay - elapsed)
                 elapsed = delay
-                if epoch != self._epoch:
+                if epoch != self._epoch():
                     return
                 # The desktop still shows our image: nothing took it over,
                 # and re-applying would undo whatever the user did meanwhile.
                 if _norm(getattr(applier, "current_wallpaper", lambda: "")()) == _norm(target):
                     continue
-                if not self.we.current():
+                if not self._we_current():
                     continue
-                if not self.we.close():
+                if not self._we_close():
                     logger.warning("post-apply recheck: WE did not close")
                     continue
                 result = applier.apply(image_path)
@@ -169,28 +211,39 @@ class ApplyService:
         if row[1] in ("scene", "video"):
             # WE owns the desktop; do not start it on its own (spec 9.2).
             return False
+        recorded = self.conn.execute(
+            "select value from state where key='last_applied_path'"
+        ).fetchone()
+        if recorded is not None and recorded[0] and Path(recorded[0]).is_file():
+            path = Path(recorded[0])
+        else:
+            path = Path(row[0])
+            # Never re-apply the <=1024px screening copy: a sharper file
+            # may not exist, but a blurry desktop is worse than none.
+            if "cache" in path.parts and "normalized" in path.parts:
+                logger.warning("startup: no full-resolution file recorded; skipping")
+                return False
         try:
-            if self.we is not None and self.we.current():
-                if not self.we.close():
+            if self.we is not None and self._we_current():
+                if not self._we_close():
                     # WE is not running yet (the control channel is dead);
                     # at login that is normal, so put the wallpaper back anyway.
                     logger.warning("startup: WE did not close; applying anyway")
-            path = Path(row[0])
-            recorded = self.conn.execute(
-                "select value from state where key='last_applied_path'"
-            ).fetchone()
-            if recorded is not None and recorded[0] and Path(recorded[0]).is_file():
-                path = Path(recorded[0])
-            result = self.applier.apply(path)
+            result = self.applier.apply(path, style=self.style)
             if not result.ok:
                 logger.warning(f"startup re-apply failed: {result.error}")
+            elif self.we is not None and self.recheck_delays:
+                epoch = self._bump_epoch()
+                self.spawn(
+                    lambda: self._recheck_static(self.applier, path, epoch)
+                )
             return bool(result.ok)
         except Exception as exc:
             logger.warning(f"startup re-apply failed: {exc}")
             return False
 
     def undo_last(self) -> bool:
-        self._epoch += 1  # a pending recheck must not restore what we undo
+        self._bump_epoch()  # a pending recheck must not restore what we undo
         row = self.conn.execute(
             "SELECT * FROM change_log WHERE success=1 ORDER BY id DESC LIMIT 1"
         ).fetchone()

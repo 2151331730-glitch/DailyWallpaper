@@ -23,3 +23,5 @@ class Decision:
     apply_path: Path | None = None
     # A remote Steam item is only ready once its project.json exists locally.
     ready: bool = True
+    # The decisions row, so a successful apply can promote it to 'applied'.
+    decision_id: int | None = None

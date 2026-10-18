@@ -574,3 +574,48 @@ def test_startup_prefers_the_recorded_applied_path(tmp_path):
 
     assert service.ensure_visible() is True
     assert service.applier.applied[-1] == full
+
+
+class _BrokenWe:
+    def current(self):
+        raise FileNotFoundError("config.json")
+
+    def close(self):
+        raise FileNotFoundError("config.json")
+
+    def open(self, file, monitor=0):
+        raise FileNotFoundError("config.json")
+
+
+def test_a_broken_we_config_does_not_block_a_static_apply(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    service = ApplyService(conn, _FakeApplier(), we=_BrokenWe())
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert conn.execute("select count(*) from change_log where success=1").fetchone()[0] == 1
+
+
+def test_an_undo_in_another_service_cancels_the_recheck(tmp_path):
+    conn_a = connect(tmp_path / "app.db")
+    migrate(conn_a)
+    conn_a.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn_a.commit()
+    wid = conn_a.execute("select id from wallpapers").fetchone()[0]
+    conn_b = connect(tmp_path / "app.db")
+    targets = []
+    service_a = ApplyService(
+        conn_a, _FakeApplier(wallpaper="C:/old.jpg"), we=_FakeWe(),
+        recheck_delays=(5, 30), sleep=lambda s: None, spawn=targets.append,
+    )
+    assert service_a.apply(wid, tmp_path / "new.jpg") is True
+    service_b = ApplyService(conn_b, _FakeApplier(wallpaper="C:/old.jpg"), we=_FakeWe())
+    service_b.undo_last()
+    applied_before = len(service_a.applier.applied)
+
+    targets[0]()
+
+    assert len(service_a.applier.applied) == applied_before

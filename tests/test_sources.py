@@ -157,3 +157,21 @@ def test_wallhaven_uses_the_short_connect_timeout():
     WallhavenSource(S(), SourcesSection(connect_timeout=5))._search(1)
 
     assert seen["timeout"] == (5, 30)
+
+
+def test_a_source_recovers_after_the_retry_window(tmp_path):
+    import time as _time
+
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.sources.repository import mark_source_down, source_is_down
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    mark_source_down(conn, "WallhavenSource", "2026-10-18")
+    conn.execute(
+        "update state set value=? where key='source_down_WallhavenSource_2026-10-18'",
+        (str(_time.time() - 1801),),
+    )
+    conn.commit()
+
+    assert source_is_down(conn, "WallhavenSource", "2026-10-18") is False
