@@ -100,3 +100,51 @@ def test_paused_service_hides_the_pause_menu(qapp):
 
     assert tray.pause_action.text() == "恢复自动更换"
     assert tray.pause_menu.isEnabled() is False
+
+
+def test_main_window_shows_the_latest_decision(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,created_at)"
+        " values('bing','1','测试壁纸','x')"
+    )
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,personalize_score,"
+        "final_score,reason,status,created_at)"
+        " values('2026-10-18',1,70,80,74.5,'reason','applied','x')"
+    )
+    conn.commit()
+
+    window = MainWindow(_Service(), conn)
+    window.refresh()
+
+    assert "测试壁纸" in window.title_label.text()
+    assert "74.5" in window.score_label.text()
+
+
+def test_closing_the_window_hides_it(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    window = MainWindow(_Service(), conn)
+    window.show()
+    window.close()
+
+    assert window.isVisible() is False
+
+
+def test_window_without_history_does_not_crash(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    window = MainWindow(_Service(), conn)
+
+    assert window.title_label.text() == ""
