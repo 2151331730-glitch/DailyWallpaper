@@ -152,6 +152,21 @@ def backup(conn, dest: Path) -> Path:
     return dest
 
 
+def _as_aware(moment: datetime) -> datetime:
+    """Attach the local offset to a naive datetime; leave aware ones alone."""
+    return moment if moment.tzinfo else moment.astimezone()
+
+
+def parse_ts(value: str) -> datetime:
+    """Parse a stored timestamp into an aware datetime.
+
+    ``now_iso`` writes no offset, so everything read back is naive until it
+    is normalized here -- comparing it with ``SystemClock.now()`` (aware)
+    would otherwise raise TypeError.
+    """
+    return _as_aware(datetime.fromisoformat(value))
+
+
 def now_iso() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S")
 

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Protocol
 
+from dailywallpaper.db import _as_aware, parse_ts
+
 
 class SystemClock:
     def now(self) -> datetime:
@@ -47,7 +49,13 @@ class DailyStateMachine:
         row = self.conn.execute(
             "select value from state where key='paused_until'"
         ).fetchone()
-        return bool(row and now < datetime.fromisoformat(row[0]))
+        if not row:
+            return False
+        try:
+            return _as_aware(now) < parse_ts(row[0])
+        except (ValueError, TypeError):
+            # A malformed pause value must not stop the scheduler.
+            return False
 
     def _changed_today(self, date) -> bool:
         if self.config.app.manual_change_counts_toward_daily_limit:

@@ -85,6 +85,17 @@ def test_rows_without_a_source_key_are_tolerated():
     assert profile.source_weights == {}
 
 
+def test_aware_now_with_naive_created_at_does_not_crash():
+    from datetime import timezone
+
+    aware = datetime(2026, 10, 18, 10, 0, tzinfo=timezone.utc)
+    profile = PreferenceProfile.from_ratings(
+        [_row(["landscape"], 1, "2026-10-01T10:00:00")], aware
+    )
+
+    assert profile.rating_count == 1
+
+
 def test_rating_count_counts_rows():
     rows = [
         _row(["landscape"], 1, "2026-10-01T10:00:00"),

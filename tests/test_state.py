@@ -122,6 +122,26 @@ def test_paused_short_circuits(tmp_path):
     assert svc.calls == []
 
 
+def test_paused_with_a_naive_stored_timestamp_does_not_crash(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+    # now_iso() writes a naive timestamp; the system clock is aware.
+    conn.execute(
+        "insert into state(key,value) values('paused_until','2099-01-01T00:00:00')"
+    )
+    conn.commit()
+    machine.clock = type("AwareClock", (), {"now": lambda self: datetime.now().astimezone()})()
+
+    assert machine.tick().action == "paused"
+
+
+def test_malformed_paused_until_degrades_to_not_paused(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+    conn.execute("insert into state(key,value) values('paused_until','not-a-date')")
+    conn.commit()
+
+    assert machine.tick().action == "applied"
+
+
 def test_candidate_is_applied_once(tmp_path):
     conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
 

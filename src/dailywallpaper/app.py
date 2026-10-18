@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -32,6 +33,8 @@ from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
+
+logger = logging.getLogger(__name__)
 
 
 class SingleInstance:
@@ -70,7 +73,11 @@ class Application:
 
     def run_forever(self) -> int:
         while True:
-            self.machine.tick()
+            try:
+                self.machine.tick()
+            except Exception as exc:
+                # A resident scheduler must outlive one bad tick.
+                logger.warning(f"tick failed: {exc}")
             self.sleep(self.interval_seconds)
 
 
@@ -114,6 +121,13 @@ class RealPipeline:
         return PreferenceProfile.from_ratings(rows, now)
 
     def prepare(self, now) -> None:
+        prepared_key = f"prepared_{now.date().isoformat()}"
+        if self.conn.execute(
+            "select 1 from state where key=?", (prepared_key,)
+        ).fetchone():
+            # One pass per day: the resident loop ticks every 60 s.
+            return
+
         raw = []
         for source in self.sources:
             try:
@@ -130,6 +144,8 @@ class RealPipeline:
             ).fetchall()
         ]
 
+        self.budget.warn_if_needed()
+
         data_dir = Path(self.cfg.app.data_dir)
         self.shortlist = []
         downloads = analyses = 0
@@ -138,39 +154,51 @@ class RealPipeline:
                 break
             if analyses >= self.cfg.app.max_analyses_per_day:
                 break
-            wallpaper_id = upsert_wallpaper(self.conn, candidate)
-            if not candidate.preview_url:
-                continue
-            preview = download(
-                self.session,
-                candidate.preview_url,
-                data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
-            )
-            downloads += 1
-            canonical, image_hash = canonicalize(preview, data_dir / "cache" / "normalized")
-            if not prefilter(canonical, candidate, self.cfg.sources, recent_hashes).ok:
-                continue
-            if not self.budget.check(0.003):
-                break
-            record = self.vision.analyze_or_cache(
-                wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
-            )
-            analyses += 1
-            if hard_gate(record.scores):
-                continue
-            scores = final_score(record.scores, candidate.source, profile, recent, 0)
-            self.shortlist.append(
-                Decision(
-                    wallpaper_id,
-                    canonical,
-                    record.scores,
-                    scores.explore,
-                    scores.personalize,
-                    scores.final,
-                    record.scores.reason,
+            try:
+                wallpaper_id = upsert_wallpaper(self.conn, candidate)
+                if not candidate.preview_url:
+                    continue
+                preview = download(
+                    self.session,
+                    candidate.preview_url,
+                    data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
                 )
-            )
+                downloads += 1
+                canonical, image_hash = canonicalize(
+                    preview, data_dir / "cache" / "normalized"
+                )
+                if not prefilter(canonical, candidate, self.cfg.sources, recent_hashes).ok:
+                    continue
+                if not self.budget.check(0.003):
+                    break
+                record = self.vision.analyze_or_cache(
+                    wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
+                )
+                analyses += 1
+                if hard_gate(record.scores):
+                    continue
+                scores = final_score(record.scores, candidate.source, profile, recent, 0)
+                self.shortlist.append(
+                    Decision(
+                        wallpaper_id,
+                        canonical,
+                        record.scores,
+                        scores.explore,
+                        scores.personalize,
+                        scores.final,
+                        record.scores.reason,
+                    )
+                )
+            except Exception as exc:
+                # One broken preview or vision response must not end the run.
+                logger.warning(f"candidate {candidate.source_id} skipped: {exc}")
+                continue
+
         self.shortlist = rank(self.shortlist, now.date().isoformat())
+        self.conn.execute(
+            "insert or replace into state(key,value) values(?,?)", (prepared_key, "1")
+        )
+        self.conn.commit()
 
     def pick(self, now):
         return self.shortlist.pop(0) if self.shortlist else None

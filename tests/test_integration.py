@@ -84,14 +84,20 @@ class _Response:
 
 
 class ImageSession:
-    def __init__(self):
+    def __init__(self, broken=()):
+        self.calls = 0
         self.images = {}
         for index, cell in enumerate((8, 16, 32)):
             buffer = io.BytesIO()
             _checkerboard(cell).save(buffer, "PNG")
             self.images[f"https://img/{index}.png"] = buffer.getvalue()
+        for url in broken:
+            self.images.pop(url, None)
 
     def get(self, url, stream=True, timeout=30):
+        self.calls += 1
+        if url not in self.images:
+            raise RuntimeError(f"404 for {url}")
         return _Response(self.images[url])
 
 
@@ -176,6 +182,57 @@ def test_one_apply_per_day_for_a_week(tmp_path):
     ).fetchall()
     assert len(rows) == 7
     assert len({row["change_date"] for row in rows}) == 7
+
+
+def _pipeline(tmp_path, session, provider, clock):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, session, [Source(_candidates())], vision, budget)
+    return cfg, conn, pipeline, budget
+
+
+def test_one_failing_preview_does_not_abort_the_run(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession(broken=["https://img/0.png"])
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+
+    pipeline.prepare(clock.now())
+
+    assert len(pipeline.shortlist) == 2
+
+
+def test_prepare_runs_once_per_day(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+
+    pipeline.prepare(clock.now())
+    first = session.calls
+    pipeline.prepare(clock.now())
+
+    assert session.calls == first
+
+
+def test_prepare_warns_once_when_the_budget_is_nearly_spent(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    conn.execute(
+        "insert into api_usage(ts,provider,model,purpose,cost_cny,status_code)"
+        " values('2026-10-01T08:00:00','zhipu','m','screen',8.5,200)"
+    )
+    conn.commit()
+
+    pipeline.prepare(clock.now())
+
+    rows = conn.execute("select count(*) from state where key like 'budget_warned_%'").fetchone()
+    assert rows[0] == 1
 
 
 def test_low_quality_candidates_are_gated_out(tmp_path):

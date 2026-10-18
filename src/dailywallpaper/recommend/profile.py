@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
+from dailywallpaper.db import _as_aware, parse_ts
+
 FRESH_DAYS = 90
 AGING_DAYS = 180
 FRESH_WEIGHT = 1.0
@@ -49,8 +51,8 @@ class PreferenceProfile:
         count = 0
         for row in rows:
             count += 1
-            created = datetime.fromisoformat(row["created_at"])
-            weight = _decay((now - created).days) * row["rating"]
+            created = parse_ts(row["created_at"])
+            weight = _decay((_as_aware(now) - created).days) * row["rating"]
             for tag in json.loads(row["derived_tags_json"] or "[]"):
                 tags[tag] += weight
             source = _source_of(row)

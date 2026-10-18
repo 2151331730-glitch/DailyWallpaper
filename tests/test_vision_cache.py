@@ -122,6 +122,26 @@ def test_success_records_usage_and_cost(tmp_path):
     assert row["cost_cny"] == pytest.approx(estimate_cost(100, 500, _pricing()["m"]))
 
 
+class _Clock:
+    def now(self):
+        return __import__("datetime").datetime(2026, 10, 18, 9, 0)
+
+
+def test_budgeted_success_records_exactly_one_cost_row(tmp_path):
+    from dailywallpaper.cost.budget import BudgetGuard
+
+    conn = connect(tmp_path / "app.db"); migrate(conn)
+    wid = _wallpaper(conn)
+    guard = BudgetGuard(conn, 10.0, 0.8, _Clock())
+    client = VisionClient(_CountingProvider(_result()), conn, _pricing(), budget=guard)
+
+    client.analyze_or_cache(wid, "h1", tmp_path / "x.jpg", "m")
+
+    rows = conn.execute("select cost_cny from api_usage where cost_cny > 0").fetchall()
+    assert len(rows) == 1
+    assert guard.spent() == pytest.approx(rows[0]["cost_cny"])
+
+
 def test_retries_once_with_stricter_instruction(tmp_path):
     conn = connect(tmp_path / "app.db"); migrate(conn)
     wid = _wallpaper(conn)

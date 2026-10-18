@@ -296,23 +296,26 @@ class VisionClient:
         )
         self.conn.commit()
 
-        record_usage(
-            self.conn,
-            provider="zhipu",
-            model=model,
-            purpose=CACHE_HIT_PURPOSE,
-            tokens_in=result.tokens_in,
-            tokens_out=result.tokens_out,
-            cost_cny=cost,
-            estimated=0,
-            cache_hit=0,
-            status_code=200,
-            latency_ms=result.latency_ms,
-        )
-
         if self.budget and usage_id is not None:
+            # The pre-written row *is* this call's usage record; settling it
+            # is the whole write. Inserting record_usage as well would make
+            # spent() count the same cost twice.
             self.budget.settle_usage(
                 usage_id, result.tokens_in, result.tokens_out, cost, 200, result.latency_ms
+            )
+        else:
+            record_usage(
+                self.conn,
+                provider="zhipu",
+                model=model,
+                purpose=CACHE_HIT_PURPOSE,
+                tokens_in=result.tokens_in,
+                tokens_out=result.tokens_out,
+                cost_cny=cost,
+                estimated=0,
+                cache_hit=0,
+                status_code=200,
+                latency_ms=result.latency_ms,
             )
 
         stored = self.conn.execute(

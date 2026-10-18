@@ -93,6 +93,33 @@ def test_application_run_once_delegates_to_the_machine():
     assert machine.calls == [True]
 
 
+def test_run_forever_survives_a_failing_tick():
+    class _Machine:
+        def __init__(self):
+            self.calls = 0
+
+        def tick(self, dry_run=False):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("boom")
+            return 0
+
+    machine = _Machine()
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 2:
+            raise SystemExit
+
+    app = Application(machine, sleep=sleep)
+
+    with pytest.raises(SystemExit):
+        app.run_forever()
+
+    assert machine.calls == 2
+
+
 def test_single_instance_rejects_a_second_owner():
     name = "DailyWallpaperTest_" + uuid.uuid4().hex[:8]
 
