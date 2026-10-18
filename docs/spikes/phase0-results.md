@@ -53,17 +53,47 @@ Notes: the real `config.json` stores the data at `win11.general.wallpaperconfig`
 
 ## Probe 3: Vision
 
-Status: **BLOCKED/PENDING** — the key is stored, but the first real calls did not produce JSON.
-
-- Key: stored in Windows Credential Manager (`DailyWallpaper` / `zhipu`); the value was never printed or logged.
-- Attempt 1 (default thinking, `max_tokens=500`, JSON mode): `finish_reason=length`, `completion_tokens=500`, `reasoning_tokens=489`, content `'\n'`. The reasoning pass consumed the entire output budget before the JSON.
-- Attempt 2 (`thinking: {"type": "disabled"}`): HTTP 429, provider code 1305 (concurrency/rate limit). Retry pending.
-- No paid model call has been made.
-- Next: retry with 10/20s backoff; if 429 persists, wait longer. Then set `thinking: disabled` in `ZhipuVision` and use a larger output budget (or record reasoning tokens) before re-running:
+Command:
 
 ```powershell
 .venv\Scripts\python.exe scripts\probe_vision.py --image "D:\games\steam\steamapps\workshop\content\431960\1132505365\preview.jpg"
 ```
+
+Result: **PASS** (2026-10-18).
+
+Evidence:
+
+```json
+{
+  "model": "glm-4.6v-flash",
+  "scores": {
+    "quality": 85,
+    "creativity": 80,
+    "novelty": 75,
+    "formulaic": 20,
+    "nsfw": false,
+    "watermark": false,
+    "text_overlay": "none",
+    "style_tags": ["anime", "landscape", "minimal", "dark"],
+    "mood_tags": ["calm", "cozy", "vibrant"],
+    "palette": ["#ff8c00", "#ff6600", "#8b4513", "#4b0082", "#d3d3d3"],
+    "subject": "woman on bamboo raft at sunset",
+    "reason": "serene, artistic landscape with warm colors"
+  },
+  "tokens_in": 1845,
+  "tokens_out": 152,
+  "reasoning_tokens": 0,
+  "latency_ms": 7234
+}
+```
+
+Notes:
+
+- `thinking: {"type": "disabled"}` is required. With the default thinking the reasoning pass consumed the whole 500-token budget (`finish_reason=length`, `reasoning_tokens=489`, content `'\n'`). Disabled, the same budget finishes with `finish_reason=stop` and `reasoning_tokens=0`.
+- `max_tokens=500` was kept: 152 completion tokens, stopped normally, so the budget is sufficient once thinking is off.
+- The provider returns `style_tags`, `mood_tags` and `palette` as comma-separated strings instead of the arrays the JSON schema asks for, and the palette carries no `#` prefix. `validate_scores` now accepts both forms and restores the `#`.
+- HTTP 429 (provider code 1305, model overloaded) appears intermittently. The probe retries with 30/60/120/180 s backoff; retry policy on the product path is deferred to Task 1.4 (`VisionClient`).
+- Key: stored in Windows Credential Manager (`DailyWallpaper` / `zhipu`); the value was never printed or logged.
 
 ## Probe 4: Sources and weather
 
@@ -99,11 +129,11 @@ Evidence:
 |---|---|
 | Static apply | PASS |
 | WE switch | PASS |
+| Vision | PASS |
 | Sources and weather | PASS |
 | Environment and keyring | PASS |
-| Vision | PENDING key |
 
-Phase 1A code may proceed, but Phase 0 is not fully closed until the real vision probe runs.
+All five probes pass. Phase 0 is closed; Phase 1A may proceed.
 
 ## Deferred
 
