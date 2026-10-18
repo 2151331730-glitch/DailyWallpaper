@@ -31,9 +31,11 @@
 
 **不做**：文字评价转标签（每次评语要额外付费调用）。
 
-### 3. Phase 3 工程化
-- 密钥扫描脚本、README 重写、测试补齐
-- 可选：打包（不做安装包）
+### 3. Phase 3 工程化 ✅ 已完成
+- `scripts/check_secrets.py`（提交前扫描密钥，已验证仓库干净）
+- README 重写（覆盖 Phase 1 + Phase 2 的全部能力与已知限制）
+- 每个 `src` 模块都有对应测试；`.gitignore` 覆盖 `config.toml` / `data/` / `*.log`
+- 不做安装包
 
 ## 已知的取舍
 
