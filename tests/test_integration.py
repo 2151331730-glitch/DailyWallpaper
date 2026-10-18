@@ -463,3 +463,22 @@ def test_a_dry_run_does_not_consume_the_day(tmp_path):
         "select 1 from state where key='prepared_2026-10-18'"
     ).fetchone()
     assert row is None
+
+
+def test_a_lost_shortlist_can_be_rebuilt_the_same_day(tmp_path):
+    # The background pass marked the day, then the process restarted.
+    clock = Clock(datetime(2026, 10, 18, 7, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+
+    pipeline.prepare(clock.now())
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is None  # nothing persisted just from preparing
+
+    fresh = RealPipeline(cfg, conn, session, [Source(_candidates())],
+                         VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing),
+                         budget)
+    fresh.prepare(clock.now())
+    assert fresh.pick(clock.now()) is not None

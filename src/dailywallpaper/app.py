@@ -115,6 +115,9 @@ class RealPipeline:
         self.budget = budget
         self.power = power
         self.shortlist = []
+        # In-memory only: the prepared shortlist does not survive a restart,
+        # so persisting this would strand the day exactly like the dry-run bug.
+        self._prepared_on = None
 
     def _recent_styles(self):
         rows = self.conn.execute(
@@ -147,9 +150,7 @@ class RealPipeline:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
         prepared_key = f"prepared_{now.date().isoformat()}"
-        if self.conn.execute(
-            "select 1 from state where key=?", (prepared_key,)
-        ).fetchone():
+        if self._prepared_on == prepared_key:
             # One pass per day: the resident loop ticks every 60 s.
             return
 
@@ -187,10 +188,19 @@ class RealPipeline:
 
         recent = self._recent_styles()
         profile = self._profile(now)
+        # Only wallpapers that were actually applied: comparing against every
+        # fetched candidate would reject the whole pool after a restart.
         recent_hashes = [
             row["phash"]
             for row in self.conn.execute(
-                "select phash from wallpapers where phash <> '' order by id desc limit 200"
+                """
+                select w.phash from wallpapers w
+                where w.phash <> '' and exists (
+                    select 1 from decisions d
+                    where d.wallpaper_id = w.id and d.status = 'applied'
+                )
+                order by w.id desc limit 200
+                """
             ).fetchall()
         ]
 
@@ -273,11 +283,7 @@ class RealPipeline:
         if self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
-        if mark:
-            self.conn.execute(
-                "insert or replace into state(key,value) values(?,?)", (prepared_key, "1")
-            )
-            self.conn.commit()
+        self._prepared_on = prepared_key
 
     def _review_top(self, profile, recent, weather_code) -> None:
         """Re-score the strongest candidates with the paid model.
