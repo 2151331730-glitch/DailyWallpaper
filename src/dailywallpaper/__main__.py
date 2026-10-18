@@ -45,7 +45,7 @@ def main(argv=None, app_factory=None, run_gui=None) -> int:
             from dailywallpaper.ui.shell import build_gui
 
             run_gui = build_gui
-        return run_gui(cfg)
+        return run_gui(cfg, args.config)
 
 
 if __name__ == "__main__":

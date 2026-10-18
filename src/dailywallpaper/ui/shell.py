@@ -13,12 +13,19 @@ POLL_MS = 2000
 class UiShell:
     """Owns the Qt objects; all product logic lives in CommandService."""
 
-    def __init__(self, command_service, machine, on_quit, parent=None, worker=None):
+    def __init__(self, command_service, machine, on_quit, parent=None, worker=None,
+                 budget_cny=10.0):
         self.service = command_service
         self.machine = machine
         self.on_quit = on_quit
         self.worker = worker
-        self.window = MainWindow(command_service, command_service.conn)
+        self.window = MainWindow(
+            command_service,
+            command_service.conn,
+            budget_cny=budget_cny,
+            config=getattr(command_service, "full_config", None),
+            config_path=getattr(command_service, "config_path", None),
+        )
         self.tray = TrayIcon(
             command_service,
             on_open=self.show_window,
@@ -81,7 +88,7 @@ class UiShell:
             self.worker.start()
 
 
-def build_gui(cfg) -> int:
+def build_gui(cfg, config_path=None) -> int:
     """Composition root for the desktop shell."""
     import sys
 
@@ -98,6 +105,9 @@ def build_gui(cfg) -> int:
     # The worker builds its own application inside its own thread: a sqlite
     # connection may only be used from the thread that created it.
     worker = Worker(machine_factory=lambda: build_application(cfg).machine)
+    from dailywallpaper.config import default_config_path
+
+    resolved_path = config_path or default_config_path()
     service = CommandService(
         machine.conn,
         cfg.app,
@@ -106,7 +116,12 @@ def build_gui(cfg) -> int:
         machine.apply_service,
         runner=worker,
     )
+    service.full_config = cfg
+    service.config_path = resolved_path
     app = QApplication.instance() or QApplication(sys.argv)
-    shell = UiShell(service, machine, on_quit=app.quit, worker=worker)
+    shell = UiShell(
+        service, machine, on_quit=app.quit, worker=worker,
+        budget_cny=cfg.budget.monthly_cny,
+    )
     shell.start()
     return app.exec()
