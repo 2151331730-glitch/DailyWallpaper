@@ -10,7 +10,10 @@ from dailywallpaper.config import default_config_path, load_config
 from dailywallpaper.logging_setup import setup_logging
 
 
-def main(argv=None, app_factory=None, run_gui=None) -> int:
+INSTANCE_NAME = "DailyWallpaper"
+
+
+def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
     parser = argparse.ArgumentParser(prog="dailywallpaper")
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--once", action="store_true")
@@ -35,7 +38,7 @@ def main(argv=None, app_factory=None, run_gui=None) -> int:
 
         app_factory = build_application
 
-    with SingleInstance("DailyWallpaper"):
+    with SingleInstance(instance_name or INSTANCE_NAME):
         application = app_factory(cfg)
         if args.once:
             return application.run_once(dry_run=args.dry_run)

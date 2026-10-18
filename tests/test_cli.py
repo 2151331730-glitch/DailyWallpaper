@@ -2,6 +2,8 @@
 import logging
 import uuid
 
+INSTANCE = "DailyWallpaperTest_" + uuid.uuid4().hex[:8]
+
 import pytest
 
 from dailywallpaper.__main__ import main
@@ -53,7 +55,7 @@ def test_cli_once_runs_a_single_tick(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    code = main(["--config", str(cfg), "--once"], app_factory=lambda c: _App(calls))
+    code = main(["--config", str(cfg), "--once"], app_factory=lambda c: _App(calls), instance_name=INSTANCE)
 
     assert code == 0
     assert calls == [("once", False)]
@@ -63,7 +65,7 @@ def test_cli_dry_run_is_forwarded(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg), "--once", "--dry-run"], app_factory=lambda c: _App(calls))
+    main(["--config", str(cfg), "--once", "--dry-run"], app_factory=lambda c: _App(calls), instance_name=INSTANCE)
 
     assert calls == [("once", True)]
 
@@ -72,7 +74,7 @@ def test_cli_headless_runs_forever(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg), "--headless"], app_factory=lambda c: _App(calls))
+    main(["--config", str(cfg), "--headless"], app_factory=lambda c: _App(calls), instance_name=INSTANCE)
 
     assert calls == [("forever", None)]
 
@@ -135,7 +137,7 @@ def test_cli_headless_flag_skips_the_gui(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg), "--once", "--headless"], app_factory=lambda c: _App(calls))
+    main(["--config", str(cfg), "--once", "--headless"], app_factory=lambda c: _App(calls), instance_name=INSTANCE)
 
     assert calls == [("once", False)]
 
@@ -144,7 +146,7 @@ def test_cli_runs_the_gui_when_not_headless(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    code = main(["--config", str(cfg)], app_factory=lambda c: _App(calls), run_gui=lambda cfg, path: 0)
+    code = main(["--config", str(cfg)], app_factory=lambda c: _App(calls), instance_name=INSTANCE, run_gui=lambda cfg, path: 0)
 
     assert code == 0
     assert calls == []
@@ -154,7 +156,7 @@ def test_dry_run_without_once_runs_exactly_one_dry_tick(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg), "--dry-run"], app_factory=lambda c: _App(calls), run_gui=lambda cfg, path: 0)
+    main(["--config", str(cfg), "--dry-run"], app_factory=lambda c: _App(calls), instance_name=INSTANCE, run_gui=lambda cfg, path: 0)
 
     assert calls == [("once", True)]
 
@@ -163,6 +165,6 @@ def test_dry_run_with_headless_does_not_loop_real_applies(tmp_path):
     calls = []
     cfg = _config(tmp_path)
 
-    main(["--config", str(cfg), "--headless", "--dry-run"], app_factory=lambda c: _App(calls), run_gui=lambda cfg, path: 0)
+    main(["--config", str(cfg), "--headless", "--dry-run"], app_factory=lambda c: _App(calls), instance_name=INSTANCE, run_gui=lambda cfg, path: 0)
 
     assert calls == [("once", True)]
