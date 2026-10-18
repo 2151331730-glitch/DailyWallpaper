@@ -1,14 +1,18 @@
 # src/dailywallpaper/analysis/vision.py
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 import time
 from pathlib import Path
 
-from .prompts import SYSTEM_PROMPT
+from dailywallpaper.cost.ledger import AnalysisRecord, estimate_cost, record_usage
+from dailywallpaper.db import now_iso
+
+from .prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
 KEYRING_SERVICE = "DailyWallpaper"
 KEYRING_ACCOUNT = "zhipu"
+RETRY_INSTRUCTION = "Return valid JSON only; style_tags must have at least one item."
 
 
 def save_key(key: str) -> None:
@@ -142,9 +146,14 @@ class ZhipuVision:
         from openai import OpenAI
         self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
 
-    def analyze(self, image_path: Path, model: str) -> VisionCallResult:
+    def analyze(
+        self, image_path: Path, model: str, extra_instruction: str = ""
+    ) -> VisionCallResult:
         import base64
         b64 = base64.b64encode(image_path.read_bytes()).decode()
+        system_prompt = (
+            f"{SYSTEM_PROMPT}\n{extra_instruction}" if extra_instruction else SYSTEM_PROMPT
+        )
         started = time.monotonic()
         resp = self.client.chat.completions.create(
             model=model,
@@ -156,7 +165,7 @@ class ZhipuVision:
             # leaves the budget for the JSON answer.
             extra_body={"thinking": {"type": "disabled"}},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                     {"type": "text", "text": "Score this wallpaper and return JSON."},
@@ -181,3 +190,132 @@ class ZhipuVision:
             latency_ms=int((time.monotonic() - started) * 1000),
             reasoning_tokens=reasoning_tokens,
         )
+
+
+CACHE_HIT_PURPOSE = "screen"
+ESTIMATE_CNY = 0.003
+
+
+class VisionClient:
+    """Cache-aware wrapper around a vision provider.
+
+    One paid call per (image_hash, model, prompt_version). Seeing the same
+    image again links the existing analysis to the new wallpaper and records
+    a zero-cost cache hit instead of paying twice.
+    """
+
+    def __init__(self, provider, conn, pricing, budget=None, max_output_tokens: int = 500):
+        self.provider = provider
+        self.conn = conn
+        self.pricing = pricing
+        self.budget = budget
+        self.max_output_tokens = max_output_tokens
+
+    def _cached(self, row, wallpaper_id: int, model: str) -> AnalysisRecord:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+            " VALUES(?,?,?)",
+            (wallpaper_id, row["id"], now_iso()),
+        )
+        self.conn.commit()
+        record_usage(
+            self.conn,
+            provider="zhipu",
+            model=model,
+            purpose=CACHE_HIT_PURPOSE,
+            tokens_in=0,
+            tokens_out=0,
+            cost_cny=0.0,
+            estimated=0,
+            cache_hit=1,
+            status_code=0,
+            latency_ms=0,
+        )
+        # cost_cny on the record means "what this call cost", so a cache hit is 0.
+        return replace(AnalysisRecord.from_row(row, cached=True), cost_cny=0.0)
+
+    def analyze_or_cache(
+        self, wallpaper_id: int, image_hash: str, image_path: Path, model: str
+    ) -> AnalysisRecord:
+        row = self.conn.execute(
+            "SELECT * FROM analyses WHERE image_hash=? AND model=? AND prompt_version=?",
+            (image_hash, model, PROMPT_VERSION),
+        ).fetchone()
+        if row:
+            return self._cached(row, wallpaper_id, model)
+
+        usage_id = None
+        if self.budget:
+            usage_id = self.budget.prewrite_estimate(
+                provider="zhipu", model=model, purpose=CACHE_HIT_PURPOSE, estimate=ESTIMATE_CNY
+            )
+        try:
+            try:
+                result = self.provider.analyze(image_path, model)
+            except VisionError:
+                result = self.provider.analyze(
+                    image_path, model, extra_instruction=RETRY_INSTRUCTION
+                )
+        except Exception:
+            if self.budget and usage_id is not None:
+                self.budget.settle_usage(usage_id, 0, 0, 0.0, 500, 0)
+            raise
+
+        cost = estimate_cost(result.tokens_in, self.max_output_tokens, self.pricing[model])
+        scores = result.scores
+        cursor = self.conn.execute(
+            """
+            INSERT INTO analyses(model,prompt_version,image_hash,scores_json,quality,creativity,
+              novelty,formulaic,nsfw,style_tags_json,mood_tags_json,palette_json,
+              tokens_in,tokens_out,cost_cny,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                model,
+                PROMPT_VERSION,
+                image_hash,
+                json.dumps(scores.__dict__, ensure_ascii=False),
+                scores.quality,
+                scores.creativity,
+                scores.novelty,
+                scores.formulaic,
+                int(scores.nsfw),
+                json.dumps(scores.style_tags),
+                json.dumps(scores.mood_tags),
+                json.dumps(scores.palette),
+                result.tokens_in,
+                result.tokens_out,
+                cost,
+                now_iso(),
+            ),
+        )
+        analysis_id = int(cursor.lastrowid)
+        self.conn.execute(
+            "INSERT INTO wallpaper_analyses(wallpaper_id,analysis_id,created_at) VALUES(?,?,?)",
+            (wallpaper_id, analysis_id, now_iso()),
+        )
+        self.conn.commit()
+
+        record_usage(
+            self.conn,
+            provider="zhipu",
+            model=model,
+            purpose=CACHE_HIT_PURPOSE,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            cost_cny=cost,
+            estimated=0,
+            cache_hit=0,
+            status_code=200,
+            latency_ms=result.latency_ms,
+        )
+
+        if self.budget and usage_id is not None:
+            self.budget.settle_usage(
+                usage_id, result.tokens_in, result.tokens_out, cost, 200, result.latency_ms
+            )
+
+        stored = self.conn.execute(
+            "SELECT * FROM analyses WHERE id=?", (analysis_id,)
+        ).fetchone()
+        return AnalysisRecord.from_row(stored)
