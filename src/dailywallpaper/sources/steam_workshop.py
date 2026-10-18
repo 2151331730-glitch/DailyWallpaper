@@ -39,6 +39,9 @@ class SteamWorkshopClient:
             "days": days,
             "return_short_description": "true",
             "return_metadata": "true",
+            # Tags are omitted unless asked for; without them the mature
+            # filter and the scene/video split silently do nothing.
+            "return_tags": "true",
         }
         response = self.session.get(self.url, params=params, timeout=self.timeout)
         response.raise_for_status()

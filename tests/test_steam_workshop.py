@@ -120,6 +120,9 @@ def test_client_parses_publishedfiledetails():
     call = session.calls[0]
     assert call["params"]["appid"] == 431960
     assert call["params"]["key"] == "KEY"
+    # Without return_tags Steam omits the tags array entirely, which would
+    # silently disable the mature filter and the video detection.
+    assert call["params"]["return_tags"] == "true"
 
 
 def test_client_rejects_a_malformed_payload():

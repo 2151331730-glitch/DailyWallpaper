@@ -181,3 +181,84 @@ def test_a_missing_cache_directory_is_not_an_error(tmp_path):
     prefetcher = _prefetcher(tmp_path, FakeSteamCmd(root))
 
     assert prefetcher.run_once() == []
+
+
+def test_the_best_ranked_item_survives_eviction(tmp_path):
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    _remote(conn, "222", 70, root)
+    for file_id in ("111", "222"):
+        folder = root / file_id
+        folder.mkdir(parents=True)
+        (folder / "project.json").write_text("{}", encoding="utf-8")
+        (folder / "blob.bin").write_bytes(b"x" * 2048)
+    prefetcher = _prefetcher(tmp_path, FakeSteamCmd(root), top_n=1, max_cache_gb=0.000001)
+
+    prefetcher.run_once()
+
+    assert (root / "111" / "project.json").is_file()
+    assert not (root / "222").exists()
+
+
+def test_setup_ready_needs_both_account_and_steamcmd(tmp_path):
+    from dataclasses import replace
+
+    from dailywallpaper.config import SteamWorkshopSection
+    from dailywallpaper.steam_prefetch import setup_ready
+
+    cfg = _config_for(tmp_path)
+    assert setup_ready(cfg) is False
+
+    cmd = tmp_path / "steamcmd.exe"
+    cmd.write_bytes(b"x")
+    with_cmd = replace(
+        cfg,
+        steam_workshop=replace(cfg.steam_workshop, steamcmd_path=str(cmd)),
+    )
+    assert setup_ready(with_cmd) is False
+
+    with_account = replace(
+        cfg, steam_workshop=replace(cfg.steam_workshop, steam_account="me")
+    )
+    assert setup_ready(with_account) is False
+
+    both = replace(
+        with_account,
+        steam_workshop=replace(with_account.steam_workshop, steamcmd_path=str(cmd)),
+    )
+    assert setup_ready(both) is True
+
+
+def _config_for(tmp_path):
+    from dailywallpaper.config import (
+        AppSection, BudgetSection, Config, RetentionSection, SourcesSection,
+        SteamWorkshopSection, ToolsSection, VisionSection,
+        WallpaperEngineSection, WallpaperSection, WeatherSection,
+    )
+
+    return Config(
+        AppSection(data_dir=str(tmp_path)), SourcesSection(), VisionSection(),
+        BudgetSection(), WeatherSection(), WallpaperSection(),
+        WallpaperEngineSection(), ToolsSection(), RetentionSection(),
+        SteamWorkshopSection(enabled=True),
+    )
+
+
+def test_a_timeout_does_not_abort_the_pass(tmp_path):
+    import subprocess
+
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    _remote(conn, "222", 70, root)
+
+    class _Timeout(FakeSteamCmd):
+        def download_item(self, account, file_id, install_dir):
+            if file_id == "111":
+                raise subprocess.TimeoutExpired("steamcmd", 1800)
+            return super().download_item(account, file_id, install_dir)
+
+    prefetcher = _prefetcher(tmp_path, _Timeout(root))
+
+    assert prefetcher.run_once() == ["222"]

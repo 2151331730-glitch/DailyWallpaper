@@ -482,8 +482,16 @@ def build_pipeline(cfg, conn):
     if root is not None and root.exists():
         sources.append(WorkshopSource(root, allow_mature=cfg.sources.allow_mature))
     if cfg.steam_workshop.enabled:
+        from dailywallpaper.steam_prefetch import setup_ready
+
         steam_key = keyring.get_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT)
-        if not steam_key:
+        if not setup_ready(cfg):
+            # Without an account and SteamCMD every online candidate would be
+            # scored and then dropped as not-ready; do not spend the quota.
+            logger.warning(
+                "steam workshop needs steam_account and steamcmd; source disabled"
+            )
+        elif not steam_key:
             logger.warning(
                 "steam workshop is on but has no API key; run scripts/set_steam_key.py"
             )

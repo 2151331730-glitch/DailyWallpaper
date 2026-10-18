@@ -31,8 +31,15 @@ class SteamCmd:
             [str(self.exe), *args],
             capture_output=True,
             text=True,
+            # SteamCMD's output is not guaranteed to be UTF-8; never let a
+            # stray byte take the prefetch thread down on a Chinese system.
+            encoding="utf-8",
+            errors="replace",
             timeout=self.timeout,
             stdin=subprocess.DEVNULL,
+            # pythonw has no console; without this a console window would
+            # flash on screen for the whole download.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
     def download_item(self, account: str, file_id: str, install_dir: Path) -> Path:

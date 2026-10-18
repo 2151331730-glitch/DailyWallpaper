@@ -458,3 +458,90 @@ def test_startup_failure_is_reported_not_raised(tmp_path):
     service = ApplyService(conn, _FakeApplier(ok=False), we=_FakeWe())
 
     assert service.ensure_visible() is False
+
+
+def test_an_undo_cancels_a_pending_recheck(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    old = tmp_path / "old.jpg"
+    old.write_bytes(b"x")
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    targets = []
+    service = ApplyService(
+        conn, _FakeApplier(wallpaper=str(old)), we=_FakeWe(),
+        recheck_delays=(5, 30), sleep=lambda s: None, spawn=targets.append,
+    )
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert service.undo_last() is True
+    applied_before = len(service.applier.applied)
+
+    targets[0]()
+
+    assert len(service.applier.applied) == applied_before
+
+
+def test_the_recheck_leaves_a_desktop_that_still_shows_our_image(tmp_path):
+    class _Aware(_FakeApplier):
+        def __init__(self, target):
+            super().__init__()
+            self.target = target
+
+        def current_wallpaper(self):
+            return str(self.target.with_suffix(".apply.jpg"))
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    target = tmp_path / "new.jpg"
+    applier = _Aware(target)
+    service = ApplyService(
+        conn, applier, we=_FakeWe(),
+        recheck_delays=(5, 30), sleep=lambda s: None, spawn=lambda t: t(),
+    )
+
+    assert service.apply(wid, target) is True
+    assert len(applier.applied) == 1
+
+
+def test_startup_does_not_restore_an_undone_wallpaper(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "wall.jpg"
+    image.write_bytes(b"x")
+    previous = tmp_path / "previous.jpg"
+    previous.write_bytes(b"x")
+    conn.execute(
+        "insert into wallpapers(source,source_id,local_path,media_type,created_at)"
+        " values('t','1',?,'image','x')",
+        (str(image),),
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into change_log(change_date,wallpaper_id,previous_wallpaper,"
+        "previous_we_config_json,method,applied_at,success)"
+        " values('2026-10-18',?,?,'{}','static','2020-01-01T00:00:00',1)",
+        (wid, str(previous)),
+    )
+    conn.commit()
+    service = ApplyService(conn, _FakeApplier(wallpaper=str(previous)))
+
+    assert service.undo_last() is True
+    assert service.ensure_visible() is False
+
+
+def test_startup_applies_even_when_we_cannot_be_closed(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "wall.jpg"
+    image.write_bytes(b"x")
+    _logged_wallpaper(conn, image)
+    service = ApplyService(conn, _FakeApplier(), we=_FakeWe(close_ok=False))
+
+    assert service.ensure_visible() is True
+    assert service.applier.applied[-1] == image

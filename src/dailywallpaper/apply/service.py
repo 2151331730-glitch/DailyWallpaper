@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -18,6 +19,10 @@ def _spawn_daemon(target):
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
     return thread
+
+
+def _norm(path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
 
 
 class ApplyService:
@@ -39,6 +44,8 @@ class ApplyService:
         self.recheck_delays = tuple(recheck_delays)
         self.sleep = sleep or time.sleep
         self.spawn = spawn or _spawn_daemon
+        # A newer apply or an undo invalidates any recheck still sleeping.
+        self._epoch = 0
 
     def _change_date(self) -> str:
         # Follow the state machine's clock when one is supplied, so a
@@ -96,16 +103,27 @@ class ApplyService:
         )
         self.conn.commit()
         if method == "static" and self.we is not None and self.recheck_delays:
-            self.spawn(lambda: self._recheck_static(chosen, image_path))
+            self._epoch += 1
+            epoch = self._epoch
+            self.spawn(lambda: self._recheck_static(chosen, image_path, epoch))
         return True
 
-    def _recheck_static(self, applier, image_path: Path) -> None:
+    def _recheck_static(self, applier, image_path: Path, epoch: int) -> None:
         """Put the static wallpaper back if WE took the desktop over."""
         elapsed = 0
+        target = image_path.with_suffix(".apply.jpg")
         for delay in self.recheck_delays:
+            if epoch != self._epoch:
+                return
             try:
                 self.sleep(delay - elapsed)
                 elapsed = delay
+                if epoch != self._epoch:
+                    return
+                # The desktop still shows our image: nothing took it over,
+                # and re-applying would undo whatever the user did meanwhile.
+                if _norm(getattr(applier, "current_wallpaper", lambda: "")()) == _norm(target):
+                    continue
                 if not self.we.current():
                     continue
                 if not self.we.close():
@@ -127,7 +145,7 @@ class ApplyService:
         """
         row = self.conn.execute(
             """
-            select w.local_path, w.media_type
+            select w.local_path, w.media_type, c.applied_at
             from change_log c join wallpapers w on w.id = c.wallpaper_id
             where c.success = 1
             order by c.id desc limit 1
@@ -135,14 +153,22 @@ class ApplyService:
         ).fetchone()
         if row is None or not row[0]:
             return False
+        undo = self.conn.execute(
+            "select value from state where key='last_undo_at'"
+        ).fetchone()
+        if undo is not None and undo[0] >= (row[2] or ""):
+            # The user undid that change; bringing it back at login would be
+            # a regression, not a rescue.
+            return False
         if row[1] in ("scene", "video"):
             # WE owns the desktop; do not start it on its own (spec 9.2).
             return False
         try:
             if self.we is not None and self.we.current():
                 if not self.we.close():
-                    logger.warning("startup: WE did not close; desktop left alone")
-                    return False
+                    # WE is not running yet (the control channel is dead);
+                    # at login that is normal, so put the wallpaper back anyway.
+                    logger.warning("startup: WE did not close; applying anyway")
             result = self.applier.apply(Path(row[0]))
             if not result.ok:
                 logger.warning(f"startup re-apply failed: {result.error}")
@@ -152,6 +178,7 @@ class ApplyService:
             return False
 
     def undo_last(self) -> bool:
+        self._epoch += 1  # a pending recheck must not restore what we undo
         row = self.conn.execute(
             "SELECT * FROM change_log WHERE success=1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -165,7 +192,10 @@ class ApplyService:
             previous_we = ""
 
         if self.we and previous_we:
-            return bool(self.we.open(Path(previous_we)))
+            if not self.we.open(Path(previous_we)):
+                return False
+            self._mark_undo()
+            return True
 
         if not Path(row["previous_wallpaper"]).exists():
             return False
@@ -178,4 +208,12 @@ class ApplyService:
                 tile=current.tile,
             )
         )
+        self._mark_undo()
         return True
+
+    def _mark_undo(self) -> None:
+        self.conn.execute(
+            "insert or replace into state(key,value) values('last_undo_at',?)",
+            (now_iso(),),
+        )
+        self.conn.commit()

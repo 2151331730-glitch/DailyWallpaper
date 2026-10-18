@@ -25,7 +25,7 @@ class SpiLike(Protocol):
 
 class BackgroundTypeLike(Protocol):
     def get(self) -> int | None: ...
-    def set_picture(self) -> bool: ...
+    def set(self, mode: int) -> bool: ...
 
 class Win32BackgroundType:
     """Read/write the Windows slideshow/Spotlight switch (spec 9.1)."""
@@ -42,15 +42,18 @@ class Win32BackgroundType:
             # Missing key: plain picture mode has nothing to switch.
             return None
 
-    def set_picture(self) -> bool:
+    def set(self, mode: int) -> bool:
         try:
             with winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER, self.KEY, 0, winreg.KEY_SET_VALUE
             ) as k:
-                winreg.SetValueEx(k, self.VALUE, 0, winreg.REG_DWORD, 0)
+                winreg.SetValueEx(k, self.VALUE, 0, winreg.REG_DWORD, int(mode))
             return True
         except OSError:
             return False
+
+    def set_picture(self) -> bool:
+        return self.set(0)
 
 class Win32Registry:
     KEY = r"Control Panel\Desktop"
@@ -114,7 +117,7 @@ class WindowsStaticApplier:
         mode = self.background_type.get()
         if mode in (None, 0):
             return ""
-        if self.background_type.set_picture():
+        if self.background_type.set(0):
             return ""
         return (
             "当前桌面不是“图片”模式（幻灯片/Spotlight/纯色），无法自动切回，"
@@ -129,6 +132,8 @@ class WindowsStaticApplier:
         )
 
     def apply(self, image: Path, style: str = "fill") -> ApplyResult:
+        # Remember the mode so a failed apply can undo the mode switch too.
+        previous_mode = self.background_type.get() if self.background_type else None
         refusal = self._leave_slideshow_mode()
         if refusal:
             return ApplyResult(ok=False, error=refusal)
@@ -145,8 +150,14 @@ class WindowsStaticApplier:
                 raise OSError("wallpaper verification failed")
             return ApplyResult(ok=True)
         except Exception as exc:
+            self._restore_mode(previous_mode)
             self.restore(state)
             return ApplyResult(ok=False, error=str(exc))
+
+    def _restore_mode(self, mode: int | None) -> None:
+        if self.background_type is None or mode in (None, 0):
+            return
+        self.background_type.set(mode)
 
     def restore(self, state: WallpaperState) -> None:
         self.registry.set("WallpaperStyle", state.style)

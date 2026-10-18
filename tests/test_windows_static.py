@@ -34,11 +34,14 @@ class FakeBackground:
     def get(self):
         return self.mode
 
-    def set_picture(self):
+    def set(self, mode):
         self.switches += 1
         if self.switch_ok:
-            self.mode = 0
+            self.mode = mode
         return self.switch_ok
+
+    def set_picture(self):
+        return self.set(0)
 
 
 class AbsolutePathSpi(FakeSpi):
@@ -158,3 +161,15 @@ def test_a_missing_background_type_key_is_left_alone(tmp_path):
 
     assert applier.apply(img).ok
     assert bg.switches == 0
+
+
+def test_a_failed_apply_restores_the_background_mode(tmp_path):
+    img = tmp_path / "wall.jpg"
+    Image.new("RGB", (2560, 1440), (10, 20, 30)).save(img)
+    bg = FakeBackground(2)
+    applier = WindowsStaticApplier(FakeSpi(fail=True), FakeRegistry(), background_type=bg)
+
+    result = applier.apply(img)
+
+    assert not result.ok
+    assert bg.mode == 2  # the slideshow the user had is back

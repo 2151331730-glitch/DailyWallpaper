@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from dailywallpaper.steamcmd import SteamCmd, SteamCmdError
+from dailywallpaper.steamcmd import SteamCmd
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,10 @@ class Prefetcher:
                 """,
                 (CANDIDATE_WINDOW,),
             ).fetchall()
+            # The items we would prefetch next must survive eviction, or the
+            # cache thrashes: best-ranked is downloaded first, then evicted
+            # as the oldest, then downloaded again.
+            protected = {str(row["source_id"]) for row in rows[: max(1, self.top_n)]}
             downloaded = []
             for row in rows:
                 if len(downloaded) >= self.top_n:
@@ -67,9 +71,11 @@ class Prefetcher:
                     self._install(Path(project).parent, file_id)
                     downloaded.append(file_id)
                     logger.info(f"steam workshop prefetch: {file_id} ready")
-                except SteamCmdError as exc:
+                except Exception as exc:
+                    # One bad item (timeout, missing exe, disk error) must not
+                    # cost the rest of the pass.
                     logger.warning(f"steam workshop prefetch {file_id} failed: {exc}")
-            self._evict(conn)
+            self._evict(conn, protected)
             return downloaded
         finally:
             conn.close()
@@ -81,7 +87,7 @@ class Prefetcher:
         self.download_root.mkdir(parents=True, exist_ok=True)
         shutil.move(str(item_dir), str(dest))
 
-    def _evict(self, conn) -> None:
+    def _evict(self, conn, protected_ids=()) -> None:
         """Keep the cache under max_cache_gb, newest items first."""
         if not self.download_root.is_dir():
             return
@@ -99,7 +105,7 @@ class Prefetcher:
         for _, size, folder in sorted(entries):
             if total <= limit:
                 break
-            if folder == protected:
+            if folder == protected or folder.name in protected_ids:
                 continue
             shutil.rmtree(folder, ignore_errors=True)
             total -= size
@@ -142,6 +148,14 @@ def steamcmd_path(cfg) -> Path | None:
         return candidate
     found = shutil.which("steamcmd")
     return Path(found) if found else None
+
+
+def setup_ready(cfg) -> bool:
+    """True when an online candidate could actually be downloaded today."""
+    return (
+        bool(str(cfg.steam_workshop.steam_account or "").strip())
+        and steamcmd_path(cfg) is not None
+    )
 
 
 def build_prefetcher(cfg, conn_factory):
