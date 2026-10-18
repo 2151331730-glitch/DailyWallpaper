@@ -26,6 +26,7 @@ class Candidate:
     file_size: int
     tags: list[str]
     raw: dict
+    content_rating: str = ""
 
 
 class SourceError(RuntimeError):
