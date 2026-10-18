@@ -107,3 +107,13 @@ def test_download_leaves_no_partial_file_on_oversize(tmp_path):
 
     assert not dest.exists()
     assert list(tmp_path.glob("*.part")) == []
+
+
+def test_canonicalize_leaves_no_temp_file_behind(tmp_path):
+    src = tmp_path / "big.png"
+    Image.new("RGB", (800, 600), "white").save(src)
+    out = tmp_path / "out"
+
+    canonicalize(src, out)
+
+    assert list(out.glob("tmp*")) == []

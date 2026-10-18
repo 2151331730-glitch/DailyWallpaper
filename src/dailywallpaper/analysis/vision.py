@@ -57,6 +57,7 @@ class VisionCallResult:
 REQUIRED = {"quality","creativity","novelty","formulaic","nsfw","watermark",
             "text_overlay","style_tags","mood_tags","palette","subject","reason"}
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+MAX_TAG_LENGTH = 64
 
 def _as_tags(value) -> list[str]:
     """Coerce a tag field to a list.
@@ -67,8 +68,12 @@ def _as_tags(value) -> list[str]:
     if isinstance(value, str):
         return [part.strip().lower() for part in value.split(",") if part.strip()]
     if isinstance(value, list):
-        return value
-    raise VisionError("tags must be a list or a comma-separated string")
+        items = value
+    else:
+        raise VisionError("tags must be a list or a comma-separated string")
+    if any(isinstance(item, str) and len(item) > MAX_TAG_LENGTH for item in items):
+        raise VisionError("tag is too long")
+    return items
 
 
 def _as_palette(value) -> list[str]:

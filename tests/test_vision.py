@@ -244,3 +244,11 @@ def test_zhipu_analyze_records_reasoning_tokens(tmp_path):
     result = provider.analyze(image, "glm-test")
 
     assert result.reasoning_tokens == 7
+
+
+def test_overlong_tag_is_rejected():
+    payload = load("vision_ok.json")
+    payload["style_tags"] = ["a" * 200]
+
+    with pytest.raises(VisionError):
+        validate_scores(payload)
