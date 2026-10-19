@@ -28,7 +28,13 @@ class RedactFilter(logging.Filter):
     """Scrub credentials out of a record before anything writes it."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact(str(record.msg))
+        # Interpolate first: setting args = () without formatting leaves
+        # "%s" placeholders in the file and throws the values away.
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg)
+        record.msg = redact(message)
         record.args = ()
         return True
 
@@ -46,6 +52,8 @@ def setup_logging(data_dir, level: str = "INFO", max_mb: int = 5, backups: int =
     logging.basicConfig(
         level=getattr(logging, str(level).upper(), logging.INFO),
         handlers=[handler],
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
         force=True,
     )
     return log_dir / "app.log"

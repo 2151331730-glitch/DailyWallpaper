@@ -41,6 +41,21 @@ def test_redacts_secrets_written_to_the_log(tmp_path):
     assert "Bearer xyz" not in text
 
 
+def test_log_lines_keep_their_args_and_carry_a_timestamp(tmp_path):
+    import re
+
+    setup_logging(tmp_path, "INFO", 5, 5)
+    logging.getLogger("test").info("value %s", 42)
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    lines = (tmp_path / "logs" / "app.log").read_text(encoding="utf-8").splitlines()
+
+    assert any("value 42" in line for line in lines)
+    assert not any("value %s" in line for line in lines)
+    assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", lines[-1])
+
+
 class _App:
     def __init__(self, calls):
         self.calls = calls
