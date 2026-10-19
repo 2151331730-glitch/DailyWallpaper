@@ -32,7 +32,15 @@ def video_contact_sheet(video: Path, dest: Path, ffmpeg: str = "ffmpeg") -> Path
     Sampling by rate rather than by timestamp keeps the command deterministic
     without first probing the duration; a very short clip simply yields fewer
     frames in the sheet.
+
+    A sheet that is at least as new as the clip is reused: decoding a 4K video
+    takes seconds, and every prepare pass would otherwise pay it again.
     """
+    try:
+        if dest.is_file() and dest.stat().st_mtime >= video.stat().st_mtime:
+            return dest
+    except OSError:
+        pass
     dest.parent.mkdir(parents=True, exist_ok=True)
     filters = (
         f"fps=1/{FRAME_INTERVAL},scale=-1:{THUMB_HEIGHT},"

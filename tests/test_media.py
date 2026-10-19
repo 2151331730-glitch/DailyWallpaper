@@ -45,6 +45,31 @@ def test_video_contact_sheet_calls_ffmpeg_with_a_tile_filter(tmp_path):
     assert any("tile=3x1" in arg for arg in calls[0])
 
 
+def test_video_contact_sheet_reuses_an_existing_sheet(tmp_path):
+    import os
+
+    import dailywallpaper.analysis.media as media
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video")
+    sheet = tmp_path / "sheet.jpg"
+    sheet.write_bytes(b"cached")
+    # The sheet is newer than the video, so ffmpeg must not run again.
+    now = sheet.stat().st_mtime
+    os.utime(video, (now - 60, now - 60))
+
+    def explode(*args, **kwargs):
+        raise AssertionError("ffmpeg should not run for a fresh sheet")
+
+    original = media.subprocess.run
+    media.subprocess.run = explode
+    try:
+        assert video_contact_sheet(video, sheet) == sheet
+    finally:
+        media.subprocess.run = original
+    assert sheet.read_bytes() == b"cached"
+
+
 def test_video_contact_sheet_raises_on_ffmpeg_failure(tmp_path):
     class _Result:
         returncode = 1
