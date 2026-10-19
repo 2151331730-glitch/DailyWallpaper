@@ -85,7 +85,7 @@ class TrayIcon(QSystemTrayIcon):
         if accepted is False:
             self.notify("换一张", "上一次更换还没结束，这次点击已忽略")
         elif accepted is True:
-            self.notify("换一张", "已开始准备候选，可能需要几分钟")
+            self.notify("换一张", "正在挑选并更换，请稍候")
         self.refresh()
 
     def _undo(self):

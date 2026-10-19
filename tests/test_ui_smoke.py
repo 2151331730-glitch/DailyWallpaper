@@ -220,6 +220,37 @@ def test_worker_ticks_once_on_start_with_its_own_machine():
         worker.stop()
 
 
+def test_worker_warms_the_shortlist_after_the_startup_tick():
+    import threading
+    from datetime import datetime
+
+    from dailywallpaper.ui.worker import Worker
+
+    warmed = threading.Event()
+
+    class _Pipeline:
+        def prepare(self, now):
+            warmed.set()
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 19, 12, 0)
+
+    class _M:
+        pipeline = _Pipeline()
+        clock = _Clock()
+
+        def tick(self, dry_run=False, manual=False):
+            pass
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker.start()
+    try:
+        assert warmed.wait(2) is True
+    finally:
+        worker.stop()
+
+
 def test_worker_ignores_a_second_manual_request_while_busy():
     from dailywallpaper.ui.worker import Worker
 

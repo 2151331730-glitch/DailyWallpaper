@@ -47,6 +47,7 @@ class Worker:
         self._maybe_cleanup()
         self._ensure_visible()
         self._tick_once()
+        self._warm_shortlist()
         while True:
             manual = self._wait_for_work()
             if manual is None:  # stopped
@@ -93,6 +94,23 @@ class Worker:
             service.ensure_visible()
         except Exception as exc:  # startup must never kill the tick thread
             logger.warning(f"startup wallpaper check failed: {exc}")
+
+    def _warm_shortlist(self) -> None:
+        """Build today's candidate pool before anyone asks for it.
+
+        A tick that finds the day already changed returns without preparing,
+        so the next "换一张" had to pay the whole fetch + ffmpeg + vision cost
+        on the click. Warming here (prepare is once-per-day in memory) makes
+        that click pick from a ready shortlist.
+        """
+        pipeline = getattr(self._machine, "pipeline", None)
+        clock = getattr(self._machine, "clock", None)
+        if pipeline is None or clock is None:
+            return
+        try:
+            pipeline.prepare(clock.now())
+        except Exception as exc:  # warming must never kill the tick thread
+            logger.warning(f"shortlist warm-up failed: {exc}")
 
     def _tick_once(self, manual: bool = False) -> None:
         try:
