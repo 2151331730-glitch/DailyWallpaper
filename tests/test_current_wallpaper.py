@@ -204,3 +204,23 @@ def test_a_folder_with_two_rows_prefers_the_newest_decision(tmp_path):
     service = ApplyService(conn, _Applier(), we=_We(str(folder / "v.mp4")))
 
     assert service.current_wallpaper_id() == new
+
+
+def test_the_we_match_cache_refreshes_when_the_table_changes(tmp_path):
+    conn = _db(tmp_path)
+    folder = tmp_path / "workshop" / "42"
+    first = _wallpaper(
+        conn, source="we_workshop", source_id="42-old",
+        file_url=str(folder / "project.json"), media_type="video",
+    )
+    service = ApplyService(conn, _Applier(), we=_We(str(folder / "v.mp4")))
+
+    assert service._match_we(str(folder / "v.mp4")) == first
+
+    second = _wallpaper(
+        conn, source="steam_workshop", source_id="42-new",
+        file_url=str(folder / "project.json"), media_type="video",
+    )
+    _decision(conn, second)
+
+    assert service._match_we(str(folder / "v.mp4")) == second

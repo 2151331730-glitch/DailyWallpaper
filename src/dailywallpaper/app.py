@@ -829,6 +829,19 @@ class RealPipeline:
     def pick(self, now, dry_run: bool = False):
         if not self.shortlist:
             return None
+        # The pool is prepared before the click, and a rating can land in
+        # between: "rated 1" must win over a stale shortlist entry.
+        banned = {
+            int(row[0])
+            for row in self.conn.execute(
+                "select wallpaper_id from ratings where rating <= ?",
+                (BANNED_MAX_RATING,),
+            ).fetchall()
+        }
+        while self.shortlist and self.shortlist[0].wallpaper_id in banned:
+            self.shortlist.pop(0)
+        if not self.shortlist:
+            return None
         decision = self.shortlist.pop(0)
         if not decision.ready:
             # Defensive: prepare() filters these out; never apply a preview.

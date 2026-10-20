@@ -1369,3 +1369,28 @@ def test_downloaded_steam_items_survive_a_dead_workshop_api(tmp_path):
     pipeline.prepare(clock.now())
 
     assert any(decision.wallpaper_id == wid for decision in pipeline.shortlist)
+
+
+def test_a_one_star_rating_drops_an_already_prepared_pick(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source(_candidates())], vision, budget
+    )
+    pipeline.prepare(clock.now())
+    top = pipeline.shortlist[0].wallpaper_id
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,comment,derived_tags_json,"
+        "created_at) values(?,1,'糖水','[]','2026-10-18T10:00:00')",
+        (top,),
+    )
+    conn.commit()
+
+    picked = pipeline.pick(clock.now())
+
+    assert picked is not None
+    assert picked.wallpaper_id != top

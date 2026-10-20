@@ -62,6 +62,8 @@ class ApplyService:
         # rendering() in tests).
         self.we_rendering = we_rendering or self._default_we_rendering
         self._last_dynamic_attempt = 0.0
+        # (kind, current path, table stamp) -> wallpaper id, for the 2 s poll
+        self._match_cache: dict[tuple, int | None] = {}
         # Decoding a 4K image costs ~0.1 s and never changes for one file;
         # the next pick is pre-warmed so a click stays instant.
         self._inspections: dict[tuple[str, float], bool] = {}
@@ -164,16 +166,34 @@ class ApplyService:
         except (ValueError, TypeError):
             return False
 
+    def _table_stamp(self) -> tuple[int, int]:
+        """Cheap fingerprint of the wallpapers table for the match cache."""
+        row = self.conn.execute(
+            "select count(*), coalesce(max(id), 0) from wallpapers"
+        ).fetchone()
+        return (int(row[0]), int(row[1]))
+
     def _match_we(self, current: str) -> int | None:
         """Match WE's live file by project folder.
 
         A project.json target resolves to a sibling scene.pkg or video, so
-        the file names differ; the folder is the stable identity.
+        the file names differ; the folder is the stable identity. The scan
+        runs Path.resolve() per row, so the answer is memoised until the
+        table changes; the visible window polls this every two seconds.
         """
         try:
             parent = Path(current).parent.resolve()
         except (OSError, ValueError):
             return None
+        stamp = self._table_stamp()
+        key = ("we", current, stamp)
+        if key in self._match_cache:
+            return self._match_cache[key]
+        found = self._scan_we(parent)
+        self._match_cache = {key: found}
+        return found
+
+    def _scan_we(self, parent: Path) -> int | None:
         rows = self.conn.execute(
             "select id, file_url, local_path from wallpapers"
         ).fetchall()

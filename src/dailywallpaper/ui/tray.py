@@ -185,8 +185,10 @@ class TrayIcon(QSystemTrayIcon):
             self.service.resume()
         self.refresh()
 
-    def refresh(self) -> None:
-        snapshot = self.service.snapshot()
+    def refresh(self, snapshot=None) -> None:
+        # The shell polls every 2 s and already has a snapshot; asking the
+        # service twice per poll was two extra queries for nothing.
+        snapshot = snapshot or self.service.snapshot()
         self.change_action.setEnabled(snapshot.can_change)
         self.pause_action.setText("恢复自动更换" if snapshot.paused else "暂停自动更换")
         self.pause_action.setMenu(None if snapshot.paused else self.pause_menu)

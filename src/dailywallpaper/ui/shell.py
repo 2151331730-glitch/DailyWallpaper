@@ -74,14 +74,15 @@ class UiShell:
         # window is refreshed on show instead.
         if self.window.isVisible():
             self.window.refresh()
-        self.tray.refresh()
+        snapshot = self.service.snapshot()
+        self.tray.refresh(snapshot)
         self._announce_manual_result()
         today = self.service.clock.now().date().isoformat()
         if self.worker is not None and self.worker.busy():
             self.tray.set_state("busy")
         elif getattr(self.worker, "last_action", "") in ("apply_failed", "tick_failed"):
             self.tray.set_state("error")
-        elif self.service.snapshot().today_changed:
+        elif snapshot.today_changed:
             self.tray.set_state("changed")
             if self._notified_for != today:
                 self._notified_for = today
