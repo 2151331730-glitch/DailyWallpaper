@@ -58,6 +58,27 @@ def test_final_is_55_45_of_explore_and_personalize():
     assert result.final == pytest.approx(0.55 * result.explore + 0.45 * result.personalize)
 
 
+def test_a_formulaic_image_is_ranked_down_not_just_gated():
+    original = final_score(_scores(formulaic=20), "wallhaven", _Profile(n=10), [], 0)
+    cliche = final_score(_scores(formulaic=60), "wallhaven", _Profile(n=10), [], 0)
+
+    assert cliche.final < original.final
+    assert original.final - cliche.final == pytest.approx(0.5 * (60 - 20))
+
+
+def test_personalize_reads_mood_as_well_as_style():
+    seen = []
+
+    class _Recording(_Profile):
+        def tag_affinity(self, tags):
+            seen.extend(tags)
+            return 50.0
+
+    final_score(_scores(), "wallhaven", _Recording(n=10), [], 0)
+
+    assert seen == ["landscape", "calm"]
+
+
 def test_cold_start_personalize_is_60():
     result = final_score(_scores(), "wallhaven", _Profile(n=0), [], 0)
 

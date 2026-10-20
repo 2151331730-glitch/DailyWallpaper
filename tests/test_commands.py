@@ -192,7 +192,7 @@ def test_manual_change_bypasses_pause_with_the_real_machine(tmp_path):
     wid = _wallpaper(conn)
 
     class _Pipeline:
-        def prepare(self, now):
+        def prepare(self, now, force=False):
             pass
 
         def pick(self, now, dry_run=False):
@@ -250,3 +250,50 @@ def test_change_now_reports_a_rejected_runner_request(tmp_path):
 
     service.runner = _AcceptedRunner()
     assert service.change_now() is True
+
+
+def test_current_wallpaper_prefers_the_live_desktop(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','2','x')")
+    live = conn.execute("select max(id) from wallpapers").fetchone()[0]
+
+    class _Live:
+        def current_wallpaper_id(self):
+            return live
+
+    service.apply_service = _Live()
+
+    assert service.current_wallpaper_id() == live
+
+
+def test_current_wallpaper_falls_back_to_the_last_applied_change(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+    wid = conn.execute("select min(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into change_log(change_date,wallpaper_id,method,applied_at,success)"
+        " values('2026-10-18',?, 'static','x',1)",
+        (wid,),
+    )
+    conn.commit()
+
+    class _Unknown:
+        def current_wallpaper_id(self):
+            return None
+
+    service.apply_service = _Unknown()
+
+    assert service.current_wallpaper_id() == wid
+
+
+def test_current_wallpaper_falls_back_to_the_newest_decision(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+    wid = conn.execute("select min(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-18',?,70,70,70,'r','applied','x')",
+        (wid,),
+    )
+    conn.commit()
+
+    assert service.current_wallpaper_id() == wid

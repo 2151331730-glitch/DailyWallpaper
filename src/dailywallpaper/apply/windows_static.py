@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 import winreg
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,10 +67,32 @@ class Win32Registry:
 
 class Win32Spi:
     def set_wallpaper(self, path: Path) -> bool:
-        return bool(ctypes.windll.user32.SystemParametersInfoW(
-            SPI_SETDESKWALLPAPER, 0, str(path),
-            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+        """Set the wallpaper without the one-second wait SENDCHANGE costs.
+
+        SPIF_UPDATEINIFILE alone both persists the path and repaints the
+        desktop (Explorer watches the setting); adding SPIF_SENDCHANGE makes
+        the call wait for Explorer to finish, which measured ~1.0 s per click.
+        The broadcast is still sent, but from a background thread, as a
+        fallback for shells that need it.
+        """
+        text = str(path)
+        ok = bool(ctypes.windll.user32.SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER, 0, text, SPIF_UPDATEINIFILE,
         ))
+        if ok:
+            threading.Thread(
+                target=self._broadcast, args=(text,), daemon=True
+            ).start()
+        return ok
+
+    @staticmethod
+    def _broadcast(text: str) -> None:
+        try:
+            ctypes.windll.user32.SystemParametersInfoW(
+                SPI_SETDESKWALLPAPER, 0, text, SPIF_SENDCHANGE,
+            )
+        except (AttributeError, OSError):
+            pass
     def get_wallpaper(self) -> str:
         buf = ctypes.create_unicode_buffer(260)
         ok = ctypes.windll.user32.SystemParametersInfoW(
@@ -93,6 +116,13 @@ def _norm_path(path: str | Path) -> str:
 
 def convert_to_jpeg(src: Path, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # Re-encoding a 4K JPEG costs about a second; the converted copy only
+        # changes when the source does.
+        if dest.is_file() and dest.stat().st_mtime >= Path(src).stat().st_mtime:
+            return dest
+    except OSError:
+        pass
     with Image.open(src) as im:
         im.convert("RGB").save(dest, "JPEG", quality=95)
     return dest

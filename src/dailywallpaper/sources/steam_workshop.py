@@ -7,16 +7,59 @@ candidate is *ready* once its ``project.json`` exists under the download root.
 """
 from __future__ import annotations
 
+import html as html_module
+import logging
+import re
 from pathlib import Path
 
 import requests
 
 from .base import Candidate, SourceError
 
+logger = logging.getLogger(__name__)
+
 APP_ID = 431960
 QUERY_URL = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
+# api.steampowered.com drops its TLS handshake from mainland China even with a
+# proxy; the community workshop page loads fine, so it is the fallback.
+BROWSE_URL = "https://steamcommunity.com/workshop/browse/"
 PAGE_URL = "https://steamcommunity.com/sharedfiles/filedetails/?id={}"
 MATURE = {"mature", "questionable"}
+_BROWSE_ID = re.compile(r"filedetails/\?id=(\d+)")
+_BROWSE_IMG = re.compile(r'<img[^>]+src="([^"]+)"[^>]*alt="([^"]*)"')
+BROWSE_WINDOW = 2500
+
+
+def parse_browse(html: str, limit: int = 50) -> list[dict]:
+    """Pull item ids, titles and previews out of the workshop listing page.
+
+    The page renders each card as a link followed by its preview image and
+    title, so one anchor plus the next image is enough; nothing is executed.
+    """
+    found: list[dict] = []
+    seen: set[str] = set()
+    for match in _BROWSE_ID.finditer(html):
+        file_id = match.group(1)
+        if file_id in seen:
+            continue
+        image = _BROWSE_IMG.search(html, match.end(), match.end() + BROWSE_WINDOW)
+        if image is None:
+            continue
+        preview = html_module.unescape(image.group(1)).split("?")[0]
+        title = html_module.unescape(image.group(2))
+        seen.add(file_id)
+        found.append(
+            {
+                "publishedfileid": file_id,
+                "title": title,
+                "preview_url": preview,
+                "tags": [],
+                "file_size": 0,
+            }
+        )
+        if len(found) >= limit:
+            break
+    return found
 
 
 class SteamWorkshopClient:
@@ -27,6 +70,24 @@ class SteamWorkshopClient:
         self.session = session or requests.Session()
         self.timeout = timeout
         self.url = url
+
+    def browse(self, days: int = 30, per_page: int = 50) -> list[dict]:
+        """The public workshop listing, without the Web API."""
+        response = self.session.get(
+            BROWSE_URL,
+            params={
+                "appid": APP_ID,
+                "browsesort": "trend",
+                "days": days,
+                "p": 1,
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        items = parse_browse(response.text, limit=per_page)
+        if not items:
+            raise SourceError("workshop browse page returned no items")
+        return items
 
     def query(self, query_type: int = 3, days: int = 30, per_page: int = 20,
               page: int = 1) -> list[dict]:
@@ -82,9 +143,17 @@ class SteamWorkshopSource:
         self.per_page = per_page
 
     def fetch(self, limit: int | None = None) -> list[Candidate]:
-        details = self.client.query(
-            query_type=self.query_type, days=self.days, per_page=self.per_page
-        )
+        try:
+            details = self.client.query(
+                query_type=self.query_type, days=self.days, per_page=self.per_page
+            )
+        except Exception as exc:
+            # The API host is unreachable from here even through a proxy; the
+            # public listing is the same workshop and needs no API key.
+            logger.warning(
+                f"steam api unavailable ({exc}); reading the workshop page"
+            )
+            details = self.client.browse(days=self.days, per_page=self.per_page)
         found = [c for c in (self._candidate(item) for item in details) if c]
         return found if limit is None else found[:limit]
 

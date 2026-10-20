@@ -23,6 +23,9 @@ aspect_max = 1.85
 max_image_mb = 40
 max_video_mb = 500
 wallhaven_pages = 4
+# Pigeon/Clash users: point this at the local mixed proxy. Without it,
+# requests ignores the Windows system proxy and Wallhaven/Steam time out.
+proxy = ""
 
 [vision]
 provider = "zhipu"
@@ -81,9 +84,9 @@ log_backups = 5
 enabled = false
 query_type = 3          # 3 = trend, 9 = most subscriptions
 days = 30
-per_page = 20
-prefetch_top_n = 2
-max_cache_gb = 3.0
+per_page = 50
+prefetch_top_n = 6
+max_cache_gb = 4.0
 steamcmd_path = ""      # empty -> <data>/tools/steamcmd/steamcmd.exe
 steam_account = ""      # username only; the password is never stored
 download_timeout = 1800

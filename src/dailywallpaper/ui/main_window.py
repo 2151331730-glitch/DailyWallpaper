@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from dailywallpaper.cost.report import CostService
-from dailywallpaper.recommend.ratings import RatingsService
+from dailywallpaper.recommend.ratings import RatingsService, rating_text
 from dailywallpaper.state.machine import SystemClock
 from dailywallpaper.ui.cost_page import CostPage
 from dailywallpaper.ui.settings_page import SettingsPage
@@ -25,10 +25,22 @@ from dailywallpaper.ui.history_page import HistoryPage
 PREVIEW_HEIGHT = 280
 
 LATEST_SQL = """
-select w.title, w.source, w.local_path, d.explore_score, d.personalize_score,
+select d.id, w.title, w.source, w.local_path, d.explore_score, d.personalize_score,
        d.final_score, d.reason
 from decisions d join wallpapers w on w.id = d.wallpaper_id
 order by d.id desc limit 1
+"""
+
+DECISION_SQL = """
+select d.id, w.title, w.source, w.local_path, d.explore_score, d.personalize_score,
+       d.final_score, d.reason
+from decisions d join wallpapers w on w.id = d.wallpaper_id
+where d.wallpaper_id = ?
+order by d.id desc limit 1
+"""
+
+WALLPAPER_SQL = """
+select title, source, local_path from wallpapers where id=?
 """
 
 
@@ -49,8 +61,13 @@ class MainWindow(QWidget):
 
         self.tabs = QTabWidget()
         self.today = QWidget()
+        self.rating_service = RatingsService(conn)
         self._build_today()
-        self.history = HistoryPage(RatingsService(conn), on_undo=self._undo)
+        self.history = HistoryPage(
+            self.rating_service,
+            on_undo=self._undo,
+            on_rate=self._open_rating_for,
+        )
         self.cost = CostPage(CostService(conn, SystemClock()), budget_cny)
         self.tabs.addTab(self.today, "今日")
         self.tabs.addTab(self.history, "历史")
@@ -61,6 +78,7 @@ class MainWindow(QWidget):
             self.tabs.addTab(self.settings, "设置")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._polls = 0
+        self._shown_decision_id = None
 
         outer = QVBoxLayout(self)
         outer.addWidget(self.tabs)
@@ -88,6 +106,7 @@ class MainWindow(QWidget):
         self.undo_button.clicked.connect(self._undo)
         self.rate_button = QPushButton("评分…")
         self.rate_button.clicked.connect(self._open_rating)
+        self.rating_status_label = QLabel("")
 
         actions = QHBoxLayout()
         actions.addWidget(self.change_button)
@@ -103,6 +122,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.subscore_label)
         layout.addWidget(self.reviewed_label)
         layout.addLayout(actions)
+        layout.addWidget(self.rating_status_label)
 
     def _change_now(self):
         self.service.change_now()
@@ -112,25 +132,64 @@ class MainWindow(QWidget):
         self.service.undo()
         self.refresh()
 
-    def _open_rating(self):
-        from dailywallpaper.ui.rating_dialog import RatingDialog
-
+    def _current_wallpaper_id(self):
+        """Prefer the wallpaper actually on screen over the newest decision."""
+        getter = getattr(self.service, "current_wallpaper_id", None)
+        if getter is not None:
+            try:
+                found = getter()
+            except Exception:
+                found = None
+            if found is not None:
+                return int(found)
         row = self.conn.execute(
             "select wallpaper_id from decisions order by id desc limit 1"
         ).fetchone()
-        if not row:
+        return None if row is None else int(row["wallpaper_id"])
+
+    def _open_rating(self):
+        wallpaper_id = self._current_wallpaper_id()
+        if wallpaper_id is None:
             return
-        RatingDialog(RatingsService(self.conn), row["wallpaper_id"], self).exec()
+        self._open_rating_for(wallpaper_id)
+
+    def _open_rating_for(self, wallpaper_id: int) -> None:
+        from dailywallpaper.ui.rating_dialog import RatingDialog
+
+        RatingDialog(self.rating_service, wallpaper_id, self).exec()
+        self.history.refresh()
         self.refresh()
 
-    def refresh(self) -> None:
-        row = self.conn.execute(LATEST_SQL).fetchone()
-        if not row:
-            self.title_label.setText("")
-            self.meta_label.setText("")
-            self.score_label.setText("")
-            self.reason_label.setText("")
+    def _sync_rating_status(self, wallpaper_id=None) -> None:
+        if wallpaper_id is None:
+            wallpaper_id = self._current_wallpaper_id()
+        rating = (
+            self.rating_service.rating_for(wallpaper_id)
+            if wallpaper_id is not None
+            else None
+        )
+        self.rate_button.setEnabled(wallpaper_id is not None)
+        if wallpaper_id is None:
+            self.rating_status_label.setText("")
+        elif rating is None:
+            self.rating_status_label.setText("还没有评分")
         else:
+            self.rating_status_label.setText(
+                f"我的评分：{rating_text(rating)}（会影响明天的推荐）"
+            )
+
+    def refresh(self) -> None:
+        wallpaper_id = self._current_wallpaper_id()
+        row = None
+        info = None
+        if wallpaper_id is not None:
+            row = self.conn.execute(DECISION_SQL, (wallpaper_id,)).fetchone()
+            if row is None:
+                info = self.conn.execute(WALLPAPER_SQL, (wallpaper_id,)).fetchone()
+        else:
+            row = self.conn.execute(LATEST_SQL).fetchone()
+        self._shown_decision_id = None if row is None else int(row["id"])
+        if row is not None:
             self.title_label.setText(row["title"] or "（无标题）")
             self.meta_label.setText(f"来源：{row['source']}")
             self.score_label.setText(
@@ -139,11 +198,26 @@ class MainWindow(QWidget):
             )
             self.reason_label.setText(row["reason"] or "")
             self._show_preview(row["local_path"])
+        elif info is not None:
+            # On the desktop but never scored by us (changed inside WE).
+            self.title_label.setText(info["title"] or "（无标题）")
+            self.meta_label.setText(f"来源：{info['source']} · 当前桌面壁纸")
+            self.score_label.setText("")
+            self.reason_label.setText("")
+            self._show_preview(info["local_path"])
+        else:
+            self.title_label.setText("")
+            self.meta_label.setText("")
+            self.score_label.setText("")
+            self.reason_label.setText("")
         self.subscore_label.setText(self._subscores())
         self.reviewed_label.setText(
-            "已复核（付费模型）" if self._latest_is_reviewed() else ""
+            "已复核（付费模型）" if self._is_reviewed() else ""
         )
         self.change_button.setEnabled(self.service.snapshot().can_change)
+        # Reuse the id resolved above: each lookup scans every wallpaper row
+        # with Path.resolve(), and this runs on the 2 s poll.
+        self._sync_rating_status(wallpaper_id)
         # Rebuilding 90 thumbnails on every 2 s poll would freeze the UI.
         self._polls += 1
         if self.tabs.currentWidget() is self.history and self._polls % 15 == 0:
@@ -156,15 +230,18 @@ class MainWindow(QWidget):
             self.cost.refresh()
 
     def _subscores(self) -> str:
+        if self._shown_decision_id is None:
+            return ""
         row = self.conn.execute(
             """
             select a.quality, a.creativity, a.novelty, a.formulaic
             from decisions d
             join wallpaper_analyses wa on wa.wallpaper_id = d.wallpaper_id
             join analyses a on a.id = wa.analysis_id
-            where d.id = (select max(id) from decisions)
+            where d.id = ?
             order by a.id desc limit 1
-            """
+            """,
+            (self._shown_decision_id,),
         ).fetchone()
         if not row:
             return ""
@@ -173,8 +250,8 @@ class MainWindow(QWidget):
             f" · 新颖 {row['novelty']:.0f} · 套路 {row['formulaic']:.0f}"
         )
 
-    def _latest_is_reviewed(self) -> bool:
-        if not self.review_model:
+    def _is_reviewed(self) -> bool:
+        if not self.review_model or self._shown_decision_id is None:
             return False
         return (
             self.conn.execute(
@@ -182,10 +259,10 @@ class MainWindow(QWidget):
                 select 1 from decisions d
                 join wallpaper_analyses wa on wa.wallpaper_id = d.wallpaper_id
                 join analyses a on a.id = wa.analysis_id
-                where d.id = (select max(id) from decisions) and a.model = ?
+                where d.id = ? and a.model = ?
                 limit 1
                 """,
-                (self.review_model,),
+                (self._shown_decision_id, self.review_model),
             ).fetchone()
             is not None
         )

@@ -31,6 +31,7 @@ class _FakeApplier:
 class _FakeWe:
     def __init__(self, current="D:/we/scene.pkg", close_ok=True):
         self._current = current
+        self.rendering_now = bool(current)
         self.close_ok = close_ok
         self.closed = 0
         self.opened = []
@@ -38,8 +39,12 @@ class _FakeWe:
     def current(self):
         return self._current
 
+    def rendering(self):
+        return self.rendering_now
+
     def close(self):
         self.closed += 1
+        self.rendering_now = False
         return self.close_ok
 
     def open(self, file, monitor=0):
@@ -593,7 +598,11 @@ def test_a_broken_we_config_does_not_block_a_static_apply(tmp_path):
     conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
     conn.commit()
     wid = conn.execute("select id from wallpapers").fetchone()[0]
-    service = ApplyService(conn, _FakeApplier(), we=_BrokenWe())
+    # A broken config must not block the apply; whether WE happens to be
+    # drawing is a machine state, not part of this scenario.
+    service = ApplyService(
+        conn, _FakeApplier(), we=_BrokenWe(), we_rendering=lambda: False
+    )
 
     assert service.apply(wid, tmp_path / "new.jpg") is True
     assert conn.execute("select count(*) from change_log where success=1").fetchone()[0] == 1
@@ -643,3 +652,234 @@ def test_the_recheck_can_read_the_epoch_from_another_thread(tmp_path):
     # Two rechecks ran (and saw a live WE current), so the image was applied
     # twice more; a thread-bound connection error would have stopped at one.
     assert len(service.applier.applied) == 3
+
+
+def test_apply_refuses_an_image_below_the_screen_resolution(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    wid = _wallpaper(conn)
+    applier = _FakeApplier()
+    service = ApplyService(conn, applier, min_resolution=(1920, 1080))
+    tiny = tmp_path / "tiny.jpg"
+    bands = (np.indices((243, 432)).sum(axis=0) % 2) * 255
+    Image.fromarray(np.stack([bands] * 3, axis=-1).astype(np.uint8)).save(tiny, "JPEG")
+
+    assert service.apply(wid, tiny) is False
+
+    assert applier.applied == []
+    assert "432x243" in service.last_error
+    assert conn.execute("select count(*) from change_log").fetchone()[0] == 0
+
+
+def test_apply_accepts_a_full_size_image(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    wid = _wallpaper(conn)
+    applier = _FakeApplier()
+    service = ApplyService(conn, applier, min_resolution=(1920, 1080))
+    big = tmp_path / "big.jpg"
+    bands = (np.indices((1440, 2560)).sum(axis=0) % 2) * 255
+    Image.fromarray(np.stack([bands] * 3, axis=-1).astype(np.uint8)).save(big, "JPEG", quality=95)
+
+    assert service.apply(wid, big) is True
+
+    assert len(applier.applied) == 1
+
+
+def test_startup_skips_a_recorded_wallpaper_that_fails_inspection(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    tiny = tmp_path / "tiny.jpg"
+    bands = (np.indices((243, 432)).sum(axis=0) % 2) * 255
+    Image.fromarray(np.stack([bands] * 3, axis=-1).astype(np.uint8)).save(tiny, "JPEG")
+    _logged_wallpaper(conn, tiny)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(tiny),),
+    )
+    conn.commit()
+    service = ApplyService(conn, _FakeApplier(), min_resolution=(1920, 1080))
+
+    assert service.ensure_visible() is False
+    assert service.applier.applied == []
+
+
+def _big_image(path):
+    import numpy as np
+    from PIL import Image
+
+    bands = (np.indices((1440, 2560)).sum(axis=0) % 2) * 255
+    Image.fromarray(np.stack([bands] * 3, axis=-1).astype(np.uint8)).save(
+        path, "JPEG", quality=95
+    )
+    return path
+
+
+def test_keep_visible_closes_wallpaper_engine_over_our_image(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+    conn.commit()
+    we = _FakeWe()
+    applier = _FakeApplier(wallpaper=str(image.with_suffix(".apply.jpg")))
+    service = ApplyService(conn, applier, we=we)
+
+    assert service.keep_visible() is True
+
+    assert we.closed == 1
+    assert applier.applied == []
+
+
+def test_keep_visible_does_nothing_when_nothing_took_over(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+    conn.commit()
+    we = _FakeWe(current="")
+    applier = _FakeApplier(wallpaper=str(image.with_suffix(".apply.jpg")))
+    service = ApplyService(conn, applier, we=we)
+
+    assert service.keep_visible() is False
+
+    assert we.closed == 0
+    assert applier.applied == []
+
+
+def test_keep_visible_restores_a_desktop_something_else_changed(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+    conn.commit()
+    applier = _FakeApplier(wallpaper="C:/somewhere/else.jpg")
+    service = ApplyService(conn, applier)
+
+    assert service.keep_visible() is True
+
+    assert applier.applied[-1] == image
+
+
+def test_a_closed_engine_is_not_closed_again_while_it_stays_closed(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+    conn.commit()
+    we = _FakeWe()
+    applier = _FakeApplier(wallpaper=str(image.with_suffix(".apply.jpg")))
+    service = ApplyService(conn, applier, we=we)
+
+    assert service.keep_visible() is True
+    assert we.closed == 1
+
+    # WE stays stopped: every check must not spawn another control command.
+    we.rendering_now = False
+    assert service.keep_visible() is False
+    assert we.closed == 1
+
+    # WE started drawing again.
+    we.rendering_now = True
+    assert service.keep_visible() is True
+    assert we.closed == 2
+
+def test_inspection_is_cached_after_preflight(tmp_path, monkeypatch):
+    import dailywallpaper.analysis.quality as quality
+
+    calls = []
+    real = quality.inspect_image
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(quality, "inspect_image", counting)
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    service = ApplyService(conn, _FakeApplier(), min_resolution=(1920, 1080))
+
+    assert service.preflight(image) is True
+    assert service.preflight(image) is True
+
+    assert len(calls) == 1
+
+
+def test_keep_visible_reopens_our_scene_when_we_shows_another(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    scene = tmp_path / "ours" / "scene.pkg"
+    scene.parent.mkdir()
+    scene.write_bytes(b"x")
+    wid = _logged_wallpaper(conn, scene, media_type="scene")
+    conn.execute("update wallpapers set file_url=? where id=?", (str(scene), wid))
+    conn.commit()
+    other = tmp_path / "other" / "scene.pkg"
+    we = _FakeWe(current=str(other))
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    assert service.keep_visible() is True
+
+    assert len(we.opened) == 1
+    assert Path(we.opened[0]).parent.name == "ours"
+
+
+def test_keep_visible_leaves_our_playing_scene_alone(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    scene = tmp_path / "ours" / "scene.pkg"
+    scene.parent.mkdir()
+    scene.write_bytes(b"x")
+    wid = _logged_wallpaper(conn, scene, media_type="scene")
+    conn.execute("update wallpapers set file_url=? where id=?", (str(scene), wid))
+    conn.commit()
+    we = _FakeWe(current=str(scene))
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    assert service.keep_visible() is False
+    assert we.opened == []
+
+
+def test_a_failed_reopen_is_retried_at_most_once_a_minute(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    scene = tmp_path / "ours" / "scene.pkg"
+    scene.parent.mkdir()
+    scene.write_bytes(b"x")
+    wid = _logged_wallpaper(conn, scene, media_type="scene")
+    conn.execute("update wallpapers set file_url=? where id=?", (str(scene), wid))
+    conn.commit()
+    other = tmp_path / "other" / "scene.pkg"
+    we = _FakeWe(current=str(other))
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    service.keep_visible()
+    service.keep_visible()
+
+    assert len(we.opened) == 1

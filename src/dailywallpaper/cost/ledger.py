@@ -66,12 +66,19 @@ class AnalysisRecord:
     tokens_out: int
     cost_cny: float
     cached: bool = False
+    # Which rubric produced this row; an old version judged by different
+    # criteria and should not stand in for a current one.
+    prompt_version: str = ""
 
     @classmethod
     def from_row(cls, row, cached: bool = False) -> "AnalysisRecord":
         # Imported here to avoid a module-level cycle with analysis.vision.
         from dailywallpaper.analysis.vision import validate_scores
 
+        try:
+            version = row["prompt_version"] or ""
+        except (KeyError, IndexError):
+            version = ""
         return cls(
             id=row["id"],
             scores=validate_scores(json.loads(row["scores_json"])),
@@ -79,4 +86,5 @@ class AnalysisRecord:
             tokens_out=row["tokens_out"],
             cost_cny=row["cost_cny"],
             cached=cached,
+            prompt_version=version,
         )

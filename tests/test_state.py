@@ -26,7 +26,7 @@ class FakePipeline:
         self.decision = decision
         self.prepared = 0
 
-    def prepare(self, now, mark=True):
+    def prepare(self, now, force=False, mark=True):
         self.prepared += 1
 
     def pick(self, now, dry_run=False):
@@ -202,3 +202,72 @@ def test_malformed_latest_change_time_does_not_crash(tmp_path):
 
     assert machine.tick().action in {"applied", "kept", "background", "too_late"}
 
+
+
+def _exhausted_pipeline(decision, forces):
+    class _Pipeline:
+        def __init__(self):
+            self.calls = 0
+
+        def prepare(self, now, force=False, mark=True):
+            forces.append(force)
+
+        def pick(self, now, dry_run=False):
+            self.calls += 1
+            return None if self.calls == 1 else decision
+
+    return _Pipeline()
+
+
+def test_manual_change_refills_an_exhausted_shortlist(tmp_path):
+    from types import SimpleNamespace
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.state.machine import DailyStateMachine
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    clock = FakeClock(datetime(2026, 10, 18, 9, 0))
+    forces = []
+    machine = DailyStateMachine(
+        conn,
+        SimpleNamespace(app=AppSection()),
+        clock,
+        _exhausted_pipeline(_decision(wid), forces),
+        FakeApplyService(conn, clock),
+    )
+
+    result = machine.tick(manual=True)
+
+    assert result.action == "applied"
+    assert forces == [True]
+
+
+def test_automatic_change_refills_without_forcing(tmp_path):
+    from types import SimpleNamespace
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.state.machine import DailyStateMachine
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    clock = FakeClock(datetime(2026, 10, 18, 9, 0))
+    forces = []
+    machine = DailyStateMachine(
+        conn,
+        SimpleNamespace(app=AppSection()),
+        clock,
+        _exhausted_pipeline(_decision(wid), forces),
+        FakeApplyService(conn, clock),
+    )
+
+    result = machine.tick()
+
+    assert result.action == "applied"
+    assert forces == [False]

@@ -20,29 +20,29 @@ def test_first_rating_is_inserted(tmp_path):
     conn, wid = _setup(tmp_path)
     service = RatingsService(conn)
 
-    service.rate(wid, 1)
+    service.rate(wid, 8)
 
     row = conn.execute("select rating, comment from ratings").fetchone()
-    assert row["rating"] == 1
-    assert service.rating_for(wid) == 1
+    assert row["rating"] == 8
+    assert service.rating_for(wid) == 8
 
 
 def test_second_rating_replaces_the_first(tmp_path):
     conn, wid = _setup(tmp_path)
     service = RatingsService(conn)
 
-    service.rate(wid, 1)
-    service.rate(wid, -1, comment="太暗")
+    service.rate(wid, 8)
+    service.rate(wid, 2, comment="太暗")
 
     rows = conn.execute("select rating, comment from ratings").fetchall()
     assert len(rows) == 1
-    assert rows[0]["rating"] == -1
+    assert rows[0]["rating"] == 2
     assert rows[0]["comment"] == "太暗"
 
 
 def test_rating_without_an_analysis_stores_empty_tags(tmp_path):
     conn, wid = _setup(tmp_path)
-    RatingsService(conn).rate(wid, 1)
+    RatingsService(conn).rate(wid, 8)
 
     assert conn.execute("select derived_tags_json from ratings").fetchone()[0] == "[]"
 
@@ -61,24 +61,26 @@ def test_rating_inherits_the_primary_style_tag(tmp_path):
     )
     conn.commit()
 
-    RatingsService(conn).rate(wid, 1)
+    RatingsService(conn).rate(wid, 8)
 
     assert conn.execute("select derived_tags_json from ratings").fetchone()[0] == '["landscape"]'
 
 
 def test_comment_is_capped_at_200_characters(tmp_path):
     conn, wid = _setup(tmp_path)
-    RatingsService(conn).rate(wid, 1, comment="字" * 300)
+    RatingsService(conn).rate(wid, 8, comment="字" * 300)
 
     assert len(conn.execute("select comment from ratings").fetchone()[0]) == 200
 
 
-def test_rating_is_clamped_to_the_three_allowed_values(tmp_path):
+def test_rating_is_clamped_to_the_ten_point_scale(tmp_path):
     conn, wid = _setup(tmp_path)
     service = RatingsService(conn)
 
     with pytest.raises(ValueError):
-        service.rate(wid, 7)
+        service.rate(wid, 0)
+    with pytest.raises(ValueError):
+        service.rate(wid, 11)
 
 
 def test_history_returns_the_latest_decisions(tmp_path):
@@ -90,13 +92,13 @@ def test_history_returns_the_latest_decisions(tmp_path):
         (wid,),
     )
     conn.commit()
-    RatingsService(conn).rate(wid, 1)
+    RatingsService(conn).rate(wid, 8)
 
     rows = RatingsService(conn).history()
 
     assert len(rows) == 1
     assert rows[0].title == "测试壁纸"
-    assert rows[0].rating == 1
+    assert rows[0].rating == 8
     assert rows[0].final_score == pytest.approx(74.5)
 
 
@@ -111,3 +113,29 @@ def test_history_includes_unrated_entries(tmp_path):
     conn.commit()
 
     assert RatingsService(conn).history()[0].rating is None
+
+
+def test_split_reasons_returns_text_and_the_quick_reasons(tmp_path):
+    from dailywallpaper.recommend.ratings import split_reasons
+
+    conn, wid = _setup(tmp_path)
+    service = RatingsService(conn)
+    service.rate(wid, 2, comment="画得太满", reasons=["太暗", "想要简约"])
+
+    comment = conn.execute("select comment from ratings").fetchone()[0]
+
+    assert split_reasons(comment) == ("画得太满", ["太暗", "想要简约"])
+
+
+def test_resaving_the_same_reasons_does_not_duplicate_them(tmp_path):
+    from dailywallpaper.recommend.ratings import split_reasons
+
+    conn, wid = _setup(tmp_path)
+    service = RatingsService(conn)
+    service.rate(wid, 8, reasons=["太暗"])
+
+    comment = conn.execute("select comment from ratings").fetchone()[0]
+    text, reasons = split_reasons(comment)
+    service.rate(wid, 8, comment=text, reasons=reasons)
+
+    assert conn.execute("select comment from ratings").fetchone()[0] == "太暗"

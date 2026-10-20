@@ -15,6 +15,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 60
+# How often the desktop is checked for a takeover.
+KEEP_ALIVE_SECONDS = 5
 
 
 class Worker:
@@ -27,11 +29,27 @@ class Worker:
         self._manual = threading.Event()
         self._manual_busy = False
         self._lock = threading.Lock()
+        # Any work in flight (a tick or the warm-up prepare). The tray reads
+        # this so a two-minute change does not look like a dead grey icon.
+        self._working = threading.Event()
+        # The action of the last finished tick, '' until the first one.
+        self.last_action = ""
+        # (action, reason, manual) plus a counter the shell uses to announce
+        # a finished manual change exactly once.
+        self.last_result = ("", "", False)
+        self.result_seq = 0
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, name="dailywallpaper-tick", daemon=True)
         self._thread.start()
+        # The desktop guard gets its own thread and its own connection: the
+        # tick thread can be busy preparing for minutes, and that is exactly
+        # when Wallpaper Engine likes to put its wallpaper back.
+        self._guard = threading.Thread(
+            target=self._guard_loop, name="dailywallpaper-guard", daemon=True
+        )
+        self._guard.start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -46,27 +64,53 @@ class Worker:
             )
         self._maybe_cleanup()
         self._ensure_visible()
-        self._tick_once()
-        self._warm_shortlist()
+        self._working.set()
+        try:
+            self._tick_once()
+            self._warm_shortlist()
+        finally:
+            self._working.clear()
         while True:
             manual = self._wait_for_work()
             if manual is None:  # stopped
                 return
-            self._tick_once(manual=manual)
-            with self._lock:
-                self._manual_busy = False
+            self._working.set()
+            try:
+                self._tick_once(manual=manual)
+            finally:
+                self._working.clear()
+                with self._lock:
+                    self._manual_busy = False
+
+    def busy(self) -> bool:
+        """True while a tick, a manual change or the warm-up is running."""
+        with self._lock:
+            manual_busy = self._manual_busy
+        return manual_busy or self._working.is_set()
 
     def _wait_for_work(self) -> bool | None:
-        """Sleep until the interval elapses or a manual change arrives."""
-        deadline = time.monotonic() + self.interval
+        """Sleep until the interval elapses or a manual change arrives.
+
+        The desktop is guarded on a shorter cadence: Wallpaper Engine can
+        restore its own live wallpaper minutes after our apply, and waiting a
+        full minute means the user sees the wrong wallpaper for a while.
+        """
+        now = time.monotonic()
+        deadline = now + self.interval
+        next_guard = now + KEEP_ALIVE_SECONDS
         while not self._stop.is_set():
             if self._manual.is_set():
                 self._manual.clear()
                 return True
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            if now >= next_guard:
+                next_guard = now + KEEP_ALIVE_SECONDS
+                self._preflight_next()
+            remaining = deadline - now
             if remaining <= 0:
                 return False
-            self._stop.wait(min(0.25, remaining))
+            # A click should be picked up within ~0.1 s, not a quarter second.
+            self._stop.wait(min(0.1, remaining))
         return None
 
     def _maybe_cleanup(self) -> None:
@@ -112,11 +156,84 @@ class Worker:
         except Exception as exc:  # warming must never kill the tick thread
             logger.warning(f"shortlist warm-up failed: {exc}")
 
+    def _guard_loop(self) -> None:
+        """Hold the desktop between ticks, on a connection of its own."""
+        machine = None
+        keep = None
+        while not self._stop.is_set():
+            if keep is None:
+                try:
+                    machine = self.machine_factory()
+                except Exception as exc:  # a locked keyring/DB at login
+                    logger.warning(f"desktop guard retrying: {exc}")
+                    self._stop.wait(30)
+                    continue
+                keep = getattr(
+                    getattr(machine, "apply_service", None), "keep_visible", None
+                )
+                if keep is None:
+                    return
+            try:
+                if not self._paused_state(
+                    getattr(machine, "conn", None), getattr(machine, "clock", None)
+                ):
+                    keep()
+            except Exception as exc:  # a guard must never die
+                logger.warning(f"desktop guard failed: {exc}")
+            self._stop.wait(KEEP_ALIVE_SECONDS)
+
+    def _paused_state(self, conn, clock) -> bool:
+        """True while the scheduler is paused (shared by guard and tick)."""
+        if conn is None or clock is None:
+            return False
+        try:
+            row = conn.execute(
+                "select value from state where key='paused_until'"
+            ).fetchone()
+            if row is None:
+                return False
+            from dailywallpaper.db import _as_aware, parse_ts
+
+            return _as_aware(clock.now()) < parse_ts(row[0])
+        except Exception:
+            return False
+
+    def _preflight_next(self) -> None:
+        """Decode the next pick ahead of time so the click stays instant."""
+        service = getattr(self._machine, "apply_service", None)
+        pipeline = getattr(self._machine, "pipeline", None)
+        preflight = getattr(service, "preflight", None)
+        if preflight is None or pipeline is None:
+            return
+        shortlist = getattr(pipeline, "shortlist", None) or []
+        if not shortlist:
+            return
+        decision = shortlist[0]
+        path = getattr(decision, "apply_path", None) or getattr(
+            decision, "image_path", None
+        )
+        if path is None:
+            return
+        try:
+            preflight(path)
+        except Exception:
+            pass
+
     def _tick_once(self, manual: bool = False) -> None:
         try:
-            self._machine.tick(manual=manual)
+            result = self._machine.tick(manual=manual)
         except Exception as exc:  # one bad tick must not end the thread
             logger.warning(f"tick failed: {exc}")
+            self.last_action = "tick_failed"
+            self.last_result = ("tick_failed", str(exc), manual)
+            self.result_seq += 1
+            return
+        action = getattr(result, "action", "")
+        reason = getattr(result, "reason", "")
+        if action:
+            self.last_action = action
+        self.last_result = (action, reason, manual)
+        self.result_seq += 1
 
     # -- manual change -------------------------------------------------
     def change_now(self) -> bool:

@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from dailywallpaper.analysis.prompts import PROMPT_VERSION
 from dailywallpaper.analysis.vision import VisionCallResult, VisionClient, VisionScores
 from dailywallpaper.app import Application, RealPipeline
 from dailywallpaper.apply.service import ApplyService
@@ -115,6 +116,20 @@ class Source:
         return list(self.candidates)
 
 
+class RateLimitedProvider:
+    """Every call is refused the way Zhipu refuses an overloaded model."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze(self, image_path, model, extra_instruction=""):
+        self.calls += 1
+        raise RuntimeError(
+            "Error code: 429 - {'error': {'code': '1305', 'message':"
+            " '该模型当前访问量过大，请您稍后再试'}}"
+        )
+
+
 class DaySource:
     """A source that serves fresh candidates on every fetch, like a real one."""
 
@@ -150,6 +165,22 @@ class SynthSession:
         buffer = io.BytesIO()
         Image.fromarray(np.stack([arr] * 3, axis=-1)).save(buffer, "PNG")
         return _Response(buffer.getvalue())
+
+
+class BigSession:
+    """Serves one 2560x1440 sharp image for any URL, so inspection passes."""
+
+    def __init__(self):
+        import io
+
+        buffer = io.BytesIO()
+        _checkerboard(8).resize((2560, 1440), Image.Resampling.NEAREST).save(
+            buffer, "PNG"
+        )
+        self.payload = buffer.getvalue()
+
+    def get(self, url, stream=True, timeout=30):
+        return _Response(self.payload)
 
 
 class Provider:
@@ -244,6 +275,417 @@ def test_one_failing_preview_does_not_abort_the_run(tmp_path):
     pipeline.prepare(clock.now())
 
     assert len(pipeline.shortlist) == 2
+
+
+class _DeadHostSession:
+    """Every request times out, the way w.wallhaven.cc does without a proxy."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url, stream=True, timeout=30):
+        self.calls += 1
+        raise RuntimeError("connect timeout")
+
+
+def test_a_used_up_pool_still_offers_a_previously_used_wallpaper(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    # Remote candidates, so the full image is materialised on disk.
+    candidates = [
+        Candidate(
+            "wallhaven", str(index + 1), "t", "p", f"https://img/{index}.png",
+            f"https://img/{index}.png", "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(3)
+    ]
+    pipeline = RealPipeline(
+        cfg, conn, BigSession(), [Source(candidates)], vision, budget
+    )
+    pipeline.prepare(clock.now())
+    assert pipeline.shortlist
+    assert any(path.is_file() for path in (Path(cfg.app.data_dir) / "wallpapers").glob("*.jpg"))
+    for row in conn.execute("select id from wallpapers").fetchall():
+        conn.execute(
+            "insert into decisions(decision_date,wallpaper_id,explore_score,"
+            "personalize_score,final_score,reason,status,created_at)"
+            " values('2026-10-18',?,50,50,50,'r','applied','x')",
+            (row["id"],),
+        )
+    conn.commit()
+
+    # Everything is a duplicate now.
+    pipeline.prepare(clock.now(), force=True)
+    assert pipeline.pick(clock.now()) is None
+
+    repeat = pipeline.repeat_pick(clock.now())
+
+    assert repeat is not None
+    assert repeat.apply_path is not None and repeat.apply_path.is_file()
+
+
+def test_a_previously_used_wallpaper_the_user_rated_low_is_not_reused(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source(_candidates())], vision, budget
+    )
+    pipeline.prepare(clock.now())
+    for row in conn.execute("select id from wallpapers").fetchall():
+        conn.execute(
+            "insert into decisions(decision_date,wallpaper_id,explore_score,"
+            "personalize_score,final_score,reason,status,created_at)"
+            " values('2026-10-18',?,50,50,50,'r','applied','x')",
+            (row["id"],),
+        )
+        conn.execute(
+            "insert into ratings(wallpaper_id,rating,comment,derived_tags_json,"
+            "created_at) values(?,1,'','[]','2026-10-18T10:00:00')",
+            (row["id"],),
+        )
+    conn.commit()
+
+    assert pipeline.repeat_pick(clock.now()) is None
+
+
+def test_a_dead_download_host_is_tried_once_per_prepare(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    preview = Path(cfg.app.data_dir) / "cache" / "normalized" / "p.jpg"
+    preview.parent.mkdir(parents=True)
+    _checkerboard(8).save(preview, "JPEG")
+    candidates = [
+        Candidate(
+            "wallhaven", f"d{index}", "t", "p",
+            f"https://w.wallhaven.cc/full/xx/wallhaven-d{index}.jpg",
+            str(preview), "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(3)
+    ]
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = _DeadHostSession()
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, session, [Source(candidates)], vision, budget)
+
+    pipeline.prepare(clock.now())
+
+    # One timeout marks the host dead; the other two cost nothing.
+    assert session.calls == 1
+
+
+def test_cached_pool_needs_the_full_resolution_copy_and_keeps_urls(tmp_path):
+    import json
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    data = Path(cfg.app.data_dir)
+    screening = data / "cache" / "normalized" / "abc.jpg"
+    screening.parent.mkdir(parents=True)
+    _checkerboard(8).save(screening, "JPEG")
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,file_url,media_type,width,height,"
+        "local_path,created_at) values('wallhaven','old','旧图',"
+        "'https://w.wallhaven.cc/full/xx/wallhaven-old.png','image',3840,2160,?,'x')",
+        (str(screening),),
+    )
+    wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    scores = _scores(90, 10)
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+        "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+        " values(?,'v','h',?,90,70,60,10,0,'[]','[]','[]',1,1,0,'x')",
+        (MODEL, json.dumps(scores.__dict__)),
+    )
+    conn.execute(
+        "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+        " select ?, max(id), 'x' from analyses",
+        (wid,),
+    )
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([])], vision, budget)
+
+    # Without a full-resolution copy the remote URL is kept, so the
+    # materialiser fetches it; the screening copy only serves as preview.
+    # Never the other way round: a 1024px image on the desktop looked blurry.
+    candidates = pipeline._cached_local_candidates({"image"}, 60)
+
+    assert len(candidates) == 1
+    assert candidates[0].file_url.startswith("https://")
+    assert candidates[0].preview_url == str(screening)
+
+
+def test_a_stale_analysis_is_replaced_when_the_provider_answers(tmp_path):
+    import json
+
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    data = Path(cfg.app.data_dir)
+    image = data / "cache" / "normalized" / "abc.jpg"
+    image.parent.mkdir(parents=True)
+    _checkerboard(8).save(image, "JPEG")
+    full = data / "wallpapers" / "1.jpg"
+    full.parent.mkdir(parents=True)
+    _checkerboard(8).save(full, "JPEG", quality=95)
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,media_type,width,height,"
+        "local_path,created_at) values('wallhaven','old','旧图','image',3840,2160,?,'x')",
+        (str(image),),
+    )
+    wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    full = data / "wallpapers" / f"{wid}.jpg"
+    _checkerboard(8).save(full, "JPEG", quality=95)
+    old = _scores(40, 90)  # a v1 "sugar water" verdict: pretty, formulaic
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+        "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+        " values(?,'v1','h',?,40,40,30,90,0,'[]','[]','[]',1,1,0,'x')",
+        (MODEL, json.dumps(old.__dict__)),
+    )
+    conn.execute(
+        "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+        " select ?, max(id), 'x' from analyses",
+        (wid,),
+    )
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    provider = Provider([_scores(90, 10)])
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([])], vision, budget)
+
+    pipeline.prepare(clock.now())
+
+    # The stored v1 verdict was not trusted; a fresh call was made.
+    assert provider.calls == 1
+    assert pipeline.shortlist
+    latest = conn.execute("select max(id) from analyses").fetchone()[0]
+    version = conn.execute(
+        "select prompt_version from analyses where id=?", (latest,)
+    ).fetchone()[0]
+    assert version == PROMPT_VERSION
+
+
+def test_a_cached_row_without_any_full_resolution_source_is_skipped(tmp_path):
+    import json
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    data = Path(cfg.app.data_dir)
+    screening = data / "cache" / "normalized" / "abc.jpg"
+    screening.parent.mkdir(parents=True)
+    _checkerboard(8).save(screening, "JPEG")
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,file_url,media_type,width,height,"
+        "local_path,created_at) values('bing','old','旧图','','image',3840,2160,?,'x')",
+        (str(screening),),
+    )
+    wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+        "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+        " values(?,'v','h','{}',90,70,60,10,0,'[]','[]','[]',1,1,0,'x')",
+        (MODEL,),
+    )
+    conn.execute(
+        "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+        " select ?, max(id), 'x' from analyses",
+        (wid,),
+    )
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([])], vision, budget)
+
+    assert pipeline._cached_local_candidates({"image"}, 60) == []
+
+
+def test_a_wallpaper_rated_one_never_comes_back(tmp_path):
+    import json
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    data = Path(cfg.app.data_dir)
+    scores = _scores(90, 10)
+    disliked = liked = None
+    for index, rating in enumerate((1, 8)):
+        screening = data / "cache" / "normalized" / f"p{index}.jpg"
+        screening.parent.mkdir(parents=True, exist_ok=True)
+        _checkerboard(8).save(screening, "JPEG")
+        conn.execute(
+            "insert into wallpapers(source,source_id,title,media_type,width,height,"
+            "local_path,created_at) values('wallhaven',?, 't','image',3840,2160,?,'x')",
+            (f"p{index}", str(screening)),
+        )
+        wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+        full = data / "wallpapers" / f"{wid}.jpg"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        _checkerboard(8).save(full, "JPEG", quality=95)
+        conn.execute(
+            "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+            "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+            "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+            " values(?,?,?,?,90,70,60,10,0,'[]','[]','[]',1,1,0,'x')",
+            (MODEL, PROMPT_VERSION, f"h{index}", json.dumps(scores.__dict__)),
+        )
+        conn.execute(
+            "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+            " select ?, max(id), 'x' from analyses",
+            (wid,),
+        )
+        conn.execute(
+            "insert into ratings(wallpaper_id,rating,comment,derived_tags_json,"
+            "created_at) values(?,?,'','[]','2026-10-18T10:00:00')",
+            (wid, rating),
+        )
+        if rating == 1:
+            disliked = wid
+        else:
+            liked = wid
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([])], vision, budget)
+
+    pipeline.prepare(clock.now())
+
+    ids = [decision.wallpaper_id for decision in pipeline.shortlist]
+    assert liked in ids
+    assert disliked not in ids
+
+
+def test_profile_learns_from_the_analysis_of_the_rated_wallpaper(tmp_path):
+    import json
+
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,created_at)"
+        " values('wallhaven','p1','雾','x')"
+    )
+    wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+        "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+        " values(?,'v2','h','{}',90,80,80,10,0,?,'[\"calm\"]','[]',1,1,0,'x')",
+        (MODEL, json.dumps(["fog", "muted-palette"])),
+    )
+    conn.execute(
+        "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+        " select ?, max(id), 'x' from analyses",
+        (wid,),
+    )
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,comment,derived_tags_json,created_at)"
+        " values(?,10,'','[\"landscape\"]','2026-10-17T10:00:00')",
+        (wid,),
+    )
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [], vision, budget)
+
+    profile = pipeline._profile(clock.now())
+
+    assert profile.tag_affinity(["fog"]) > 50
+    assert profile.tag_affinity(["calm"]) > 50
+
+
+def test_thin_pool_falls_back_to_downloaded_wallpapers(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    image = Path(cfg.app.data_dir) / "cache" / "normalized" / "abc.jpg"
+    image.parent.mkdir(parents=True)
+    _checkerboard(8).save(image, "JPEG")
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,media_type,width,height,"
+        "local_path,created_at) values('wallhaven','old','旧图','image',3840,2160,?,'x')",
+        (str(image),),
+    )
+    wid = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    full = Path(cfg.app.data_dir) / "wallpapers" / f"{wid}.jpg"
+    full.parent.mkdir(parents=True)
+    _checkerboard(8).save(full, "JPEG", quality=95)
+    scores = _scores(90, 10)
+    conn.execute(
+        "insert into analyses(model,prompt_version,image_hash,scores_json,quality,"
+        "creativity,novelty,formulaic,nsfw,style_tags_json,mood_tags_json,"
+        "palette_json,tokens_in,tokens_out,cost_cny,created_at)"
+        " values(?,?,'h',?,90,70,60,10,0,'[]','[]','[]',1,1,0,'x')",
+        (MODEL, PROMPT_VERSION, __import__("json").dumps(scores.__dict__)),
+    )
+    conn.execute(
+        "insert into wallpaper_analyses(wallpaper_id,analysis_id,created_at)"
+        " select ?, max(id), 'x' from analyses",
+        (wid,),
+    )
+    conn.commit()
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = SynthSession()
+    provider = Provider([_scores(90, 10)])
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(cfg, conn, session, [Source([])], vision, budget)
+
+    pipeline.prepare(clock.now())
+
+    # Nothing was fetched and nothing was re-scored: both were on disk.
+    assert session.calls == 0
+    assert provider.calls == 0
+    assert len(pipeline.shortlist) == 1
+
+
+def test_repeated_rate_limits_end_the_pass_early(tmp_path):
+    from dailywallpaper.app import RATE_LIMIT_ABORT_AFTER
+
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    provider = RateLimitedProvider()
+    candidates = [
+        Candidate(
+            "wallhaven", f"r{index}", "t", "p", "f", f"https://img/r{index}.png",
+            "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(10)
+    ]
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source(candidates)], vision, budget
+    )
+
+    pipeline.prepare(clock.now())
+
+    # Without the breaker every one of the ten candidates paid its own 429.
+    assert provider.calls == RATE_LIMIT_ABORT_AFTER
 
 
 def test_prepare_runs_once_per_day(tmp_path):
@@ -870,3 +1312,60 @@ def test_prepare_stops_when_asked_so_a_manual_click_is_not_stuck(tmp_path):
     pipeline.prepare(clock.now())
 
     assert provider.calls == 1
+
+
+def test_a_forced_prepare_retries_a_source_marked_down(tmp_path):
+    from dailywallpaper.sources.repository import mark_source_down
+
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    mark_source_down(conn, "Source", "2026-10-18")
+
+    pipeline.prepare(clock.now())
+    assert pipeline.shortlist == []
+
+    pipeline.prepare(clock.now(), force=True)
+
+    assert pipeline.shortlist
+
+
+def test_forced_prepares_are_capped_for_the_day(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+
+    pipeline.prepare(clock.now(), force=True)
+    pipeline.prepare(clock.now(), force=True)
+    settled = session.calls
+    pipeline.prepare(clock.now(), force=True)
+
+    assert session.calls == settled
+
+
+def test_downloaded_steam_items_survive_a_dead_workshop_api(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    project = tmp_path / "steam_workshop" / "123" / "project.json"
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    conn.execute(
+        "insert into wallpapers(source,source_id,title,page_url,file_url,preview_url,"
+        "media_type,width,height,file_size,tags_json,raw_json,created_at)"
+        " values('steam_workshop','123','t','p',?,'https://img/cached.png',"
+        "'video',0,0,0,'[]','{}','x')",
+        (str(project),),
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    pipeline = RealPipeline(cfg, conn, SynthSession(), [], vision, budget)
+
+    pipeline.prepare(clock.now())
+
+    assert any(decision.wallpaper_id == wid for decision in pipeline.shortlist)

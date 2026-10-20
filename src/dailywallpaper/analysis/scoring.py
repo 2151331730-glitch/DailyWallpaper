@@ -13,6 +13,10 @@ from .vision import VisionScores
 QUALITY_FLOOR = 60
 MINOR_OVERLAY_PENALTY = 10
 FORMULAIC_CEILING = 70
+# Above this much "template" the picture is not banned, it is ranked down:
+# a generic idea dressed well still loses to an original one.
+FORMULAIC_BASE = 20
+FORMULAIC_PENALTY = 0.5
 EXPLORE_WEIGHT = 0.55
 PERSONALIZE_WEIGHT = 0.45
 COLD_START_PRIOR = 60.0
@@ -68,8 +72,12 @@ def explore_score(scores: VisionScores, source: str, recent) -> float:
 
 
 def personalize_score(scores: VisionScores, profile, source: str, weather_code: int) -> float:
+    # Mood counts as much as genre: the profile is built from the same
+    # features, so a foggy quiet picture can match a taste learned from
+    # another subject entirely.
+    features = list(scores.style_tags) + list(scores.mood_tags)
     return (
-        0.70 * profile.tag_affinity(scores.style_tags)
+        0.70 * profile.tag_affinity(features)
         + 0.20 * profile.source_affinity(source)
         + 0.10 * weather_fit(scores.mood_tags, weather_code)
     )
@@ -87,10 +95,11 @@ def final_score(
         ) * COLD_START_PRIOR
     else:
         personalize = COLD_START_PRIOR
+    penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
     return DecisionScores(
         explore=explore,
         personalize=personalize,
-        final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize,
+        final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize - penalty,
     )
 
 

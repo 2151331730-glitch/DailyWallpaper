@@ -141,15 +141,34 @@ def validate_scores(payload: dict) -> VisionScores:
         mood_tags=[x.strip().lower() for x in mood],
         palette=palette,
         subject=str(payload["subject"])[:40],
-        reason=str(payload["reason"])[:80],
+        reason=str(payload["reason"])[:160],
     )
 
 
 class ZhipuVision:
     BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
     def __init__(self, api_key: str):
+        # openai 3.x ships with httpx2 (the vendored successor of httpx).
+        try:
+            import httpx2 as httpx
+        except ImportError:  # older openai
+            import httpx  # type: ignore[no-redef]
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
+
+        # This endpoint is domestic, so it is always reached directly. The
+        # system proxy is Pigeon's business: when it points at a local port
+        # that nothing listens on (7892 with the client disconnected), every
+        # model call dies with "Connection error" while the site itself is up.
+        http_client = httpx.Client(trust_env=False, timeout=60.0)
+        # A 429 here means the model is overloaded, not that this request was
+        # unlucky: the library's two retries just tripled the wait, and the
+        # pipeline already skips a failed candidate and moves on.
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=self.BASE_URL,
+            max_retries=0,
+            http_client=http_client,
+        )
 
     def analyze(
         self, image_path: Path, model: str, extra_instruction: str = ""
@@ -215,6 +234,23 @@ class VisionClient:
         self.pricing = pricing
         self.budget = budget
         self.max_output_tokens = max_output_tokens
+
+    def latest_for(self, wallpaper_id: int, model: str) -> AnalysisRecord | None:
+        """What we already know about a wallpaper, without calling anyone.
+
+        The hash cache misses when re-normalising an old file yields a new
+        digest; the row link does not.
+        """
+        row = self.conn.execute(
+            """
+            select a.* from wallpaper_analyses wa
+            join analyses a on a.id = wa.analysis_id
+            where wa.wallpaper_id = ? and a.model = ?
+            order by a.id desc limit 1
+            """,
+            (wallpaper_id, model),
+        ).fetchone()
+        return None if row is None else self._cached(row, wallpaper_id, model)
 
     def _cached(self, row, wallpaper_id: int, model: str) -> AnalysisRecord:
         self.conn.execute(

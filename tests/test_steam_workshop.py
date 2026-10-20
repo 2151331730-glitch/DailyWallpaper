@@ -130,3 +130,54 @@ def test_client_rejects_a_malformed_payload():
 
     with pytest.raises(SourceError):
         SteamWorkshopClient("KEY", session).query()
+
+
+BROWSE_FIXTURE = """
+<div class="card">
+  <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3799142774"
+     class="thumb"><img
+     src="https://images.steamusercontent.com/ugc/95/4DE/?ima=fit&amp;impolicy=Letterbox&amp;imw=322"
+     alt="Rhine Lab · 莱茵生命"></a>
+</div>
+<div class="card">
+  <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3810650535"
+     class="thumb"><img src="https://images.steamusercontent.com/ugc/15/060/"
+     alt="FRAC_桌面互动壁纸"></a>
+</div>
+"""
+
+
+def test_parse_browse_reads_ids_titles_and_previews():
+    from dailywallpaper.sources.steam_workshop import parse_browse
+
+    items = parse_browse(BROWSE_FIXTURE)
+
+    assert [item["publishedfileid"] for item in items] == [
+        "3799142774", "3810650535",
+    ]
+    assert items[0]["title"] == "Rhine Lab · 莱茵生命"
+    # The resizing parameters are dropped: the original preview is downloaded.
+    assert items[0]["preview_url"] == "https://images.steamusercontent.com/ugc/95/4DE/"
+
+
+def test_the_source_falls_back_to_the_browse_page_when_the_api_dies():
+    class _ApiDown:
+        def query(self, **kwargs):
+            raise SourceError("403 Forbidden")
+
+        def browse(self, **kwargs):
+            return [
+                {
+                    "publishedfileid": "1",
+                    "title": "t",
+                    "preview_url": "https://img/1.jpg",
+                    "tags": [],
+                    "file_size": 0,
+                }
+            ]
+
+    source = SteamWorkshopSource(_ApiDown(), Path("root"))
+
+    candidates = source.fetch()
+
+    assert [candidate.source_id for candidate in candidates] == ["1"]

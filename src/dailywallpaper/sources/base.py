@@ -27,6 +27,12 @@ class Candidate:
     tags: list[str]
     raw: dict
     content_rating: str = ""
+    # Rebuilt from a wallpaper already on disk: it has a stored analysis, so
+    # scoring it again would only pay for the same answer.
+    reuse_analysis: bool = False
+    # Row id when the candidate came from the database. Upserting such a
+    # candidate would overwrite its remote URLs with local paths.
+    known_id: int = 0
 
 
 class SourceError(RuntimeError):

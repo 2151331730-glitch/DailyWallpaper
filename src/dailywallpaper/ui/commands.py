@@ -99,6 +99,27 @@ class CommandService:
         finally:
             self._apply_lock.release()
 
+    def current_wallpaper_id(self):
+        """The wallpaper on the desktop, falling back to what we last applied."""
+        resolver = getattr(self.apply_service, "current_wallpaper_id", None)
+        if resolver is not None:
+            try:
+                found = resolver()
+            except Exception:
+                found = None
+            if found is not None:
+                return int(found)
+        row = self.conn.execute(
+            "select wallpaper_id from change_log where success=1"
+            " order by id desc limit 1"
+        ).fetchone()
+        if row is not None:
+            return int(row[0])
+        row = self.conn.execute(
+            "select wallpaper_id from decisions order by id desc limit 1"
+        ).fetchone()
+        return None if row is None else int(row[0])
+
     def undo(self) -> bool:
         return bool(self.apply_service.undo_last())
 

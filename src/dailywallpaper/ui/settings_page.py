@@ -123,10 +123,7 @@ class SettingsPage(QWidget):
             service = self.autostart or AutostartService(
                 command=default_command(self.config_path)
             )
-            if wanted and not service.enabled():
-                service.enable()
-            elif not wanted and service.enabled():
-                service.disable()
+            service.sync(wanted)
         except Exception as exc:  # a locked registry must not lose the config
             logger.warning(f"autostart toggle failed: {exc}")
 

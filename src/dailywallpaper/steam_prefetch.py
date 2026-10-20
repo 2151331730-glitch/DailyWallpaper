@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 APP_ID = 431960
 INTERVAL_SECONDS = 900
 CANDIDATE_WINDOW = 50
-FAILURE_RETRY_SECONDS = 6 * 3600
+FAILURE_RETRY_SECONDS = 30 * 60
 
 
 class Prefetcher:
@@ -218,10 +218,20 @@ def build_prefetcher(cfg, conn_factory):
         )
         return None
     root = Path(cfg.app.data_dir) / "steam_workshop"
+    proxy = str(getattr(cfg.sources, "proxy", "") or "").strip()
+    if proxy:
+        from dailywallpaper.net import proxy_alive
+
+        if not proxy_alive(proxy):
+            proxy = ""
     return Prefetcher(
         conn_factory=conn_factory,
         download_root=root,
-        steamcmd=SteamCmd(exe, timeout=section.download_timeout),
+        steamcmd=SteamCmd(
+            exe,
+            timeout=section.download_timeout,
+            proxy=proxy,
+        ),
         account=section.steam_account,
         top_n=section.prefetch_top_n,
         max_cache_gb=section.max_cache_gb,

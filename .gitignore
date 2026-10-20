@@ -7,6 +7,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Local agent worktrees
+.claude/
+
 # Local config and secrets
 .env
 .env.*

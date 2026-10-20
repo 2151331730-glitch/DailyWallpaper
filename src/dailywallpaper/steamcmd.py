@@ -7,6 +7,7 @@ Wallpaper Engine; anonymous login is not enough for a paid app.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -20,13 +21,20 @@ class SteamCmdError(RuntimeError):
 
 class SteamCmd:
     def __init__(self, exe: Path, runner=subprocess.run, timeout: int = 1800,
-                 app_id: int = APP_ID):
+                 app_id: int = APP_ID, proxy: str = ""):
         self.exe = Path(exe)
         self.runner = runner
         self.timeout = timeout
         self.app_id = app_id
+        self.proxy = proxy
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        if self.proxy:
+            # SteamCMD reads the usual proxy variables on Linux; on Windows
+            # the uppercase pair is what its network layer picks up.
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                env[key] = self.proxy
         return self.runner(
             [str(self.exe), *args],
             capture_output=True,
@@ -37,6 +45,7 @@ class SteamCmd:
             errors="replace",
             timeout=self.timeout,
             stdin=subprocess.DEVNULL,
+            env=env,
             # pythonw has no console; without this a console window would
             # flash on screen for the whole download.
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

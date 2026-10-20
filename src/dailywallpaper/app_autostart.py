@@ -15,6 +15,10 @@ def default_command(config_path=None) -> str:
     The Run key starts the process with an unrelated working directory, so
     the config path must be absolute or the app would look for ./config.toml.
     """
+    if config_path is None:
+        from dailywallpaper.config import default_config_path
+
+        config_path = default_config_path()
     executable = Path(sys.executable)
     pythonw = executable.with_name("pythonw.exe")
     launcher = pythonw if pythonw.exists() else executable
@@ -63,6 +67,19 @@ class AutostartService:
 
     def enabled(self) -> bool:
         return bool(self.registry.get(VALUE_NAME))
+
+    def sync(self, wanted: bool) -> None:
+        """Make the Run key match the config; safe to call on every launch.
+
+        The settings page is not the only thing that can change the config --
+        a lost Run value (cleanup tool, deleted profile entry) otherwise leaves
+        the toggle ticked while nothing starts at login. A stale command (moved
+        venv, config path) is repaired the same way.
+        """
+        if not wanted:
+            self.disable()
+        elif self.registry.get(VALUE_NAME) != self.command:
+            self.enable()
 
     def enable(self) -> None:
         self.registry.set(VALUE_NAME, self.command)

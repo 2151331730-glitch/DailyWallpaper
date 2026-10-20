@@ -16,7 +16,7 @@ class SystemClock:
 
 
 class Pipeline(Protocol):
-    def prepare(self, now: datetime) -> None: ...
+    def prepare(self, now: datetime, force: bool = False) -> None: ...
 
     def pick(self, now: datetime, dry_run: bool = False): ...
 
@@ -101,8 +101,16 @@ class DailyStateMachine:
 
         decision = self.pipeline.pick(now, dry_run=dry_run)
         if decision is None:
-            self.pipeline.prepare(now)
+            # A manual "换一张" may find the shortlist used up; refill it so
+            # the click does something instead of silently keeping the image.
+            self.pipeline.prepare(now, force=manual)
             decision = self.pipeline.pick(now, dry_run=dry_run)
+        if decision is None:
+            # Nothing new is usable (no proxy, provider down, seen before).
+            # A known good wallpaper beats the one the user asked to replace.
+            repeat = getattr(self.pipeline, "repeat_pick", None)
+            if repeat is not None:
+                decision = repeat(now)
         if decision is None:
             return TickResult("kept", "no candidate passed")
         if dry_run:
@@ -117,6 +125,9 @@ class DailyStateMachine:
         marker = getattr(self.pipeline, "mark_applied" if ok else "mark_failed", None)
         if marker is not None:
             marker(decision)
+        # An apply that was refused by the quality inspection explains itself
+        # in the tray instead of failing silently.
+        reason = "" if ok else getattr(self.apply_service, "last_error", "")
         return TickResult(
-            "applied" if ok else "apply_failed", "", decision.wallpaper_id
+            "applied" if ok else "apply_failed", reason, decision.wallpaper_id
         )

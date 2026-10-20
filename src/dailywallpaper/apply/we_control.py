@@ -1,13 +1,62 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import subprocess
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 class WeConfigError(RuntimeError):
     pass
+
+
+def desktop_window_visible() -> bool:
+    """True when Wallpaper Engine is actually drawing on the desktop.
+
+    Its config keeps naming a wallpaper while stopped, and it renders into a
+    child window of the desktop rather than a normal top-level one; that
+    window is the only reliable "is it on screen" signal.
+    """
+    try:
+        user32 = ctypes.windll.user32
+    except AttributeError:  # non-Windows
+        return False
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    found = []
+
+    def inspect(hwnd, _lparam):
+        name = ctypes.create_unicode_buffer(128)
+        user32.GetClassNameW(hwnd, name, 128)
+        # Scene wallpapers draw in WPEDesktopDX11Window; videos in
+        # WPEVideoWallpaper, which is *not* WS_VISIBLE. Both exist only while
+        # something is playing, so class plus size is the honest signal.
+        if not name.value.startswith("WPE"):
+            return True
+        if name.value in ("WPEEventWindow", "WPETrayWindow", "WPEFilePickerWindow"):
+            return True
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        if rect.right - rect.left >= 1000 and rect.bottom - rect.top >= 500:
+            found.append(name.value)
+        return True
+
+    callback = enum_proc(inspect)
+    tops = []
+
+    def collect(hwnd, _lparam):
+        tops.append(hwnd)
+        return True
+
+    user32.EnumWindows(enum_proc(collect), 0)
+    # EnumChildWindows walks descendants, and WE attaches its canvas deep
+    # enough that walking only Progman misses it.
+    for host in tops:
+        user32.EnumChildWindows(host, callback, 0)
+        if found:
+            break
+    return bool(found)
 
 def _find_wallpaperconfig(node: Any) -> dict[str, Any] | None:
     """Return the first dict holding a ``wallpaperconfig`` dict, at any depth."""

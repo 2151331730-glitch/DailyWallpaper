@@ -10,8 +10,12 @@ import threading
 import time
 from pathlib import Path
 
+from dailywallpaper.apply.we_control import desktop_window_visible
+
+# A failed live-wallpaper reopen must not spawn WE every guard cycle.
+DYNAMIC_RETRY_SECONDS = 60.0
 from dailywallpaper.apply.windows_static import WallpaperState
-from dailywallpaper.db import now_iso, today_iso
+from dailywallpaper.db import now_iso, parse_ts, today_iso
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,8 @@ def _norm(path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
+
+
 class ApplyService:
     """Switches the desktop to one wallpaper, releasing WE first if needed.
 
@@ -34,7 +40,8 @@ class ApplyService:
     """
 
     def __init__(self, conn, applier, we=None, clock=None, dynamic_applier=None,
-                 recheck_delays=(), sleep=None, spawn=None, style="fill"):
+                 recheck_delays=(), sleep=None, spawn=None, style="fill",
+                 min_resolution=None, we_rendering=None):
         self.conn = conn
         self.applier = applier
         self.dynamic_applier = dynamic_applier
@@ -46,9 +53,27 @@ class ApplyService:
         self.sleep = sleep or time.sleep
         self.spawn = spawn or _spawn_daemon
         self.style = style
+        # The last line of defence: never put a screening thumbnail on the
+        # desktop. None keeps tests (tiny fixture images) unaffected.
+        self.min_resolution = min_resolution
+        self.last_error = ""
+        # "Is WE drawing right now" -- its config keeps a selection while
+        # stopped, so only the desktop window answers this (or a fake's
+        # rendering() in tests).
+        self.we_rendering = we_rendering or self._default_we_rendering
+        self._last_dynamic_attempt = 0.0
+        # Decoding a 4K image costs ~0.1 s and never changes for one file;
+        # the next pick is pre-warmed so a click stays instant.
+        self._inspections: dict[tuple[str, float], bool] = {}
         # The recheck runs on another thread; sqlite connections are
         # thread-bound, so it opens its own to read the epoch.
         self._db_path = self._database_path()
+
+    def _default_we_rendering(self) -> bool:
+        probe = getattr(self.we, "rendering", None)
+        if probe is not None:
+            return bool(probe())
+        return desktop_window_visible()
 
     def _change_date(self) -> str:
         # Follow the state machine's clock when one is supplied, so a
@@ -80,6 +105,126 @@ class ApplyService:
         except Exception as exc:
             logger.warning(f"WE open failed: {exc}")
             return False
+
+    def current_wallpaper_id(self) -> int | None:
+        """Resolve what is on the desktop right now back to a wallpapers row.
+
+        A rating must target the wallpaper the user can actually see. The
+        last decision is not enough: the user may switch wallpapers inside
+        Wallpaper Engine, and an apply can be followed by WE taking over.
+        """
+        current = self._we_current()
+        if current:
+            untouched = self._we_untouched_by_the_latest_apply(current)
+            if untouched is not None:
+                return untouched
+            return self._match_we(current)
+        try:
+            static = getattr(self.applier, "current_wallpaper", lambda: "")()
+        except Exception as exc:
+            logger.warning(f"desktop wallpaper unavailable: {exc}")
+            return None
+        return self._match_static(static)
+
+    def _we_untouched_by_the_latest_apply(self, current: str) -> int | None:
+        """Resolve a desktop WE is not showing any more.
+
+        Closing WE before a static apply stops it rendering but leaves its
+        config naming the old live wallpaper. If that file is still what the
+        config says, the user has not picked anything inside WE since, so the
+        desktop shows the image we applied -- rating it as the old WE item is
+        exactly the "换一张之后评不了分" bug.
+        """
+        row = self.conn.execute(
+            "select wallpaper_id, previous_we_config_json, applied_at from"
+            " change_log where success=1 order by id desc limit 1"
+        ).fetchone()
+        if row is None:
+            return None
+        if self._undone_since(row):
+            # "撤销上一张" reopened the wallpaper that row replaced; the row is
+            # no longer what the desktop shows.
+            return None
+        try:
+            previous = json.loads(row["previous_we_config_json"] or "{}").get("file", "")
+        except ValueError:
+            return None
+        if not previous or _norm(previous) != _norm(current):
+            return None
+        return int(row["wallpaper_id"])
+
+    def _undone_since(self, row) -> bool:
+        undo = self.conn.execute(
+            "select value from state where key='last_undo_at'"
+        ).fetchone()
+        if undo is None:
+            return False
+        try:
+            return parse_ts(undo[0]) >= parse_ts(row["applied_at"])
+        except (ValueError, TypeError):
+            return False
+
+    def _match_we(self, current: str) -> int | None:
+        """Match WE's live file by project folder.
+
+        A project.json target resolves to a sibling scene.pkg or video, so
+        the file names differ; the folder is the stable identity.
+        """
+        try:
+            parent = Path(current).parent.resolve()
+        except (OSError, ValueError):
+            return None
+        rows = self.conn.execute(
+            "select id, file_url, local_path from wallpapers"
+        ).fetchall()
+        matches = []
+        for row in rows:
+            for path in (row["file_url"], row["local_path"]):
+                if not path:
+                    continue
+                try:
+                    if Path(path).parent.resolve() == parent:
+                        matches.append(int(row["id"]))
+                        break
+                except (OSError, ValueError):
+                    continue
+        return self._prefer_recent(matches)
+
+    def _match_static(self, current: str) -> int | None:
+        if not current:
+            return None
+        path = Path(current)
+        # Static applies write <data_dir>/wallpapers/<wallpaper id>.apply.jpg.
+        name = path.name
+        if path.parent.name == "wallpapers" and name.endswith(".apply.jpg"):
+            stem = name[: -len(".apply.jpg")]
+            if stem.isdigit():
+                row = self.conn.execute(
+                    "select 1 from wallpapers where id=?", (int(stem),)
+                ).fetchone()
+                if row is not None:
+                    return int(stem)
+        target = _norm(path)
+        rows = self.conn.execute(
+            "select id, local_path from wallpapers where local_path<>''"
+        ).fetchall()
+        for row in rows:
+            candidate = Path(row["local_path"]).with_suffix(".apply.jpg")
+            if _norm(candidate) == target:
+                return int(row["id"])
+        return None
+
+    def _prefer_recent(self, ids) -> int | None:
+        """Pick the row with the newest decision when a folder has several."""
+        if not ids:
+            return None
+        marks = ",".join("?" for _ in ids)
+        row = self.conn.execute(
+            f"select wallpaper_id from decisions where wallpaper_id in ({marks})"
+            " order by id desc limit 1",
+            ids,
+        ).fetchone()
+        return int(row[0]) if row is not None else max(ids)
 
     def _database_path(self) -> str:
         try:
@@ -129,12 +274,19 @@ class ApplyService:
         return self.applier, "static"
 
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
+        self.last_error = ""
+        if not self._inspection_passes(Path(image_path)):
+            return False
         chosen, method = self._applier_for(wallpaper_id)
         state = chosen.snapshot()
         we_before = self._we_current()
         # A WE apply switches the project itself; only a static one has to
-        # release the live wallpaper first (spec 9.1).
-        close_we = bool(self.we and we_before and method == "static")
+        # release the live wallpaper first (spec 9.1). Skipping the close when
+        # WE has not reopened anything saves its ~1.2 s control round trip on
+        # every click.
+        close_we = bool(
+            self.we and method == "static" and self.we_rendering()
+        )
         if close_we and not self._we_close():
             return False
 
@@ -180,6 +332,41 @@ class ApplyService:
             self.spawn(lambda: self._recheck_static(chosen, image_path, epoch))
         return True
 
+    def _inspection_passes(self, image_path: Path) -> bool:
+        """Refuse a static image that cannot look right on this screen.
+
+        Videos and scene packages are not images; they are left to the
+        applier. Unreadable files are not a quality decision either.
+        """
+        if self.min_resolution is None or not image_path.is_file():
+            return True
+        if image_path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+            return True
+        try:
+            key = (str(image_path), image_path.stat().st_mtime)
+        except OSError:
+            return True
+        if key in self._inspections:
+            return self._inspections[key]
+        from dailywallpaper.analysis.quality import inspect_image
+
+        report = inspect_image(image_path, self.min_resolution)
+        self._inspections[key] = report.ok
+        if report.ok:
+            return True
+        if "resolution" in report.reasons:
+            self.last_error = (
+                f"这张图只有 {report.width}x{report.height}，低于屏幕可用的"
+                f" {self.min_resolution[0]}x{self.min_resolution[1]}，已跳过"
+            )
+        else:
+            self.last_error = "这张图太模糊，已跳过"
+        logger.warning(
+            f"inspection refused {image_path.name}: {report.reasons}"
+            f" ({report.width}x{report.height}, sharpness {report.sharpness:.0f})"
+        )
+        return False
+
     def _recheck_static(self, applier, image_path: Path, epoch: int) -> None:
         """Put the static wallpaper back if WE took the desktop over."""
         elapsed = 0
@@ -208,6 +395,148 @@ class ApplyService:
                 # A recheck runs off the main path; one failure must not escape.
                 logger.warning(f"post-apply recheck failed: {exc}")
 
+    def _last_change(self):
+        """The newest successful change, unless the user undid it."""
+        row = self.conn.execute(
+            """
+            select c.wallpaper_id, w.local_path, w.file_url, w.media_type,
+                   c.applied_at
+            from change_log c join wallpapers w on w.id = c.wallpaper_id
+            where c.success = 1
+            order by c.id desc limit 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        undo = self.conn.execute(
+            "select value from state where key='last_undo_at'"
+        ).fetchone()
+        if undo is not None and undo[0] >= (row["applied_at"] or ""):
+            # The user undid that change; bringing it back would be a
+            # regression, not a rescue.
+            return None
+        return row
+
+    def _static_target(self) -> Path | None:
+        """The full-resolution file the last successful static change put up.
+
+        None for a live wallpaper, an undone change, or when only a
+        screening copy is left.
+        """
+        row = self._last_change()
+        if row is None or not row["local_path"]:
+            return None
+        if row["media_type"] in ("scene", "video"):
+            return None
+        recorded = self.conn.execute(
+            "select value from state where key='last_applied_path'"
+        ).fetchone()
+        if recorded is not None and recorded[0] and Path(recorded[0]).is_file():
+            return Path(recorded[0])
+        path = Path(row["local_path"])
+        # Never re-apply the <=1024px screening copy: a sharper file may not
+        # exist, but a blurry desktop is worse than none.
+        if "cache" in path.parts and "normalized" in path.parts:
+            logger.warning("no full-resolution file recorded; skipping")
+            return None
+        return path
+
+    def _keep_dynamic(self, row) -> bool:
+        """Keep a live wallpaper the app chose from being replaced by WE.
+
+        On a dynamic day WE owns the desktop, so the guard cannot simply
+        close it; it checks which project is playing and reopens ours when
+        something else (a wallpaper the user rated 1, say) took over.
+        """
+        project = row["file_url"] or row["local_path"]
+        if not project or self.we is None:
+            return False
+        target = Path(project)
+        try:
+            target_folder = target.parent.resolve()
+        except OSError:
+            return False
+        current = self._we_current()
+        if current:
+            try:
+                ours = Path(current).parent.resolve() == target_folder
+            except OSError:
+                ours = False
+            if ours and self.we_rendering():
+                return False
+        now = time.time()
+        if now - self._last_dynamic_attempt < DYNAMIC_RETRY_SECONDS:
+            return False
+        self._last_dynamic_attempt = now
+        opened = self._we_open(target)
+        if opened:
+            logger.info(f"keep_visible: reopened WE project {target_folder.name}")
+        return opened
+
+    def preflight(self, image_path) -> bool:
+        """Warm the next pick: inspect it and pre-encode the applied copy."""
+        path = Path(image_path)
+        ok = self._inspection_passes(path)
+        if ok and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+            try:
+                from dailywallpaper.apply.windows_static import convert_to_jpeg
+
+                convert_to_jpeg(path, path.with_suffix(".apply.jpg"))
+            except Exception as exc:  # warming is best effort
+                logger.warning(f"preflight conversion failed: {exc}")
+        return ok
+
+    def keep_visible(self) -> bool:
+        """Undo a takeover of the desktop while the app runs.
+
+        Wallpaper Engine restores its own live wallpaper whenever it likes
+        (service restart, monitor wake); the recheck after an apply only
+        watches 30 seconds, which is how a wallpaper the user rated 1 came
+        back minutes later. The worker's guard thread calls this every few
+        seconds, including while a long prepare is running.
+        """
+        row = self._last_change()
+        if row is None:
+            return False
+        if row["media_type"] in ("scene", "video"):
+            return self._keep_dynamic(row)
+        target = self._static_target()
+        if target is None or not self._inspection_passes(target):
+            return False
+        try:
+            getter = getattr(self.applier, "current_wallpaper", None)
+            if getter is not None:
+                current = getter() or ""
+            else:  # fakes and appliers that only expose a snapshot
+                current = getattr(self.applier.snapshot(), "wallpaper", "") or ""
+        except Exception as exc:
+            logger.warning(f"keep_visible: desktop unreadable: {exc}")
+            current = ""
+        ours = bool(current) and _norm(current) == _norm(
+            target.with_suffix(".apply.jpg")
+        )
+        # Only a visible desktop window means WE is drawing again; its saved
+        # selection survives a close and would otherwise trigger a control
+        # command every ten seconds.
+        we_active = bool(self.we) and self.we_rendering()
+        if ours and not we_active:
+            return False
+        if we_active:
+            if not self._we_close():
+                logger.warning("keep_visible: WE did not close")
+            else:
+                logger.info("keep_visible: closed Wallpaper Engine over our image")
+        if ours:
+            return True
+        try:
+            result = self.applier.apply(target, style=self.style)
+        except Exception as exc:
+            logger.warning(f"keep_visible: re-apply failed: {exc}")
+            return False
+        if not result.ok:
+            logger.warning(f"keep_visible: re-apply failed: {result.error}")
+        return bool(result.ok)
+
     def ensure_visible(self) -> bool:
         """Re-assert the last successful wallpaper after a login (spec 9.1).
 
@@ -215,40 +544,14 @@ class ApplyService:
         static one. Re-applying the recorded image is not a new change: it
         writes no change_log row and does not touch the daily limit.
         """
-        row = self.conn.execute(
-            """
-            select w.local_path, w.media_type, c.applied_at
-            from change_log c join wallpapers w on w.id = c.wallpaper_id
-            where c.success = 1
-            order by c.id desc limit 1
-            """
-        ).fetchone()
-        if row is None or not row[0]:
+        path = self._static_target()
+        if path is None:
             return False
-        undo = self.conn.execute(
-            "select value from state where key='last_undo_at'"
-        ).fetchone()
-        if undo is not None and undo[0] >= (row[2] or ""):
-            # The user undid that change; bringing it back at login would be
-            # a regression, not a rescue.
+        if not self._inspection_passes(path):
+            logger.warning("startup: recorded wallpaper failed inspection; skipping")
             return False
-        if row[1] in ("scene", "video"):
-            # WE owns the desktop; do not start it on its own (spec 9.2).
-            return False
-        recorded = self.conn.execute(
-            "select value from state where key='last_applied_path'"
-        ).fetchone()
-        if recorded is not None and recorded[0] and Path(recorded[0]).is_file():
-            path = Path(recorded[0])
-        else:
-            path = Path(row[0])
-            # Never re-apply the <=1024px screening copy: a sharper file
-            # may not exist, but a blurry desktop is worse than none.
-            if "cache" in path.parts and "normalized" in path.parts:
-                logger.warning("startup: no full-resolution file recorded; skipping")
-                return False
         try:
-            if self.we is not None and self._we_current():
+            if self.we is not None and self.we_rendering():
                 if not self._we_close():
                     # WE is not running yet (the control channel is dead);
                     # at login that is normal, so put the wallpaper back anyway.

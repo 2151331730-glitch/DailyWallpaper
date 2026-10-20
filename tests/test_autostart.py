@@ -33,6 +33,35 @@ def test_enable_twice_leaves_one_value():
     assert registry.values[VALUE_NAME] == "cmd"
 
 
+def test_sync_heals_a_lost_value():
+    registry = FakeRegistry()
+    service = AutostartService(registry, command="cmd")
+
+    service.sync(True)
+
+    assert registry.values == {VALUE_NAME: "cmd"}
+
+
+def test_sync_repairs_a_stale_command():
+    registry = FakeRegistry()
+    registry.values[VALUE_NAME] = "old-cmd"
+    service = AutostartService(registry, command="new-cmd")
+
+    service.sync(True)
+
+    assert registry.values == {VALUE_NAME: "new-cmd"}
+
+
+def test_sync_disables_when_the_config_says_off():
+    registry = FakeRegistry()
+    service = AutostartService(registry, command="cmd")
+    service.enable()
+
+    service.sync(False)
+
+    assert registry.values == {}
+
+
 def test_disable_removes_the_value():
     registry = FakeRegistry()
     service = AutostartService(registry, command="cmd")
@@ -68,3 +97,14 @@ def test_default_command_starts_the_tray_gui(tmp_path):
     command = default_command(tmp_path / "config.toml")
 
     assert "--headless" not in command
+
+
+def test_default_command_without_a_path_falls_back_to_the_default_config(tmp_path, monkeypatch):
+    from dailywallpaper import config as config_module
+    from dailywallpaper.app_autostart import default_command
+
+    monkeypatch.setattr(config_module, "default_config_path", lambda: tmp_path / "config.toml")
+
+    command = default_command()
+
+    assert str((tmp_path / "config.toml").absolute()) in command

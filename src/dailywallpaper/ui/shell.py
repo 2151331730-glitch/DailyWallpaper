@@ -2,6 +2,8 @@
 """Wire the tray, the window and the polling timer together."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QTimer
 
 from dailywallpaper.ui.main_window import MainWindow
@@ -27,54 +29,88 @@ class UiShell:
             config_path=getattr(command_service, "config_path", None),
             review_model=getattr(command_service, "review_model", None),
         )
+        config = getattr(command_service, "full_config", None)
+        wallpapers_dir = (
+            None if config is None else Path(config.app.data_dir) / "wallpapers"
+        )
         self.tray = TrayIcon(
             command_service,
             on_open=self.show_window,
             on_quit=self._quit,
-            on_rate=self.rate,
+            on_rate=self.open_rating,
+            wallpapers_dir=wallpapers_dir,
         )
         self._notified_for = None
+        self._announced_seq = 0
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start(POLL_MS)
 
     def show_window(self) -> None:
+        # Poll refreshes are skipped while the window is hidden, so catch up
+        # before the first paint instead of showing a stale frame.
+        self.window.refresh()
         self.window.show()
         self.window.raise_()
 
-    def rate(self, rating) -> None:
+    def open_rating(self) -> None:
+        """Show the rating box for the wallpaper on screen right now."""
         from dailywallpaper.recommend.ratings import RatingsService
+        from dailywallpaper.ui.rating_dialog import RatingDialog
 
-        row = self.service.conn.execute(
-            "select wallpaper_id from decisions order by id desc limit 1"
-        ).fetchone()
-        if not row:
+        wallpaper_id = self.service.current_wallpaper_id()
+        if wallpaper_id is None:
             return
-        service = RatingsService(self.service.conn)
-        if rating is not None:
-            try:
-                service.rate(row["wallpaper_id"], rating)
-            except Exception as exc:
-                import logging
-
-                logging.getLogger(__name__).warning(f"rating failed: {exc}")
-        else:
-            from dailywallpaper.ui.rating_dialog import RatingDialog
-
-            RatingDialog(service, row["wallpaper_id"], self.window).exec()
+        RatingDialog(
+            RatingsService(self.service.conn), wallpaper_id, self.window
+        ).exec()
         self.window.refresh()
+        if self.window.tabs.currentWidget() is self.window.history:
+            self.window.history.refresh()
 
     def _poll(self) -> None:
-        self.window.refresh()
+        # Resolving the desktop wallpaper costs a filesystem scan; doing it
+        # while nobody is looking only makes the shell slower, so the hidden
+        # window is refreshed on show instead.
+        if self.window.isVisible():
+            self.window.refresh()
         self.tray.refresh()
+        self._announce_manual_result()
         today = self.service.clock.now().date().isoformat()
-        if self.service.snapshot().today_changed:
+        if self.worker is not None and self.worker.busy():
+            self.tray.set_state("busy")
+        elif getattr(self.worker, "last_action", "") in ("apply_failed", "tick_failed"):
+            self.tray.set_state("error")
+        elif self.service.snapshot().today_changed:
             self.tray.set_state("changed")
             if self._notified_for != today:
                 self._notified_for = today
                 self.tray.notify("每日壁纸", "今日壁纸已更新")
         else:
             self.tray.set_state("idle")
+
+    def _announce_manual_result(self) -> None:
+        """Say why a manual change ended without a new wallpaper.
+
+        Silence looked like a dead click: the tray promised "正在挑选并更换"
+        and nothing happened.
+        """
+        worker = self.worker
+        if worker is None:
+            return
+        seq = getattr(worker, "result_seq", 0)
+        if seq == self._announced_seq:
+            return
+        self._announced_seq = seq
+        action, reason, manual = getattr(worker, "last_result", ("", "", False))
+        if not manual:
+            return
+        if action == "kept":
+            if reason == "no candidate passed":
+                reason = "没有候选通过筛选（网络或模型限流）"
+            self.tray.notify("没换成", reason or "没有可用的候选，稍后再试")
+        elif action in ("apply_failed", "tick_failed"):
+            self.tray.notify("更换失败", reason or "应用壁纸时出错，详情见日志")
 
     def _quit(self) -> None:
         self.poll_timer.stop()
@@ -101,6 +137,20 @@ def _start_prefetcher(cfg) -> None:
         logging.getLogger(__name__).warning(f"prefetcher not started: {exc}")
 
 
+def _sync_autostart(cfg, config_path) -> None:
+    """Heal a lost Run value at launch; the config is the source of truth."""
+    from dailywallpaper.app_autostart import AutostartService, default_command
+
+    try:
+        AutostartService(command=default_command(config_path)).sync(
+            cfg.app.start_with_windows
+        )
+    except Exception as exc:  # a locked registry must not block the shell
+        import logging
+
+        logging.getLogger(__name__).warning(f"autostart sync failed: {exc}")
+
+
 def build_gui(cfg, config_path=None) -> int:
     """Composition root for the desktop shell."""
     import sys
@@ -122,6 +172,7 @@ def build_gui(cfg, config_path=None) -> int:
     from dailywallpaper.config import default_config_path
 
     resolved_path = config_path or default_config_path()
+    _sync_autostart(cfg, resolved_path)
     service = CommandService(
         machine.conn,
         cfg.app,
@@ -132,7 +183,13 @@ def build_gui(cfg, config_path=None) -> int:
     )
     service.full_config = cfg
     service.config_path = resolved_path
-    service.review_model = cfg.vision.review_model
+    # With one model doing both passes there is no separate "reviewed" stage
+    # to advertise, and the window would label every wallpaper as reviewed.
+    service.review_model = (
+        cfg.vision.review_model
+        if cfg.vision.review_model != cfg.vision.screen_model
+        else None
+    )
     app = QApplication.instance() or QApplication(sys.argv)
     shell = UiShell(
         service, machine, on_quit=app.quit, worker=worker,

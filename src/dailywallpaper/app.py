@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 import keyring
 import requests
@@ -15,6 +16,8 @@ import requests
 from dailywallpaper.analysis.images import canonicalize, download
 from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
 from dailywallpaper.analysis.prefilter import prefilter
+from dailywallpaper.analysis.prompts import PROMPT_VERSION
+from dailywallpaper.analysis.quality import inspect_image, required_resolution
 from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
@@ -37,6 +40,7 @@ from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
+from dailywallpaper.sources.base import Candidate
 from dailywallpaper.sources.repository import (
     mark_source_down,
     set_local_path,
@@ -57,12 +61,32 @@ DEFAULT_INTERVAL_SECONDS = 60
 STEAM_KEY_ACCOUNT = "steam_api_key"
 # Only the head of the ranked list needs a full-resolution download.
 MATERIALIZE_TOP_N = 3
+# A day's shortlist can be used up by several manual changes. Refilling it
+# means fetching and screening again, so allow only a couple of refills.
+MAX_FORCED_PREPARES = 2
+# Zhipu answers 429/1305 while a model is overloaded. Each retry costs about a
+# second, and the endpoint was refusing every request in a burst, so one slow
+# click paid that wait for all 41 candidates. After this many refusals in a row
+# the rest of the pass is pointless: keep what scored and stop.
+RATE_LIMIT_ABORT_AFTER = 6
+# Below this many fresh candidates the day's pool is considered broken (the
+# proxy is down and only Bing answers) and downloaded wallpapers stand in.
+OFFLINE_POOL_MIN = 5
+OFFLINE_POOL_LIMIT = 60
+# A rating this low means "never show me this again", not "rank it lower".
+BANNED_MAX_RATING = 2
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 logger = logging.getLogger(__name__)
 
 # Per-call estimate handed to the budget guard before any paid work.
 ESTIMATE_CNY = 0.003
+
+
+def _rate_limited(exc: Exception) -> bool:
+    """True when the provider refused the call for being overloaded."""
+    text = str(exc)
+    return "429" in text or "1305" in text or "访问量过大" in text
 
 
 class AlreadyRunning(RuntimeError):
@@ -164,6 +188,16 @@ class RealPipeline:
         # In-memory only: the prepared shortlist does not survive a restart,
         # so persisting this would strand the day exactly like the dry-run bug.
         self._prepared_on = None
+        # A manual "new one" may refill an exhausted shortlist a couple of
+        # times a day; unbounded refills would burn the analysis quota.
+        self._forced_on = None
+        self._forced_count = 0
+        self._rate_limited_streak = 0
+        # A host that just timed out will time out again; without this one
+        # dead CDN cost 30 s per candidate and the click looked broken.
+        self._failed_hosts: set[str] = set()
+        # Wallpapers the user rated 1-2; they never enter a pool again.
+        self._banned: set[int] = set()
 
     def _recent_styles(self):
         rows = self.conn.execute(
@@ -189,36 +223,169 @@ class RealPipeline:
         return recent
 
     def _profile(self, now):
+        """Ratings joined with the features the vision model saw in them.
+
+        The old query only carried one genre tag, so a taste for fog, low
+        angles or muted palettes could never be learned.
+        """
         rows = self.conn.execute(
             """
-            select r.rating, r.created_at, r.derived_tags_json, w.source
-            from ratings r join wallpapers w on w.id = r.wallpaper_id
+            select r.rating, r.created_at, r.derived_tags_json, w.source,
+                   a.style_tags_json, a.mood_tags_json
+            from ratings r
+            join wallpapers w on w.id = r.wallpaper_id
+            left join analyses a on a.id = (
+                select max(a2.id) from wallpaper_analyses wa2
+                join analyses a2 on a2.id = wa2.analysis_id
+                where wa2.wallpaper_id = w.id
+            )
             """
         ).fetchall()
         return PreferenceProfile.from_ratings(rows, now)
 
-    def prepare(self, now) -> None:
+    def _cached_steam_candidates(self, limit: int) -> list[Candidate]:
+        """Rebuild candidates for workshop items already on disk.
+
+        The Steam API can be down while the downloads are still usable; the
+        prefetcher may also have items the latest query no longer returns.
+        """
+        rows = self.conn.execute(
+            """
+            select id, source, source_id, title, page_url, file_url, preview_url,
+                   media_type, width, height, file_size, tags_json, raw_json
+            from wallpapers where source='steam_workshop'
+            order by id desc limit ?
+            """,
+            (max(0, int(limit)),),
+        ).fetchall()
+        candidates = []
+        for row in rows:
+            if int(row["id"]) in self._banned:
+                continue
+            project = row["file_url"]
+            if not project or not Path(project).is_file():
+                continue
+            candidates.append(
+                Candidate(
+                    source=row["source"],
+                    source_id=row["source_id"],
+                    title=row["title"],
+                    page_url=row["page_url"],
+                    file_url=project,
+                    preview_url=row["preview_url"],
+                    media_type=row["media_type"],
+                    width=row["width"],
+                    height=row["height"],
+                    file_size=row["file_size"],
+                    tags=json.loads(row["tags_json"] or "[]"),
+                    raw=json.loads(row["raw_json"] or "{}"),
+                )
+            )
+        return candidates
+
+    def _cached_local_candidates(self, media_types, limit: int) -> list[Candidate]:
+        """Candidates rebuilt from wallpapers downloaded on earlier days.
+
+        They come back as local paths, so nothing is fetched and the vision
+        analysis is a cache hit; the saved full-resolution copy is preferred
+        over the 1024px screening image so a 4K desktop stays sharp.
+        """
+        placeholders = ",".join("?" for _ in media_types)
+        # Only rows that already carry a screen-model analysis: one without it
+        # would be a paid call, which is exactly what a dead proxy cannot do.
+        rows = self.conn.execute(
+            f"select id, source, source_id, title, page_url, file_url, media_type,"
+            f" width, height, file_size, tags_json, raw_json, local_path"
+            f" from wallpapers w where local_path<>'' and media_type in ({placeholders})"
+            f" and exists (select 1 from wallpaper_analyses wa join analyses a"
+            f"   on a.id = wa.analysis_id"
+            f"   where wa.wallpaper_id = w.id and a.model = ?)"
+            f" order by id desc limit ?",
+            (*sorted(media_types), self.cfg.vision.screen_model, int(limit)),
+        ).fetchall()
+        data_dir = Path(self.cfg.app.data_dir) / "wallpapers"
+        candidates = []
+        for row in rows:
+            if int(row["id"]) in self._banned:
+                continue
+            local = Path(row["local_path"])
+            if not local.is_file():
+                continue
+            # The applied asset must be the full-resolution one: the saved
+            # copy for images, the workshop project for scenes and videos.
+            # The 1024px screening image is never a wallpaper. Without a local
+            # full-res file the remote URL is kept, so the materialiser can
+            # fetch it later (and drop it if the download fails).
+            full = data_dir / f"{row['id']}.jpg"
+            if full.is_file():
+                asset = str(full)
+            elif row["file_url"] and Path(row["file_url"]).is_file():
+                asset = row["file_url"]
+            elif str(row["file_url"]).startswith(("http://", "https://")):
+                asset = row["file_url"]
+            else:
+                continue
+            candidates.append(
+                Candidate(
+                    source=row["source"],
+                    source_id=row["source_id"],
+                    title=row["title"],
+                    page_url=row["page_url"],
+                    file_url=asset,
+                    preview_url=str(local),
+                    media_type=row["media_type"],
+                    width=row["width"],
+                    height=row["height"],
+                    file_size=row["file_size"],
+                    tags=json.loads(row["tags_json"] or "[]"),
+                    raw=json.loads(row["raw_json"] or "{}"),
+                    reuse_analysis=True,
+                    known_id=int(row["id"]),
+                )
+            )
+        return candidates
+
+    def prepare(self, now, force: bool = False) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
         prepared_key = f"prepared_{now.date().isoformat()}"
-        if self._prepared_on == prepared_key:
+        if self._prepared_on == prepared_key and not force:
             # One pass per day: the resident loop ticks every 60 s.
             return
+        if force:
+            day = now.date().isoformat()
+            if self._forced_on != day:
+                self._forced_on = day
+                self._forced_count = 0
+            if self._forced_count >= MAX_FORCED_PREPARES:
+                return
+            self._forced_count += 1
         throttle = self.conn.execute(
             "select value from state where key='empty_prepare_at'"
         ).fetchone()
-        if throttle is not None:
+        if throttle is not None and not force:
             try:
                 if time.time() - float(throttle[0]) < 1800:
                     return
             except (TypeError, ValueError):
                 pass
 
+        self._rate_limited_streak = 0
+        self._failed_hosts.clear()
+        self._banned = {
+            int(row[0])
+            for row in self.conn.execute(
+                "select wallpaper_id from ratings where rating <= ?",
+                (BANNED_MAX_RATING,),
+            ).fetchall()
+        }
         raw = []
         today = now.date().isoformat()
         for source in self.sources:
             name = type(source).__name__
-            if source_is_down(self.conn, name, today):
+            # A manual refill is the user asking us to try again: yesterday's
+            # or this morning's "source down" marker must not silence it.
+            if not force and source_is_down(self.conn, name, today):
                 continue
             try:
                 raw.extend(source.fetch(self.cfg.app.max_analyses_per_day))
@@ -231,6 +398,16 @@ class RealPipeline:
         on_battery = False
         if self.cfg.wallpaper.dynamic_requires_ac:
             on_battery = (self.power or PowerStatus()).on_battery()
+        # Already-downloaded Steam items are usable even when the workshop API
+        # is unavailable; without this the pool shrinks to the local workshop.
+        seen = {(candidate.source, candidate.source_id) for candidate in raw}
+        for cached in self._cached_steam_candidates(
+            max(10, self.cfg.steam_workshop.per_page)
+        ):
+            key = (cached.source, cached.source_id)
+            if key not in seen:
+                raw.append(cached)
+                seen.add(key)
         kind = MediaPlan.decide(
             now.date(),
             self.cfg.wallpaper.media_strategy,
@@ -240,6 +417,20 @@ class RealPipeline:
         wanted = {"scene", "video"} if kind == "dynamic" else {"image"}
         primary = [candidate for candidate in raw if candidate.media_type in wanted]
         secondary = [candidate for candidate in raw if candidate.media_type not in wanted]
+        if len(primary) < OFFLINE_POOL_MIN:
+            # A dead proxy leaves Bing's single daily image as the whole pool,
+            # which is why "换一张" did nothing and the picks were poor. The
+            # images already downloaded on earlier days are still on disk and
+            # already scored (a cache hit), so they can stand in for the day.
+            for cached in self._cached_local_candidates(wanted, OFFLINE_POOL_LIMIT):
+                key = (cached.source, cached.source_id)
+                if key not in seen:
+                    raw.append(cached)
+                    primary.append(cached)
+                    seen.add(key)
+            logger.info(
+                f"online sources thin; {len(primary)} candidate(s) after local cache"
+            )
         logger.info(f"media plan: {kind} day, {len(primary)} candidate(s)")
 
         recent = self._recent_styles()
@@ -348,6 +539,9 @@ class RealPipeline:
             url = str(row[0]) if row else ""
             if not url.startswith(("http://", "https://")):
                 continue
+            host = urlparse(url).netloc
+            if host in self._failed_hosts:
+                continue
             try:
                 raw = data_dir / "downloads" / f"{decision.wallpaper_id}.img"
                 download(
@@ -360,9 +554,20 @@ class RealPipeline:
                 convert_to_jpeg(raw, dest)
                 raw.unlink(missing_ok=True)
                 counters["downloads"] += 1
+                report = inspect_image(dest, required_resolution())
+                if not report.ok:
+                    dest.unlink(missing_ok=True)
+                    logger.warning(
+                        f"full image for {decision.wallpaper_id} rejected by"
+                        f" inspection: {report.width}x{report.height}"
+                        f" sharpness {report.sharpness:.0f} {report.reasons}"
+                    )
+                    continue
                 made += 1
                 kept.append(replace(decision, apply_path=dest))
             except Exception as exc:
+                if host:
+                    self._failed_hosts.add(host)
                 logger.warning(
                     f"full image for {decision.wallpaper_id} failed: {exc}"
                 )
@@ -400,7 +605,14 @@ class RealPipeline:
             if not self.budget.check(ESTIMATE_CNY):
                 break
             try:
-                wallpaper_id = upsert_wallpaper(self.conn, candidate)
+                # A rebuilt candidate already has a row; upserting it would
+                # write local paths over the remote URLs it came from.
+                wallpaper_id = candidate.known_id or upsert_wallpaper(
+                    self.conn, candidate
+                )
+                if wallpaper_id in self._banned:
+                    # Rated 1-2: the user never wants to see it again.
+                    continue
                 if not candidate.preview_url:
                     continue
                 asset = Path(candidate.file_url)
@@ -421,11 +633,17 @@ class RealPipeline:
                         asset, data_dir / "cache" / "sheets" / f"{wallpaper_id}.jpg"
                     )
                 else:
-                    preview = download(
-                        self.session,
-                        candidate.preview_url,
-                        data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
-                    )
+                    local_preview = Path(candidate.preview_url)
+                    if local_preview.is_file():
+                        # Rebuilt from the cache: no download, and the
+                        # screening step is free.
+                        preview = local_preview
+                    else:
+                        preview = download(
+                            self.session,
+                            candidate.preview_url,
+                            data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
+                        )
                 counters["downloads"] += 1
                 canonical, image_hash = canonicalize(
                     preview, data_dir / "cache" / "normalized"
@@ -435,10 +653,35 @@ class RealPipeline:
                     continue
                 set_phash(self.conn, wallpaper_id, check.dhash)
                 set_local_path(self.conn, wallpaper_id, canonical)
-                record = self.vision.analyze_or_cache(
-                    wallpaper_id, image_hash, canonical, self.cfg.vision.screen_model
-                )
-                counters["analyses"] += 1
+                record = None
+                stale = None
+                if candidate.reuse_analysis:
+                    # An old rubric (v1 knew nothing about sugar water or
+                    # clichés) must not decide today's pick; re-score when the
+                    # provider answers, and only fall back to it if it cannot.
+                    stale = self.vision.latest_for(
+                        wallpaper_id, self.cfg.vision.screen_model
+                    )
+                    if stale is not None and (
+                        stale.prompt_version == PROMPT_VERSION
+                    ):
+                        record = stale
+                if record is None:
+                    try:
+                        record = self.vision.analyze_or_cache(
+                            wallpaper_id, image_hash, canonical,
+                            self.cfg.vision.screen_model,
+                        )
+                        counters["analyses"] += 1
+                        self._rate_limited_streak = 0
+                    except Exception:
+                        if stale is None:
+                            raise
+                        logger.info(
+                            f"using the stored analysis for {wallpaper_id}"
+                            " after the provider failed"
+                        )
+                        record = stale
                 if hard_gate(record.scores):
                     continue
                 scores = final_score(
@@ -470,6 +713,16 @@ class RealPipeline:
             except Exception as exc:
                 # One broken preview or vision response must not end the run.
                 logger.warning(f"candidate {candidate.source_id} skipped: {exc}")
+                if not _rate_limited(exc):
+                    self._rate_limited_streak = 0
+                    continue
+                self._rate_limited_streak += 1
+                if self._rate_limited_streak >= RATE_LIMIT_ABORT_AFTER:
+                    logger.warning(
+                        f"provider rate-limited {self._rate_limited_streak} "
+                        "times in a row; ending this pass early"
+                    )
+                    break
                 continue
 
     def _review_top(self, profile, recent, weather_code) -> None:
@@ -520,6 +773,58 @@ class RealPipeline:
             and decision.wallpaper_id not in rejected
         ]
         self.shortlist = reviewed + rest
+
+    def repeat_pick(self, now):
+        """Best previously applied wallpaper that is still on disk.
+
+        Only used when nothing new can be applied: no proxy, provider down,
+        every candidate already seen. Leaving the wallpaper the user asked to
+        replace is the worst of the options, so a known good image comes back.
+        """
+        current = self.conn.execute(
+            "select wallpaper_id from change_log where success=1"
+            " order by id desc limit 1"
+        ).fetchone()
+        current_id = -1 if current is None else int(current[0])
+        rows = self.conn.execute(
+            """
+            select d.wallpaper_id, d.explore_score, d.personalize_score,
+                   d.final_score, w.source, w.local_path
+            from decisions d
+            join wallpapers w on w.id = d.wallpaper_id
+            left join ratings r on r.wallpaper_id = w.id
+            where d.status = 'applied'
+              and (r.rating is null or r.rating >= 4)
+              and d.wallpaper_id <> ?
+            order by d.final_score desc, d.id desc
+            limit 20
+            """,
+            (current_id,),
+        ).fetchall()
+        data_dir = Path(self.cfg.app.data_dir) / "wallpapers"
+        for row in rows:
+            path = data_dir / f"{row['wallpaper_id']}.jpg"
+            if not path.is_file():
+                continue
+            record = self.vision.latest_for(
+                int(row["wallpaper_id"]), self.cfg.vision.screen_model
+            )
+            if record is None:
+                continue
+            local = Path(row["local_path"]) if row["local_path"] else path
+            return Decision(
+                wallpaper_id=int(row["wallpaper_id"]),
+                image_path=local if local.is_file() else path,
+                scores=record.scores,
+                explore=float(row["explore_score"]),
+                personalize=float(row["personalize_score"]),
+                final=float(row["final_score"]),
+                reason="以前用过、评价不错的一张（暂时没有更合适的新图）",
+                source=row["source"] or "",
+                apply_path=path,
+                ready=True,
+            )
+        return None
 
     def pick(self, now, dry_run: bool = False):
         if not self.shortlist:
@@ -602,11 +907,34 @@ def workshop_root(install_dir) -> Path | None:
     return None
 
 
+def configure_session(cfg, session=None) -> requests.Session:
+    """A session whose proxy is the one in the config, and nothing else.
+
+    ``trust_env`` must be off: with it on, requests falls back to the system
+    or environment proxy, which is exactly the dead 127.0.0.1:7892 that made
+    Bing fail even though the app had already decided to go direct.
+    """
+    session = session or requests.Session()
+    session.trust_env = False
+    proxy = str(getattr(cfg.sources, "proxy", "") or "").strip()
+    if proxy:
+        from dailywallpaper.net import proxy_alive
+
+        if proxy_alive(proxy):
+            # A live proxy is used for every source, domestic ones included.
+            session.proxies.update({"http": proxy, "https": proxy})
+        else:
+            logger.warning(
+                f"configured proxy {proxy} is not listening; using direct connections"
+            )
+    return session
+
+
 def build_pipeline(cfg, conn):
     for name in (cfg.vision.screen_model, cfg.vision.review_model):
         if name not in cfg.vision.pricing:
             raise ValueError(f"[vision.pricing.{name!r}] is missing from the config")
-    session = requests.Session()
+    session = configure_session(cfg)
     sources = []
     if cfg.sources.wallhaven_enabled:
         sources.append(WallhavenSource(session))
@@ -681,6 +1009,7 @@ def build_application(cfg):
             dynamic_applier=dynamic_applier,
             recheck_delays=(5, 30),
             style=cfg.wallpaper.style,
+            min_resolution=required_resolution(),
         ),
     )
     return Application(machine)

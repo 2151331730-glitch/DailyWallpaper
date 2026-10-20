@@ -41,6 +41,9 @@ class SourcesSection:
     max_video_mb: int = 500
     wallhaven_pages: int = 4
     connect_timeout: int = 5
+    # Explicit proxy for Wallhaven / Steam / downloads. Empty means "use the
+    # environment", which on Windows ignores Pigeon/Clash's system proxy.
+    proxy: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,8 +113,8 @@ class SteamWorkshopSection:
     enabled: bool = False
     query_type: int = 3          # IPublishedFileService: 3 = trend
     days: int = 30
-    per_page: int = 20
-    prefetch_top_n: int = 2
+    per_page: int = 50
+    prefetch_top_n: int = 6
     max_cache_gb: float = 3.0
     steamcmd_path: str = ""      # empty -> <data_dir>/tools/steamcmd/steamcmd.exe
     steam_account: str = ""      # username only; the password is never stored

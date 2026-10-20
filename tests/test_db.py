@@ -40,6 +40,34 @@ def test_backup(tmp_path):
     assert dest.exists()
 
 
+def test_v1_three_state_ratings_become_ten_point_scores(tmp_path):
+    from dailywallpaper.db import SCHEMA_SQL, SCHEMA_VERSION
+
+    old = sqlite3.connect(tmp_path / "old.db")
+    old.executescript(SCHEMA_SQL)
+    old.execute("PRAGMA user_version=1")
+    for index, rating in enumerate((-1, 0, 1)):
+        old.execute(
+            "insert into wallpapers(source,source_id,created_at) values('t',?,'x')",
+            (str(index),),
+        )
+        wid = old.execute("select last_insert_rowid()").fetchone()[0]
+        old.execute(
+            "insert into ratings(wallpaper_id,rating,comment,derived_tags_json,"
+            "created_at) values(?,?,'','[]','x')",
+            (wid, rating),
+        )
+    old.commit()
+    old.close()
+
+    conn = connect(tmp_path / "old.db")
+    migrate(conn)
+
+    ratings = [row[0] for row in conn.execute("select rating from ratings order by id")]
+    assert ratings == [1, 5, 10]
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
 def test_now_iso_format():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", now_iso())
 

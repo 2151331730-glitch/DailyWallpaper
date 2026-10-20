@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Spec 6.1, verbatim.
 SCHEMA_SQL = """
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS change_log (
 CREATE TABLE IF NOT EXISTS ratings (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   wallpaper_id     INTEGER NOT NULL REFERENCES wallpapers(id),
-  rating           INTEGER NOT NULL,          -- -1 dislike | 0 neutral | 1 like
+  rating           INTEGER NOT NULL,          -- 1 (最低) .. 10 (最高)
   comment          TEXT NOT NULL DEFAULT '',
   derived_tags_json TEXT NOT NULL DEFAULT '[]',
   created_at       TEXT NOT NULL
@@ -141,6 +141,12 @@ def migrate(conn) -> None:
     if version >= SCHEMA_VERSION:
         return
     conn.executescript(SCHEMA_SQL)
+    if version < 2:
+        # v1 stored -1 / 0 / 1; the ten-point scale arrived in v2.
+        conn.execute(
+            "update ratings set rating = case rating"
+            " when -1 then 1 when 0 then 5 when 1 then 10 else rating end"
+        )
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
 

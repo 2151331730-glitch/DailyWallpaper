@@ -10,6 +10,9 @@ import numpy as np
 from PIL import Image
 
 DOWNLOAD_CHUNK = 1024 * 256
+# A healthy CDN answers in a second; an unreachable one (Wallhaven without a
+# proxy) used to stall the whole change for 30 s per candidate.
+CONNECT_TIMEOUT = 8
 DOWNLOAD_TIMEOUT = 30
 MAX_DOWNLOAD_BYTES = 40 * 1024 * 1024
 MAX_THUMB = 1024
@@ -34,7 +37,9 @@ def download(session, url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES)
         return dest
     part = dest.with_suffix(dest.suffix + ".part")
     try:
-        with session.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+        with session.get(
+            url, stream=True, timeout=(CONNECT_TIMEOUT, DOWNLOAD_TIMEOUT)
+        ) as response:
             response.raise_for_status()
             total = 0
             with part.open("wb") as handle:

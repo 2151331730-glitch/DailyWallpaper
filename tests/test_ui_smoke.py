@@ -52,8 +52,8 @@ def test_tray_has_the_documented_menu(qapp):
 
     labels = [action.text() for action in tray.menu.actions() if action.text()]
 
-    assert labels[:7] == [
-        "今日壁纸", "换一张", "撤销上一张", "喜欢", "不喜欢", "暂停自动更换", "设置"
+    assert labels[:6] == [
+        "今日壁纸", "换一张", "撤销上一张", "评分…", "暂停自动更换", "设置",
     ]
     assert labels[-1] == "退出"
 
@@ -101,6 +101,19 @@ def test_state_switch_does_not_crash(qapp):
         tray.set_state(kind)
 
 
+def test_tray_tooltip_names_the_state(qapp):
+    tray = TrayIcon(_Service(), on_open=lambda: None, on_quit=lambda: None)
+
+    tray.set_state("busy")
+    assert "正在更换" in tray.toolTip()
+
+    tray.set_state("changed")
+    assert "今日已更新" in tray.toolTip()
+
+    tray.set_state("nonsense")  # unknown states fall back to idle
+    assert "待机" in tray.toolTip()
+
+
 def test_paused_service_offers_resume_instead_of_the_menu(qapp):
     service = _Service()
     service.paused = True
@@ -110,6 +123,26 @@ def test_paused_service_offers_resume_instead_of_the_menu(qapp):
     assert tray.pause_action.menu() is None
     tray.pause_action.trigger()
     assert service.paused is False
+
+
+def test_folder_action_opens_the_wallpapers_dir(qapp, tmp_path, monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+
+    opened = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        staticmethod(lambda url: opened.append(url.toLocalFile())),
+    )
+    tray = TrayIcon(
+        _Service(), on_open=lambda: None, on_quit=lambda: None,
+        wallpapers_dir=tmp_path,
+    )
+
+    tray.folder_action.trigger()
+
+    assert opened == [tmp_path.as_posix()]
+    assert any(action.text() == "打开壁纸文件夹" for action in tray.menu.actions())
 
 
 def test_settings_action_opens_the_window(qapp):
@@ -143,6 +176,22 @@ def test_main_window_shows_the_latest_decision(qapp, tmp_path):
 
     assert "测试壁纸" in window.title_label.text()
     assert "74.5" in window.score_label.text()
+
+
+def test_refresh_resolves_the_current_wallpaper_once(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    window = MainWindow(_Service(), conn)
+    calls = []
+    window._current_wallpaper_id = lambda: (calls.append(1), 1)[1]
+
+    window.refresh()
+
+    # The poll runs every 2 s; resolving twice doubled a whole-table scan.
+    assert calls == [1]
 
 
 def test_closing_the_window_hides_it(qapp, tmp_path):
@@ -229,7 +278,7 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
     warmed = threading.Event()
 
     class _Pipeline:
-        def prepare(self, now):
+        def prepare(self, now, force=False):
             warmed.set()
 
     class _Clock:
@@ -251,6 +300,70 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
         worker.stop()
 
 
+def test_worker_reports_busy_while_a_tick_runs():
+    import threading
+
+    from dailywallpaper.ui.worker import Worker
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class _M:
+        pipeline = None
+        clock = None
+
+        def tick(self, dry_run=False, manual=False):
+            started.set()
+            release.wait(5)
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker.start()
+    try:
+        assert started.wait(2) is True
+        assert worker.busy() is True
+    finally:
+        release.set()
+        worker.stop()
+
+
+def test_poll_shows_busy_while_the_worker_works(qapp, tmp_path):
+    from datetime import datetime
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.state.machine import TickResult
+    from dailywallpaper.ui.commands import CommandService
+    from dailywallpaper.ui.shell import UiShell
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 18, 9, 0)
+
+    class _Machine:
+        def tick(self, dry_run=False):
+            return TickResult("kept")
+
+    class _Apply:
+        def undo_last(self):
+            return True
+
+    class _Worker:
+        last_action = ""
+
+        def busy(self):
+            return True
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    service = CommandService(conn, AppSection(), _Clock(), _Machine(), _Apply())
+    shell = UiShell(service, _Machine(), on_quit=lambda: None, worker=_Worker())
+    try:
+        shell._poll()
+        assert "正在更换" in shell.tray.toolTip()
+    finally:
+        shell.poll_timer.stop()
+
+
 def test_worker_ignores_a_second_manual_request_while_busy():
     from dailywallpaper.ui.worker import Worker
 
@@ -260,7 +373,7 @@ def test_worker_ignores_a_second_manual_request_while_busy():
     assert worker.change_now() is False
 
 
-def test_rating_dialog_saves_like_and_reason(qapp, tmp_path):
+def test_rating_dialog_saves_a_score_and_reason(qapp, tmp_path):
     from dailywallpaper.db import connect, migrate
     from dailywallpaper.recommend.ratings import RatingsService
     from dailywallpaper.ui.rating_dialog import RatingDialog
@@ -273,12 +386,77 @@ def test_rating_dialog_saves_like_and_reason(qapp, tmp_path):
 
     dialog = RatingDialog(RatingsService(conn), wid)
     dialog.reason_buttons["太暗"].click()
-    dialog.like_button.click()
+    dialog.score_buttons[8].click()
 
-    assert dialog.chosen == 1
+    assert dialog.chosen == 8
     row = conn.execute("select rating, comment from ratings").fetchone()
-    assert row["rating"] == 1
+    assert row["rating"] == 8
     assert "太暗" in row["comment"]
+
+
+def test_rating_dialog_stays_open_after_saving(qapp, tmp_path):
+    from PySide6.QtWidgets import QDialog
+
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.rating_dialog import RatingDialog
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.commit()
+
+    dialog = RatingDialog(RatingsService(conn), wid)
+    dialog.score_buttons[8].click()
+
+    assert dialog.chosen == 8
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "已保存" in dialog.hint_label.text()
+
+
+def test_reasons_typed_after_the_score_update_the_saved_row(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.rating_dialog import RatingDialog
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.commit()
+
+    dialog = RatingDialog(RatingsService(conn), wid)
+    dialog.score_buttons[8].click()
+    dialog.reason_buttons["太暗"].click()
+
+    row = conn.execute("select rating, comment from ratings").fetchone()
+    assert row["rating"] == 8
+    assert "太暗" in row["comment"]
+
+
+def test_rating_dialog_opens_at_the_bottom_right(qapp, tmp_path):
+    from PySide6.QtGui import QGuiApplication
+
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend.ratings import RatingsService
+    from dailywallpaper.ui.rating_dialog import RatingDialog, CORNER_MARGIN
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.commit()
+
+    dialog = RatingDialog(RatingsService(conn), wid)
+    dialog.show()
+    qapp.processEvents()
+    area = QGuiApplication.primaryScreen().availableGeometry()
+    try:
+        assert dialog.x() == area.right() - dialog.width() - CORNER_MARGIN + 1
+        assert dialog.y() == area.bottom() - dialog.height() - CORNER_MARGIN + 1
+    finally:
+        dialog.close()
 
 
 def test_rating_dialog_exposes_the_documented_reasons(qapp):
@@ -328,25 +506,27 @@ def test_main_window_has_today_and_history_tabs(qapp, tmp_path):
     ]
 
 
-def test_tray_exposes_like_and_dislike(qapp):
+def test_tray_keeps_quick_ratings_out_of_the_menu(qapp):
     tray = TrayIcon(_Service(), on_open=lambda: None, on_quit=lambda: None)
 
     labels = [action.text() for action in tray.menu.actions() if action.text()]
 
-    assert "喜欢" in labels
-    assert "不喜欢" in labels
+    assert "评分…" in labels
+    assert "喜欢" not in labels
+    assert "中性" not in labels
+    assert "不喜欢" not in labels
 
 
 def test_tray_rate_action_calls_back(qapp):
     seen = []
     tray = TrayIcon(
-        _Service(), on_open=lambda: None, on_quit=lambda: None, on_rate=seen.append
+        _Service(), on_open=lambda: None, on_quit=lambda: None,
+        on_rate=lambda: seen.append(1),
     )
 
-    tray.like_action.trigger()
-    tray.dislike_action.trigger()
+    tray.rate_action.trigger()
 
-    assert seen == [1, -1]
+    assert seen == [1]
 
 
 def test_cost_page_shows_spend_and_models(qapp, tmp_path):
@@ -413,12 +593,22 @@ def _config_file(tmp_path):
     return cfg, path
 
 
+class _RecordingAutostart:
+    """Keeps the settings tests off the real HKCU Run key."""
+
+    def __init__(self):
+        self.calls = []
+
+    def sync(self, wanted):
+        self.calls.append(wanted)
+
+
 def test_settings_page_saves_a_valid_change(qapp, tmp_path):
     from dailywallpaper.config import load_config
     from dailywallpaper.ui.settings_page import SettingsPage
 
     cfg, path = _config_file(tmp_path)
-    page = SettingsPage(cfg, path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
     page.daily_time_edit.setText("07:15")
 
     assert page.save() is True
@@ -430,7 +620,7 @@ def test_settings_page_rejects_an_invalid_time(qapp, tmp_path):
     from dailywallpaper.ui.settings_page import SettingsPage
 
     cfg, path = _config_file(tmp_path)
-    page = SettingsPage(cfg, path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
     page.daily_time_edit.setText("25:99")
 
     assert page.save() is False
@@ -442,7 +632,7 @@ def test_settings_page_toggles_a_source(qapp, tmp_path):
     from dailywallpaper.ui.settings_page import SettingsPage
 
     cfg, path = _config_file(tmp_path)
-    page = SettingsPage(cfg, path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
     page.wallhaven_check.setChecked(False)
 
     assert page.save() is True
@@ -532,11 +722,24 @@ def test_settings_page_toggles_the_manual_override(qapp, tmp_path):
     from dailywallpaper.ui.settings_page import SettingsPage
 
     cfg, path = _config_file(tmp_path)
-    page = SettingsPage(cfg, path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
     page.manual_override_check.setChecked(True)
 
     assert page.save() is True
     assert load_config(path).app.allow_manual_override_after_daily_change is True
+
+
+def test_settings_page_syncs_autostart_with_the_checkbox(qapp, tmp_path):
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    autostart = _RecordingAutostart()
+    page = SettingsPage(cfg, path, autostart=autostart)
+
+    page.autostart_check.setChecked(True)
+    page.save()
+
+    assert autostart.calls == [True]
 
 
 def test_worker_runs_a_manual_request_without_waiting_for_the_interval():
@@ -575,7 +778,7 @@ def test_settings_page_reports_a_write_failure(qapp, tmp_path, monkeypatch):
         raise OSError("disk full")
 
     monkeypatch.setattr(module, "save_config", boom)
-    page = module.SettingsPage(cfg, path)
+    page = module.SettingsPage(cfg, path, autostart=_RecordingAutostart())
 
     assert page.save() is False
     assert "保存失败" in page.status.text()
@@ -607,3 +810,30 @@ def test_undo_action_tells_the_user_when_there_is_nothing_to_undo(qapp):
     tray.undo_action.trigger()
 
     assert notes and "没有可撤销" in notes[0]
+
+
+def test_the_desktop_guard_does_nothing_while_paused(tmp_path):
+    from datetime import datetime, timedelta
+
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.ui.worker import Worker
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+
+    class _Clock:
+        def now(self):
+            return datetime.now().astimezone()
+
+    worker = Worker(lambda: object())
+    until = (datetime.now().astimezone() + timedelta(days=1)).isoformat(
+        timespec="seconds"
+    )
+    conn.execute("insert into state(key,value) values('paused_until',?)", (until,))
+    conn.commit()
+
+    assert worker._paused_state(conn, _Clock()) is True
+
+    conn.execute("delete from state where key='paused_until'")
+    conn.commit()
+    assert worker._paused_state(conn, _Clock()) is False

@@ -20,6 +20,16 @@ FRESH_WEIGHT = 1.0
 AGING_WEIGHT = 0.5
 OLD_WEIGHT = 0.25
 NEUTRAL = 50.0
+SCORE_MIN = 1
+SCORE_MAX = 10
+SCORE_MIDPOINT = (SCORE_MIN + SCORE_MAX) / 2
+SCORE_HALF_RANGE = (SCORE_MAX - SCORE_MIN) / 2
+
+
+def _rating_weight(rating: float) -> float:
+    """Map the 1..10 score onto -1..+1 for the tag/source sums."""
+    score = max(SCORE_MIN, min(SCORE_MAX, rating))
+    return (score - SCORE_MIDPOINT) / SCORE_HALF_RANGE
 
 
 def _decay(age_days: int) -> float:
@@ -38,6 +48,31 @@ def _source_of(row) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _list_field(row, key) -> list[str]:
+    try:
+        raw = row[key]
+    except (KeyError, IndexError):
+        return []
+    try:
+        values = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [value for value in values if isinstance(value, str)]
+
+
+def _features(row) -> list[str]:
+    """The visual features a rating taught us.
+
+    Learning from the analysis (style + mood) beats the old single genre tag:
+    "fog, muted-palette, long-exposure" explains a taste far better than
+    "landscape", and the principle is to learn traits, not categories.
+    """
+    features = _list_field(row, "style_tags_json") + _list_field(row, "mood_tags_json")
+    if features:
+        return features
+    return _list_field(row, "derived_tags_json")
+
+
 @dataclass
 class PreferenceProfile:
     tag_weights: dict[str, float]
@@ -52,8 +87,10 @@ class PreferenceProfile:
         for row in rows:
             count += 1
             created = parse_ts(row["created_at"])
-            weight = _decay((_as_aware(now) - created).days) * row["rating"]
-            for tag in json.loads(row["derived_tags_json"] or "[]"):
+            weight = _decay((_as_aware(now) - created).days) * _rating_weight(
+                row["rating"]
+            )
+            for tag in _features(row):
                 tags[tag] += weight
             source = _source_of(row)
             if source:
