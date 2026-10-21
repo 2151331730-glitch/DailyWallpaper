@@ -17,6 +17,7 @@ from dailywallpaper.analysis.images import canonicalize, download
 from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
 from dailywallpaper.analysis.prefilter import prefilter
 from dailywallpaper.analysis.prompts import PROMPT_VERSION
+from dailywallpaper.analysis.desktop_fit import measure as measure_desktop_fit
 from dailywallpaper.analysis.quality import inspect_image, required_resolution
 from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
 from dailywallpaper.analysis.vision import (
@@ -767,8 +768,16 @@ class RealPipeline:
                             record = stale
                 if hard_gate(record.scores):
                     continue
+                fit = None
+                try:
+                    fit = measure_desktop_fit(canonical)
+                except Exception as exc:
+                    logger.warning(
+                        f"desktop fit for {wallpaper_id} failed: {exc}"
+                    )
                 scores = final_score(
-                    record.scores, candidate.source, profile, recent, weather_code
+                    record.scores, candidate.source, profile, recent, weather_code,
+                    desktop_fit=None if fit is None else fit.score,
                 )
                 reason = record.scores.reason
                 if weather_text:
@@ -835,8 +844,16 @@ class RealPipeline:
             if hard_gate(record.scores):
                 rejected.add(decision.wallpaper_id)
                 continue
+            fit = None
+            try:
+                fit = measure_desktop_fit(decision.image_path)
+            except Exception as exc:
+                logger.warning(
+                    f"desktop fit for {decision.wallpaper_id} failed: {exc}"
+                )
             scores = final_score(
-                record.scores, decision.source, profile, recent, weather_code
+                record.scores, decision.source, profile, recent, weather_code,
+                desktop_fit=None if fit is None else fit.score,
             )
             reviewed.append(
                 replace(

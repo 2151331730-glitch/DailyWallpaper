@@ -32,6 +32,11 @@ AVOID_FORMULAIC_LIMIT = 40
 # picture cannot win by stacking tag words on a thin idea.
 BOOST_PER_TAG = 6
 BOOST_CAP = 18
+# Desktop-fit (local brightness/edge measurement) nudges, it does not decide:
+# a beautiful picture that hides every icon should lose to a slightly worse
+# one that works on a desk, but only by a few points.
+DESKTOP_FIT_CENTER = 60.0
+DESKTOP_FIT_WEIGHT = 0.15
 
 
 def hard_gate(scores: VisionScores) -> list[str]:
@@ -129,7 +134,8 @@ def boost_score(scores: VisionScores, boost_tags) -> float:
 
 
 def final_score(
-    scores: VisionScores, source: str, profile, recent, weather_code: int
+    scores: VisionScores, source: str, profile, recent, weather_code: int,
+    desktop_fit: float | None = None,
 ) -> DecisionScores:
     explore = explore_score(scores, source, recent)
     raw_personalize = personalize_score(scores, profile, source, weather_code)
@@ -143,12 +149,16 @@ def final_score(
     penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
     penalty += avoid_penalty(scores, getattr(profile, "avoid_tags", ()))
     boost = boost_score(scores, getattr(profile, "boost_tags", ()))
+    adjust = 0.0
+    if desktop_fit is not None:
+        adjust = (desktop_fit - DESKTOP_FIT_CENTER) * DESKTOP_FIT_WEIGHT
     return DecisionScores(
         explore=explore,
         personalize=personalize,
         final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize
         - penalty
-        + boost,
+        + boost
+        + adjust,
     )
 
 
