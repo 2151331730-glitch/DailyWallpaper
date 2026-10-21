@@ -244,7 +244,21 @@ class RealPipeline:
             )
             """
         ).fetchall()
-        return PreferenceProfile.from_ratings(rows, now)
+        profile = PreferenceProfile.from_ratings(rows, now)
+        if profile.rating_count == 0:
+            # A fresh install starts from the human-curated seed instead of a
+            # flat cold-start prior; the user's own ratings replace it as soon
+            # as they rate anything.
+            from dailywallpaper.curation.seed import load_seed, seed_profile
+
+            seed = load_seed()
+            if seed is not None:
+                logger.info(
+                    f"cold start from curated seed"
+                    f" ({seed.get('rating_count', 0)} ratings)"
+                )
+                return seed_profile(seed)
+        return profile
 
     def _cached_steam_candidates(self, limit: int) -> list[Candidate]:
         """Rebuild candidates for workshop items already on disk.

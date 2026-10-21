@@ -23,6 +23,15 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         action="store_true",
         help="run the scheduler without the desktop shell",
     )
+    parser.add_argument(
+        "--curate",
+        type=int,
+        nargs="?",
+        const=300,
+        default=None,
+        metavar="N",
+        help="open the curation wall: rate N candidates and build a seed",
+    )
     args = parser.parse_args(argv)
     if args.dry_run:
         # A dry run that is silently ignored (GUI) or that loops real applies
@@ -57,6 +66,13 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
 
             gui = build_gui
         return gui(cfg, args.config)
+
+    if args.curate:
+        # Curation is a separate window and must open while the resident
+        # scheduler is already running, so it skips the single-instance lock.
+        from dailywallpaper.ui.curation_window import run_curation
+
+        return run_curation(cfg, args.config, count=args.curate)
 
     try:
         with SingleInstance(instance_name or INSTANCE_NAME):
