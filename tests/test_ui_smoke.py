@@ -52,8 +52,9 @@ def test_tray_has_the_documented_menu(qapp):
 
     labels = [action.text() for action in tray.menu.actions() if action.text()]
 
-    assert labels[:6] == [
-        "今日壁纸", "换一张", "撤销上一张", "评分…", "暂停自动更换", "设置",
+    assert labels[:7] == [
+        "今日壁纸", "换一张", "撤销上一张", "评分…", "壁纸声音",
+        "暂停自动更换", "设置",
     ]
     assert labels[-1] == "退出"
 

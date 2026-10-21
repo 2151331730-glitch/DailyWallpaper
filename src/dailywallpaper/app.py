@@ -59,11 +59,14 @@ from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
 STEAM_KEY_ACCOUNT = "steam_api_key"
-# Only the head of the ranked list needs a full-resolution download.
+# Only the head of the ranked list is downloaded up front; every other
+# candidate fetches its full image on demand, when a click actually reaches
+# it (see RealPipeline._materialize_one).
 MATERIALIZE_TOP_N = 3
 # A day's shortlist can be used up by several manual changes. Refilling it
-# means fetching and screening again, so allow only a couple of refills.
-MAX_FORCED_PREPARES = 2
+# means fetching and screening again, so the budget is finite -- but two was
+# too tight: the fifth click of a day had nothing left to try.
+MAX_FORCED_PREPARES = 6
 # Zhipu answers 429/1305 while a model is overloaded. Each retry costs about a
 # second, and the endpoint was refusing every request in a burst, so one slow
 # click paid that wait for all 41 candidates. After this many refusals in a row
@@ -371,6 +374,10 @@ class RealPipeline:
                 pass
 
         self._rate_limited_streak = 0
+        # A refill must be quick: re-scoring 41 candidates against a new
+        # prompt version took minutes and looked like a dead click. Spend at
+        # most a handful of fresh analyses, then reuse what is cached.
+        self._reanalyze_budget = 5 if force else None
         self._failed_hosts.clear()
         self._banned = {
             int(row[0])
@@ -496,7 +503,10 @@ class RealPipeline:
             self._keep_ready()
 
         self.shortlist = rank(self.shortlist, now.date().isoformat())
-        if self.cfg.vision.review_top_n > 0 and self.shortlist:
+        # A refill is a click the user is waiting on: the review pass costs
+        # five more model calls and only re-ranks the head, which is not
+        # worth a minute of "换一张" looking broken.
+        if not force and self.cfg.vision.review_top_n > 0 and self.shortlist:
             self._review_top(profile, recent, weather_code)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
         self._materialize(data_dir, counters)
@@ -528,10 +538,10 @@ class RealPipeline:
                 # Already a file on disk, or a local path with nothing better.
                 kept.append(decision)
                 continue
-            # This is the last download of the day for this candidate and it
-            # decides whether the wallpaper is sharp, so it may exceed the
-            # preview quota by at most MATERIALIZE_TOP_N.
+            # Beyond the head, leave the candidate in the shortlist without a
+            # full-size file: pick() downloads it only if a click gets there.
             if made >= MATERIALIZE_TOP_N:
+                kept.append(decision)
                 continue
             row = self.conn.execute(
                 "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
@@ -572,6 +582,53 @@ class RealPipeline:
                     f"full image for {decision.wallpaper_id} failed: {exc}"
                 )
         self.shortlist = kept
+
+    def _materialize_one(self, decision):
+        """Fetch the full image for the candidate a click is about to apply.
+
+        Preparing ten full-size downloads per refill made every click wait on
+        ten; the screening copy is not a wallpaper, so the file has to be
+        fetched either way -- but only the one that actually goes on screen.
+        """
+        if decision.apply_path is not None:
+            return decision
+        row = self.conn.execute(
+            "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
+        ).fetchone()
+        url = str(row[0]) if row else ""
+        if not url.startswith(("http://", "https://")):
+            return None
+        host = urlparse(url).netloc
+        if host in self._failed_hosts:
+            return None
+        data_dir = Path(self.cfg.app.data_dir)
+        try:
+            raw = data_dir / "downloads" / f"{decision.wallpaper_id}.img"
+            download(
+                self.session,
+                url,
+                raw,
+                max_bytes=self.cfg.sources.max_image_mb * 1024 * 1024,
+            )
+            dest = data_dir / "wallpapers" / f"{decision.wallpaper_id}.jpg"
+            convert_to_jpeg(raw, dest)
+            raw.unlink(missing_ok=True)
+            report = inspect_image(dest, required_resolution())
+            if not report.ok:
+                dest.unlink(missing_ok=True)
+                logger.warning(
+                    f"full image for {decision.wallpaper_id} rejected by"
+                    f" inspection: {report.width}x{report.height}"
+                )
+                return None
+            return replace(decision, apply_path=dest)
+        except Exception as exc:
+            if host:
+                self._failed_hosts.add(host)
+            logger.warning(
+                f"full image for {decision.wallpaper_id} failed: {exc}"
+            )
+            return None
 
     def _keep_ready(self) -> None:
         self.shortlist = [decision for decision in self.shortlist if decision.ready]
@@ -667,21 +724,33 @@ class RealPipeline:
                     ):
                         record = stale
                 if record is None:
-                    try:
-                        record = self.vision.analyze_or_cache(
-                            wallpaper_id, image_hash, canonical,
-                            self.cfg.vision.screen_model,
-                        )
-                        counters["analyses"] += 1
-                        self._rate_limited_streak = 0
-                    except Exception:
+                    if (
+                        self._reanalyze_budget is not None
+                        and self._reanalyze_budget <= 0
+                    ):
+                        # A refill may not spend minutes re-scoring: use what
+                        # the cache already knows, or skip the candidate.
                         if stale is None:
-                            raise
-                        logger.info(
-                            f"using the stored analysis for {wallpaper_id}"
-                            " after the provider failed"
-                        )
+                            continue
                         record = stale
+                    else:
+                        try:
+                            record = self.vision.analyze_or_cache(
+                                wallpaper_id, image_hash, canonical,
+                                self.cfg.vision.screen_model,
+                            )
+                            counters["analyses"] += 1
+                            self._rate_limited_streak = 0
+                            if self._reanalyze_budget is not None:
+                                self._reanalyze_budget -= 1
+                        except Exception:
+                            if stale is None:
+                                raise
+                            logger.info(
+                                f"using the stored analysis for {wallpaper_id}"
+                                " after the provider failed"
+                            )
+                            record = stale
                 if hard_gate(record.scores):
                     continue
                 scores = final_score(
@@ -838,19 +907,27 @@ class RealPipeline:
                 (BANNED_MAX_RATING,),
             ).fetchall()
         }
-        while self.shortlist and self.shortlist[0].wallpaper_id in banned:
-            self.shortlist.pop(0)
-        if not self.shortlist:
+        while self.shortlist:
+            decision = self.shortlist.pop(0)
+            if decision.wallpaper_id in banned:
+                continue
+            if not decision.ready:
+                # Defensive: prepare() filters these out; never apply a preview.
+                continue
+            if decision.apply_path is None:
+                # The head is pre-downloaded; everything else is fetched only
+                # when a click actually reaches it.
+                decision = self._materialize_one(decision)
+                if decision is None:
+                    continue
+            if decision.source == "steam_workshop" and (
+                decision.apply_path is None or not Path(decision.apply_path).is_file()
+            ):
+                # The prefetcher may have evicted the folder after prepare.
+                continue
+            break
+        else:
             return None
-        decision = self.shortlist.pop(0)
-        if not decision.ready:
-            # Defensive: prepare() filters these out; never apply a preview.
-            return self.pick(now, dry_run=dry_run)
-        if decision.source == "steam_workshop" and (
-            decision.apply_path is None or not Path(decision.apply_path).is_file()
-        ):
-            # The prefetcher may have evicted the folder after prepare.
-            return self.pick(now, dry_run=dry_run)
         # Recorded before the apply; promoted to 'applied' only once the
         # desktop actually changed.
         cursor = self.conn.execute(
@@ -999,6 +1076,12 @@ def build_pipeline(cfg, conn):
 def build_application(cfg):
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
+    # Live wallpapers start silent on every launch; the tray switch turns the
+    # audio on for this session only, so a reboot never surprises the user.
+    conn.execute(
+        "insert or replace into state(key,value) values('sound_enabled','0')"
+    )
+    conn.commit()
     pipeline = build_pipeline(cfg, conn)
     dynamic_applier = None
     we_control = None

@@ -106,6 +106,15 @@ class TrayIcon(QSystemTrayIcon):
             lambda: on_rate() if on_rate else None
         )
 
+        # Some live wallpapers (scene packages, videos) carry sound. One
+        # checkable entry muting WE covers all of them; the per-wallpaper
+        # volume lives inside WE, which this app does not run.
+        self.sound_action = QAction("壁纸声音", self.menu)
+        self.sound_action.setCheckable(True)
+        probe = getattr(service, "sound_enabled", None)
+        self.sound_action.setChecked(True if probe is None else bool(probe()))
+        self.sound_action.triggered.connect(self._toggle_sound)
+
         self.pause_action = QAction("暂停自动更换", self.menu)
         self.pause_menu = QMenu("暂停自动更换", self.menu)
         for label, days in PAUSE_OPTIONS:
@@ -131,6 +140,7 @@ class TrayIcon(QSystemTrayIcon):
             self.change_action,
             self.undo_action,
             self.rate_action,
+            self.sound_action,
             self.pause_action,
             self.settings_action,
             self.folder_action,
@@ -185,11 +195,21 @@ class TrayIcon(QSystemTrayIcon):
             self.service.resume()
         self.refresh()
 
+    def _toggle_sound(self, checked: bool) -> None:
+        setter = getattr(self.service, "set_sound", None)
+        if setter is not None and not setter(checked):
+            self.notify("壁纸声音", "切换失败，Wallpaper Engine 可能没有运行")
+        # The command may have been ignored; show what the app actually holds.
+        probe = getattr(self.service, "sound_enabled", None)
+        if probe is not None:
+            self.sound_action.setChecked(bool(probe()))
+
     def refresh(self, snapshot=None) -> None:
         # The shell polls every 2 s and already has a snapshot; asking the
         # service twice per poll was two extra queries for nothing.
         snapshot = snapshot or self.service.snapshot()
         self.change_action.setEnabled(snapshot.can_change)
+        self.sound_action.setChecked(snapshot.sound_enabled)
         self.pause_action.setText("恢复自动更换" if snapshot.paused else "暂停自动更换")
         self.pause_action.setMenu(None if snapshot.paused else self.pause_menu)
 

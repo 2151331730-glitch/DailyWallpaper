@@ -14,6 +14,15 @@ from dailywallpaper.apply.we_control import desktop_window_visible
 
 # A failed live-wallpaper reopen must not spawn WE every guard cycle.
 DYNAMIC_RETRY_SECONDS = 60.0
+# Kept in step with app.BANNED_MAX_RATING: a rating this low means "never
+# again", so WE must not restore it either.
+BANNED_MAX_RATING = 2
+# The tray's sound switch. Stored in the DB (not config.toml) so the worker's
+# connection and the UI's connection see the same value.
+SOUND_KEY = "sound_enabled"
+# WE forgets its mute state when it restarts, so while sound is off the guard
+# re-sends the command every minute instead of once per wallpaper.
+SOUND_REASSERT_SECONDS = 60.0
 from dailywallpaper.apply.windows_static import WallpaperState
 from dailywallpaper.db import now_iso, parse_ts, today_iso
 
@@ -62,6 +71,7 @@ class ApplyService:
         # rendering() in tests).
         self.we_rendering = we_rendering or self._default_we_rendering
         self._last_dynamic_attempt = 0.0
+        self._sound_sent_at = 0.0
         # (kind, current path, table stamp) -> wallpaper id, for the 2 s poll
         self._match_cache: dict[tuple, int | None] = {}
         # Decoding a 4K image costs ~0.1 s and never changes for one file;
@@ -107,6 +117,51 @@ class ApplyService:
         except Exception as exc:
             logger.warning(f"WE open failed: {exc}")
             return False
+
+    def _we_mute(self) -> bool:
+        try:
+            return bool(self.we and self.we.mute())
+        except Exception as exc:
+            logger.warning(f"WE mute failed: {exc}")
+            return False
+
+    def _we_unmute(self) -> bool:
+        try:
+            return bool(self.we and self.we.unmute())
+        except Exception as exc:
+            logger.warning(f"WE unmute failed: {exc}")
+            return False
+
+    def sound_enabled(self) -> bool:
+        # No row means the app has not started a session yet: silent by
+        # default, matching the "no sound after a reboot" expectation.
+        row = self.conn.execute(
+            "select value from state where key=?", (SOUND_KEY,)
+        ).fetchone()
+        return row is not None and str(row[0]) != "0"
+
+    def set_sound(self, enabled: bool) -> bool:
+        """Turn live-wallpaper audio on or off (the tray switch)."""
+        self.conn.execute(
+            "insert or replace into state(key,value) values(?,?)",
+            (SOUND_KEY, "1" if enabled else "0"),
+        )
+        self.conn.commit()
+        self._sound_sent_at = time.time()
+        return self._we_unmute() if enabled else self._we_mute()
+
+    def _ensure_sound_policy(self, force: bool = False) -> None:
+        """Keep WE silent while the switch is off.
+
+        WE does not persist its mute state across restarts, so a one-off
+        command is lost the next time it starts; the guard re-asserts it.
+        """
+        if self.sound_enabled() or self.we is None:
+            return
+        if not force and time.time() - self._sound_sent_at < SOUND_REASSERT_SECONDS:
+            return
+        if self._we_mute():
+            self._sound_sent_at = time.time()
 
     def current_wallpaper_id(self) -> int | None:
         """Resolve what is on the desktop right now back to a wallpapers row.
@@ -324,6 +379,9 @@ class ApplyService:
             if close_we:
                 self._we_open(Path(we_before))
             return False
+        if method == "we":
+            # Every scene/video can carry sound; honour the tray switch.
+            self._ensure_sound_policy(force=True)
 
         self.conn.execute(
             """
@@ -461,6 +519,50 @@ class ApplyService:
             return None
         return path
 
+    def _is_banned(self, wallpaper_id: int) -> bool:
+        row = self.conn.execute(
+            "select 1 from ratings where wallpaper_id=? and rating<=?",
+            (wallpaper_id, BANNED_MAX_RATING),
+        ).fetchone()
+        return row is not None
+
+    def forget_banned_selection(self) -> bool:
+        """Move WE's saved selection off a wallpaper rated 1-2.
+
+        Closing WE only stops the picture; its config still names the project
+        and every restart puts it back (the "rated 1 but it keeps coming
+        back" report). Rewriting the saved selection is what actually ends
+        it -- and it also covers a project whose files were deleted.
+        """
+        current = self._we_current()
+        if not current:
+            return False
+        wallpaper_id = self._match_we(current)
+        if wallpaper_id is None or not self._is_banned(wallpaper_id):
+            return False
+        target = self._static_target()
+        if target is None:
+            # A live wallpaper is on the desktop: _keep_dynamic reopens our
+            # project, which updates WE's own selection.
+            return False
+        applied = target.with_suffix(".apply.jpg")
+        if applied.is_file():
+            target = applied
+        if not self._we_close():
+            return False
+        # WE writes its config on the way out; give it a moment first.
+        self.sleep(0.3)
+        try:
+            if self.we is None or not self.we.replace_selection(target):
+                return False
+        except Exception as exc:
+            logger.warning(f"WE selection reset failed: {exc}")
+            return False
+        logger.info(
+            f"WE selection moved away from banned wallpaper {wallpaper_id}"
+        )
+        return True
+
     def _keep_dynamic(self, row) -> bool:
         """Keep a live wallpaper the app chose from being replaced by WE.
 
@@ -483,6 +585,9 @@ class ApplyService:
             except OSError:
                 ours = False
             if ours and self.we_rendering():
+                # WE may have restarted since the last apply and forgotten
+                # the mute; re-assert it while the switch is off.
+                self._ensure_sound_policy()
                 return False
         now = time.time()
         if now - self._last_dynamic_attempt < DYNAMIC_RETRY_SECONDS:
@@ -515,6 +620,7 @@ class ApplyService:
         back minutes later. The worker's guard thread calls this every few
         seconds, including while a long prepare is running.
         """
+        self.forget_banned_selection()
         row = self._last_change()
         if row is None:
             return False

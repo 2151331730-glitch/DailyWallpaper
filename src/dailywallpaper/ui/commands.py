@@ -19,6 +19,7 @@ class UiState:
     can_change: bool
     last_action: str = ""
     last_reason: str = ""
+    sound_enabled: bool = True
 
 
 class CommandService:
@@ -123,6 +124,17 @@ class CommandService:
     def undo(self) -> bool:
         return bool(self.apply_service.undo_last())
 
+    def sound_enabled(self) -> bool:
+        probe = getattr(self.apply_service, "sound_enabled", None)
+        return True if probe is None else bool(probe())
+
+    def set_sound(self, enabled: bool) -> bool:
+        """Mute or unmute live-wallpaper audio; the tray switch calls this."""
+        setter = getattr(self.apply_service, "set_sound", None)
+        if setter is None:
+            return False
+        return bool(setter(enabled))
+
     def snapshot(self) -> UiState:
         return UiState(
             today_changed=self._changed_today(),
@@ -130,4 +142,5 @@ class CommandService:
             can_change=self.can_change_manually(),
             last_action=self._last_action,
             last_reason=self._last_reason,
+            sound_enabled=self.sound_enabled(),
         )

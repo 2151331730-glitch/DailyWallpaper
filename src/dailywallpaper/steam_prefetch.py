@@ -21,6 +21,9 @@ APP_ID = 431960
 INTERVAL_SECONDS = 900
 CANDIDATE_WINDOW = 50
 FAILURE_RETRY_SECONDS = 30 * 60
+# Same meaning as app.BANNED_MAX_RATING: never spend disk or bandwidth on a
+# workshop item the user rated 1-2 (a 291 MB download is not a rounding error).
+BANNED_MAX_RATING = 2
 
 
 class Prefetcher:
@@ -48,11 +51,15 @@ class Prefetcher:
                 join wallpaper_analyses wa on wa.wallpaper_id = w.id
                 join analyses a on a.id = wa.analysis_id
                 where w.source = 'steam_workshop'
+                  and not exists (
+                    select 1 from ratings r
+                    where r.wallpaper_id = w.id and r.rating <= ?
+                  )
                 group by w.id
                 order by quality desc
                 limit ?
                 """,
-                (CANDIDATE_WINDOW,),
+                (BANNED_MAX_RATING, CANDIDATE_WINDOW),
             ).fetchall()
             # The items we would prefetch next must survive eviction, or the
             # cache thrashes: best-ranked is downloaded first, then evicted

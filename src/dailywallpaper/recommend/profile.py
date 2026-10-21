@@ -20,6 +20,14 @@ FRESH_WEIGHT = 1.0
 AGING_WEIGHT = 0.5
 OLD_WEIGHT = 0.25
 NEUTRAL = 50.0
+# Ratings this low mean "never show me this again" (app.py bans the same
+# rows from the pool), but the profile still has to LEARN from them: the
+# style that produced a 1 is a taste to avoid, and skipping the row would
+# leave the recommender free to serve the same look under a new filename.
+BANNED_MAX_RATING = 2
+# A 1 is not "one step below neutral": it is the strongest dislike there is,
+# so it is pushed past the linear -1 the scale would give it.
+BANNED_PENALTY = 1.5
 SCORE_MIN = 1
 SCORE_MAX = 10
 SCORE_MIDPOINT = (SCORE_MIN + SCORE_MAX) / 2
@@ -27,9 +35,17 @@ SCORE_HALF_RANGE = (SCORE_MAX - SCORE_MIN) / 2
 
 
 def _rating_weight(rating: float) -> float:
-    """Map the 1..10 score onto -1..+1 for the tag/source sums."""
+    """Map the 1..10 score onto -1..+1 for the tag/source sums (banned: 1.5x).
+
+    The extra push on 1-2 is deliberate: the pool already bans those exact
+    wallpapers, so the only thing the rating can still teach is the style --
+    and it should teach it loudly.
+    """
     score = max(SCORE_MIN, min(SCORE_MAX, rating))
-    return (score - SCORE_MIDPOINT) / SCORE_HALF_RANGE
+    weight = (score - SCORE_MIDPOINT) / SCORE_HALF_RANGE
+    if score <= BANNED_MAX_RATING:
+        weight *= BANNED_PENALTY
+    return weight
 
 
 def _decay(age_days: int) -> float:
@@ -88,7 +104,7 @@ class PreferenceProfile:
             count += 1
             created = parse_ts(row["created_at"])
             weight = _decay((_as_aware(now) - created).days) * _rating_weight(
-                row["rating"]
+                float(row["rating"])
             )
             for tag in _features(row):
                 tags[tag] += weight

@@ -35,6 +35,8 @@ class _FakeWe:
         self.close_ok = close_ok
         self.closed = 0
         self.opened = []
+        self.replaced = []
+        self.sound_calls = []
 
     def current(self):
         return self._current
@@ -49,6 +51,18 @@ class _FakeWe:
 
     def open(self, file, monitor=0):
         self.opened.append(str(file).replace("\\", "/"))
+        return True
+
+    def replace_selection(self, file):
+        self.replaced.append(str(file).replace("\\", "/"))
+        return True
+
+    def mute(self):
+        self.sound_calls.append("mute")
+        return True
+
+    def unmute(self):
+        self.sound_calls.append("unmute")
         return True
 
 
@@ -883,3 +897,108 @@ def test_a_failed_reopen_is_retried_at_most_once_a_minute(tmp_path):
     service.keep_visible()
 
     assert len(we.opened) == 1
+
+
+def test_forget_banned_selection_moves_we_off_the_rated_one(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    image.with_suffix(".apply.jpg").write_bytes(b"x")
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+
+    project = tmp_path / "workshop" / "999" / "project.json"
+    project.parent.mkdir(parents=True)
+    project.write_bytes(b"x")
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,file_url,created_at)"
+        " values('we_workshop','999','scene',?,'x')",
+        (str(project),),
+    )
+    banned = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,created_at) values(?,1,'x')",
+        (banned,),
+    )
+    conn.commit()
+
+    we = _FakeWe(current=str(project.parent / "scene.pkg"))
+    service = ApplyService(conn, _FakeApplier(), we=we, sleep=lambda s: None)
+
+    assert service.forget_banned_selection() is True
+    assert we.closed == 1
+    assert we.replaced == [str(image.with_suffix(".apply.jpg")).replace("\\", "/")]
+
+
+def test_forget_banned_selection_leaves_a_well_rated_item_alone(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+
+    project = tmp_path / "workshop" / "888" / "project.json"
+    project.parent.mkdir(parents=True)
+    project.write_bytes(b"x")
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,file_url,created_at)"
+        " values('we_workshop','888','scene',?,'x')",
+        (str(project),),
+    )
+    good = conn.execute("select max(id) from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,created_at) values(?,8,'x')",
+        (good,),
+    )
+    conn.commit()
+
+    we = _FakeWe(current=str(project.parent / "scene.pkg"))
+    service = ApplyService(conn, _FakeApplier(), we=we, sleep=lambda s: None)
+
+    assert service.forget_banned_selection() is False
+    assert we.replaced == []
+
+
+def test_sound_switch_is_remembered_and_sent_to_we(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    _wallpaper(conn)
+    we = _FakeWe()
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    # Silent until the switch is turned on.
+    assert service.sound_enabled() is False
+    assert service.set_sound(True) is True
+    assert service.sound_enabled() is True
+    assert we.sound_calls == ["unmute"]
+
+    assert service.set_sound(False) is True
+    assert service.sound_enabled() is False
+    assert we.sound_calls == ["unmute", "mute"]
+
+
+def test_a_live_wallpaper_is_muted_after_apply_when_the_switch_is_off(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','1','video','x')"
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    we = _FakeWe()
+    service = ApplyService(
+        conn, _FakeApplier(), we=we, dynamic_applier=_FakeApplier()
+    )
+    service.set_sound(False)
+    we.sound_calls.clear()
+
+    assert service.apply(wid, tmp_path / "clip.mp4") is True
+
+    assert we.sound_calls == ["mute"]

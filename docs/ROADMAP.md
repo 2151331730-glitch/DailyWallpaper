@@ -14,7 +14,7 @@
 | Phase 2 | 动态壁纸 + 反馈闭环（见下） | ✅ |
 | Phase 3 | 工程化 + Git/GitHub | ✅ |
 
-测试：389 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。
+测试：473 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。
 
 ## Phase 2 交付内容
 
@@ -59,6 +59,23 @@
 - 代理 Pigeon：已设 Run 键开机自启，`autoRun=true`（启动后自动连接）；Wallhaven、Steam API、SteamCMD 均经 `127.0.0.1:7892` 连通。
 - Steam 在线工坊：后台预取已实测下载 4 项到 `data/steam_workshop/`，SteamCMD 使用已缓存的账号登录票证。
 - 自启：`HKCU\...\Run` 里的 `DailyWallpaper` 指向 venv 的 `pythonw.exe` + 绝对 `config.toml`。
+
+## 2026-10-21 收尾（反馈闭环）
+
+- **1–2 分永久剔除延伸到 Wallpaper Engine**：评分后若 WE 的 `selectedwallpapers` 还指着这张，就把
+  “上次壁纸”改写成当前壁纸（`replace_selection`）。此前只关 WE，开机后它又从 config 恢复，用户看到
+  “评了 1 分还老是跳出来”。
+- **负面学习保留**：1–2 分在偏好画像里不跳过，而是 1.5 倍强负权重（`BANNED_PENALTY`）。
+  跳过会让“糖水/动漫”这类风格在新图上继续得分；强负权重才是正确做法。
+- **工坊预取跳过 1–2 分项目**：`steam_prefetch` 的 SQL 加 `not exists (ratings <= 2)`，不再重复下载
+  数百 MB 的被 ban 项目。
+- **托盘「壁纸声音」**：`wallpaper64.exe -control mute/unmute`，状态存 `state.sound_enabled`。
+  每次启动默认静音；WE 会忘记静音，所以桌面守护每分钟重发一次。
+- **手动换图体验**：
+  - refill 最多重算 5 个候选（`_reanalyze_budget`），其余复用缓存分析；refill 跳过复核
+  - 候选按需下载（`_materialize_one`）：一次准备出的候选全部保留，点到哪张才下载哪张
+  - 结果：一次准备可连续换约 40 次，不再“点三次就卡住”；refill 从 5–7 分钟降到几十秒
+- **评分文件清理**：1–2 分壁纸的原图、缓存副本、工坊项目目录删除（本次 650.6 MB）。
 
 ## 遗留（低优先）
 

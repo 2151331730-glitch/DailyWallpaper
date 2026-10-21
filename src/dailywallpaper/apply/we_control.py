@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import subprocess
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+
+def _norm(path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
 
 class WeConfigError(RuntimeError):
     pass
@@ -137,3 +142,39 @@ class WeControl:
 
     def close(self) -> bool:
         return self._run("-control", "closeWallpaper")
+
+    def mute(self) -> bool:
+        """Silence every live wallpaper in WE (scene sound, video audio)."""
+        return self._run("-control", "mute")
+
+    def unmute(self) -> bool:
+        return self._run("-control", "unmute")
+
+    def replace_selection(self, file: Path) -> bool:
+        """Rewrite the wallpaper WE restores when it starts.
+
+        Closing WE stops the picture, not its memory: every start reloads
+        ``selectedwallpapers`` from config.json, which is why a wallpaper the
+        user rated 1 (or that we deleted) keeps coming back. Pointing that
+        entry at the file we actually want on the desktop ends the cycle.
+        Best effort: if WE rewrites the config at the same moment, the guard
+        retries on its next pass.
+        """
+        try:
+            config = WeConfig.from_file(self.config_path)
+        except (OSError, ValueError, WeConfigError) as exc:
+            raise WeConfigError(f"cannot read WE config: {exc}") from exc
+        target = _norm(file)
+        changed = False
+        for entry in config.selected.values():
+            if not isinstance(entry, dict):
+                continue
+            if _norm(entry.get("file", "")) != target:
+                entry["file"] = str(file)
+                changed = True
+        if changed:
+            self.config_path.write_text(
+                json.dumps(config.raw, ensure_ascii=False, indent="\t"),
+                encoding="utf-8",
+            )
+        return changed

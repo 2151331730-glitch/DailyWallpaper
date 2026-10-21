@@ -58,6 +58,35 @@ def test_current_reads_config():
     ctl = WeControl(Path("C:/WE"), FIXTURE, runner=FakeRunner())
     assert ctl.current().endswith("2995369775/scene.pkg")
 
+def test_mute_and_unmute_build_commands():
+    runner = FakeRunner()
+    ctl = WeControl(Path("C:/WE"), FIXTURE, runner=runner)
+
+    ctl.mute()
+    ctl.unmute()
+
+    assert runner.calls[0] == [EXE, "-control", "mute"]
+    assert runner.calls[1] == [EXE, "-control", "unmute"]
+
+
+def test_replace_selection_rewrites_saved_file(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "win11": {"general": {"wallpaperconfig": {
+            "selectedwallpapers": {"Monitor0": {"file": "D:/bad/scene.pkg"}},
+        }}},
+    }), encoding="utf-8")
+    ctl = WeControl(Path("C:/WE"), cfg, runner=FakeRunner())
+
+    assert ctl.replace_selection(Path("D:/good/1212.apply.jpg")) is True
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["win11"]["general"]["wallpaperconfig"]["selectedwallpapers"][
+        "Monitor0"
+    ]["file"] == str(Path("D:/good/1212.apply.jpg"))
+    # Already pointing there: nothing to write.
+    assert ctl.replace_selection(Path("D:/good/1212.apply.jpg")) is False
+
+
 def test_same_project_accepts_we_resolved_sibling():
     # WE resolves project.json to scene.pkg (or the video file) in the same folder.
     assert same_project(

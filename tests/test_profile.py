@@ -130,3 +130,19 @@ def test_rating_count_counts_rows():
     ]
 
     assert PreferenceProfile.from_ratings(rows, NOW).rating_count == 2
+
+
+def test_banned_ratings_are_strong_negative_signals():
+    """A 1-2 is not skipped: the profile must learn the style to avoid it."""
+    rows = [
+        _row(["landscape"], 10, "2026-10-01T10:00:00"),
+        _row(["anime"], 1, "2026-10-02T10:00:00"),
+        _row(["sci-fi"], 2, "2026-10-03T10:00:00"),
+    ]
+
+    profile = PreferenceProfile.from_ratings(rows, NOW)
+
+    assert profile.tag_weights["anime"] < 0
+    assert profile.tag_weights["sci-fi"] < 0
+    # The 1 is pushed past the linear -1, so it outweighs a plain 2.
+    assert profile.tag_weights["anime"] < profile.tag_weights["sci-fi"]
