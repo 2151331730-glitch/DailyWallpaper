@@ -38,6 +38,24 @@ DEFAULT_AVOID_TAGS = (
     "fanart",
 )
 
+# What the curator asked for more of: surreal, mysterious, otherworldly.
+# Keywords again -- "surrealism", "dreamlike", "dreamscape" all match.
+DEFAULT_BOOST_TAGS = (
+    "surreal",
+    "dreamlike",
+    "dreamscape",
+    "ethereal",
+    "otherworldly",
+    "mystical",
+    "mysterious",
+    "esoteric",
+    "occult",
+    "uncanny",
+    "liminal",
+    "eerie",
+    "cosmic",
+)
+
 RATED_ROWS_SQL = """
 select r.rating, r.created_at, r.comment, w.source,
        a.style_tags_json, a.mood_tags_json
@@ -167,6 +185,7 @@ def build_seed(conn, now: datetime | None = None) -> dict:
             for key, value in profile.source_weights.items()
         },
         "avoid_tags": list(DEFAULT_AVOID_TAGS),
+        "boost_tags": list(DEFAULT_BOOST_TAGS),
     }
 
 
@@ -209,9 +228,15 @@ def seed_profile(seed: dict) -> PreferenceProfile:
         for value in (seed.get("avoid_tags") or DEFAULT_AVOID_TAGS)
         if isinstance(value, str) and value.strip()
     )
+    boost = tuple(
+        str(value).strip().lower()
+        for value in (seed.get("boost_tags") or DEFAULT_BOOST_TAGS)
+        if isinstance(value, str) and value.strip()
+    )
     return PreferenceProfile(
         tag_weights=tags,
         source_weights=sources,
         rating_count=int(seed.get("rating_count") or 0),
         avoid_tags=avoid,
+        boost_tags=boost,
     )

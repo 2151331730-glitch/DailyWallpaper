@@ -169,3 +169,31 @@ def test_a_creative_anime_scene_is_exempt():
     )
 
     assert anime.final == pytest.approx(plain.final)
+
+
+def test_a_surreal_mysterious_scene_is_boosted():
+    profile = _Profile(n=10)
+    profile.boost_tags = ("surreal", "mysterious")
+    plain = final_score(_scores(style_tags=["landscape"]), "wallhaven", profile, [], 0)
+    surreal = final_score(
+        _scores(style_tags=["surreal-mood", "mysterious"], creativity=70, formulaic=20),
+        "wallhaven", profile, [], 0,
+    )
+
+    # Two hits x 6 points, still under the 18-point cap.
+    assert surreal.final == pytest.approx(plain.final + 12)
+
+
+def test_the_boost_is_capped():
+    profile = _Profile(n=10)
+    profile.boost_tags = ("surreal", "mysterious", "ethereal", "dreamlike")
+    plain = final_score(_scores(style_tags=["landscape"]), "wallhaven", profile, [], 0)
+    stacked = final_score(
+        _scores(
+            style_tags=["surreal", "mysterious", "ethereal", "dreamlike"],
+            creativity=70, formulaic=20,
+        ),
+        "wallhaven", profile, [], 0,
+    )
+
+    assert stacked.final == pytest.approx(plain.final + 18)

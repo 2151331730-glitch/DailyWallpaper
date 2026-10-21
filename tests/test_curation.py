@@ -149,3 +149,16 @@ def test_seed_profile_reads_avoid_tags():
     )
 
     assert profile.avoid_tags == ("anime", "game-art")
+
+
+def test_seed_profile_reads_boost_tags():
+    profile = seed_mod.seed_profile(
+        {
+            "tag_weights": {},
+            "source_weights": {},
+            "rating_count": 1,
+            "boost_tags": ["Surreal", "Mysterious"],
+        }
+    )
+
+    assert profile.boost_tags == ("surreal", "mysterious")

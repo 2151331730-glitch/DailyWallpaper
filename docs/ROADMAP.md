@@ -95,6 +95,9 @@
   game-art / game-scene / screenshot / fan-art）。`scoring.avoid_penalty`
   命中扣 12 分/条，但 creativity ≥ 60 且 formulaic ≤ 40 的作品豁免——游戏/动漫
   题材有真东西时不封杀。
+- `boost_tags`：列出想多看的类别（surreal / dreamlike / dreamscape / ethereal /
+  otherworldly / mystical / mysterious / esoteric / occult / uncanny / liminal /
+  eerie / cosmic）。`scoring.boost_score` 命中 +6 分/条，封顶 +18，防止靠堆标签取胜。
 
 ## 遗留（低优先）
 

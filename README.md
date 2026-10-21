@@ -37,6 +37,8 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 - 「生成种子」把已评分的图抽样分析后导出 `assets/seed_profile.json`
 - 种子里有一份 `avoid_tags`（默认含 anime / game-art / screenshot 等）：命中的
   游戏/动漫场景会扣分，但创意够高、不套路的作品仍然保留
+- 还有一份 `boost_tags`（默认含 surreal / mysterious / ethereal / dreamlike 等）：
+  命中的超现实、神秘风格每词 +6 分，最多 +18
 - 新装或别人使用时，没有评分会自动加载种子，不从 60 分冷启动
 
 ### 声音控制

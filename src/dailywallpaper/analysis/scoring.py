@@ -28,6 +28,10 @@ RARITY_WINDOW = 30
 AVOID_PENALTY = 12
 AVOID_CREATIVITY_EXEMPT = 60
 AVOID_FORMULAIC_LIMIT = 40
+# What the curator asked for more of (surreal / mysterious). Capped so a
+# picture cannot win by stacking tag words on a thin idea.
+BOOST_PER_TAG = 6
+BOOST_CAP = 18
 
 
 def hard_gate(scores: VisionScores) -> list[str]:
@@ -112,6 +116,18 @@ def avoid_penalty(scores: VisionScores, avoid_tags) -> float:
     return AVOID_PENALTY * hits
 
 
+def boost_score(scores: VisionScores, boost_tags) -> float:
+    """Credit the traits the curator asked for (surreal, mysterious, ...)."""
+    if not boost_tags:
+        return 0.0
+    hits = sum(
+        1
+        for tag in scores.style_tags
+        if any(key in tag.lower() for key in boost_tags)
+    )
+    return min(BOOST_CAP, BOOST_PER_TAG * hits)
+
+
 def final_score(
     scores: VisionScores, source: str, profile, recent, weather_code: int
 ) -> DecisionScores:
@@ -126,10 +142,13 @@ def final_score(
         personalize = COLD_START_PRIOR
     penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
     penalty += avoid_penalty(scores, getattr(profile, "avoid_tags", ()))
+    boost = boost_score(scores, getattr(profile, "boost_tags", ()))
     return DecisionScores(
         explore=explore,
         personalize=personalize,
-        final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize - penalty,
+        final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize
+        - penalty
+        + boost,
     )
 
 
