@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "created_at": "2026-10-21T19:27:36",
+  "created_at": "2026-10-21T19:34:29",
   "rating_count": 262,
   "tag_weights": {
     "anime": -0.1321683679571213,
@@ -469,5 +469,16 @@
     "wallhaven": -0.9982357386220296,
     "steam_workshop": -0.04269005297029348,
     "bing": -0.04126705120461703
-  }
+  },
+  "avoid_tags": [
+    "anime",
+    "manga",
+    "cartoon",
+    "cel-shad",
+    "game-art",
+    "game-scene",
+    "screenshot",
+    "fan-art",
+    "fanart"
+  ]
 }

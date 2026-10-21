@@ -91,6 +91,10 @@
   换个用户就没有可比性）。
 - 本次策展：262 条评分，种子偏好集中在 dark / introspective / abstract /
   ominous / mysterious，回避 urban / serene / fantasy / vibrant / sunset。
+- `avoid_tags`：种子里列出不想多看的类别（默认 anime / manga / cartoon /
+  game-art / game-scene / screenshot / fan-art）。`scoring.avoid_penalty`
+  命中扣 12 分/条，但 creativity ≥ 60 且 formulaic ≤ 40 的作品豁免——游戏/动漫
+  题材有真东西时不封杀。
 
 ## 遗留（低优先）
 

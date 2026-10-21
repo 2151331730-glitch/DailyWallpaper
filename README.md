@@ -35,6 +35,8 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 - `python -m dailywallpaper --curate [N]` 打开缩略图墙，给 N 张候选（默认 300）打分
 - 每张图下面一排 1–10，点数字即打分；分数写进 `ratings`，不会覆盖已有记录
 - 「生成种子」把已评分的图抽样分析后导出 `assets/seed_profile.json`
+- 种子里有一份 `avoid_tags`（默认含 anime / game-art / screenshot 等）：命中的
+  游戏/动漫场景会扣分，但创意够高、不套路的作品仍然保留
 - 新装或别人使用时，没有评分会自动加载种子，不从 60 分冷启动
 
 ### 声音控制

@@ -139,3 +139,33 @@ def test_rank_orders_by_final_then_quality():
 
     assert ids[0] == 2
     assert ids[1] == 3
+
+
+def test_a_generic_anime_scene_is_docked():
+    profile = _Profile(n=10)
+    profile.avoid_tags = ("anime",)
+    plain = final_score(
+        _scores(style_tags=["landscape"], creativity=40, formulaic=60),
+        "wallhaven", profile, [], 0,
+    )
+    anime = final_score(
+        _scores(style_tags=["anime-style"], creativity=40, formulaic=60),
+        "wallhaven", profile, [], 0,
+    )
+
+    assert anime.final == pytest.approx(plain.final - 12)
+
+
+def test_a_creative_anime_scene_is_exempt():
+    profile = _Profile(n=10)
+    profile.avoid_tags = ("anime",)
+    plain = final_score(
+        _scores(style_tags=["landscape"], creativity=80, formulaic=20),
+        "wallhaven", profile, [], 0,
+    )
+    anime = final_score(
+        _scores(style_tags=["anime-style"], creativity=80, formulaic=20),
+        "wallhaven", profile, [], 0,
+    )
+
+    assert anime.final == pytest.approx(plain.final)

@@ -94,6 +94,10 @@ class PreferenceProfile:
     tag_weights: dict[str, float]
     source_weights: dict[str, float]
     rating_count: int
+    # Keywords the curator asked to see less of (e.g. generic game/anime
+    # scenes). scoring.avoid_penalty applies them; the exception for genuinely
+    # creative work lives there, not here.
+    avoid_tags: tuple[str, ...] = ()
 
     @classmethod
     def from_ratings(cls, rows, now: datetime) -> "PreferenceProfile":

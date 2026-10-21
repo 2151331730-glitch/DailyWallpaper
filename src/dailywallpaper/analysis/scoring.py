@@ -22,6 +22,12 @@ PERSONALIZE_WEIGHT = 0.45
 COLD_START_PRIOR = 60.0
 PRIOR_STRENGTH = 5.0
 RARITY_WINDOW = 30
+# The curator asked not to see random game/anime scenes. A picture that
+# genuinely earns its subject (creative, not a template) is exempt, so this
+# is a penalty rather than a hard gate.
+AVOID_PENALTY = 12
+AVOID_CREATIVITY_EXEMPT = 60
+AVOID_FORMULAIC_LIMIT = 40
 
 
 def hard_gate(scores: VisionScores) -> list[str]:
@@ -83,6 +89,29 @@ def personalize_score(scores: VisionScores, profile, source: str, weather_code: 
     )
 
 
+def avoid_penalty(scores: VisionScores, avoid_tags) -> float:
+    """Dock generic game/anime scenes, without banning the whole category.
+
+    A familiar subject treated with a real idea is exactly what the curator
+    wants; only the template-like ones lose points.
+    """
+    if not avoid_tags:
+        return 0.0
+    hits = sum(
+        1
+        for tag in scores.style_tags
+        if any(key in tag.lower() for key in avoid_tags)
+    )
+    if not hits:
+        return 0.0
+    if (
+        scores.creativity >= AVOID_CREATIVITY_EXEMPT
+        and scores.formulaic <= AVOID_FORMULAIC_LIMIT
+    ):
+        return 0.0
+    return AVOID_PENALTY * hits
+
+
 def final_score(
     scores: VisionScores, source: str, profile, recent, weather_code: int
 ) -> DecisionScores:
@@ -96,6 +125,7 @@ def final_score(
     else:
         personalize = COLD_START_PRIOR
     penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
+    penalty += avoid_penalty(scores, getattr(profile, "avoid_tags", ()))
     return DecisionScores(
         explore=explore,
         personalize=personalize,

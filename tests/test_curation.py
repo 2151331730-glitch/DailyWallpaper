@@ -136,3 +136,16 @@ def test_cold_start_uses_the_seed(tmp_path, monkeypatch):
 
     assert profile.tag_weights.get("fog") == 0.6
     assert profile.rating_count == 5
+
+
+def test_seed_profile_reads_avoid_tags():
+    profile = seed_mod.seed_profile(
+        {
+            "tag_weights": {},
+            "source_weights": {},
+            "rating_count": 1,
+            "avoid_tags": ["Anime", "Game-Art"],
+        }
+    )
+
+    assert profile.avoid_tags == ("anime", "game-art")

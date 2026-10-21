@@ -23,6 +23,21 @@ SEED_VERSION = 1
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SEED_PATH = ROOT / "assets" / "seed_profile.json"
 
+# What the curator asked to see less of: random game scenes and anime scenes
+# with no idea of their own. Keywords, not full tags -- the vision model
+# writes "anime-style", "game-art", "game-screenshot" and friends.
+DEFAULT_AVOID_TAGS = (
+    "anime",
+    "manga",
+    "cartoon",
+    "cel-shad",
+    "game-art",
+    "game-scene",
+    "screenshot",
+    "fan-art",
+    "fanart",
+)
+
 RATED_ROWS_SQL = """
 select r.rating, r.created_at, r.comment, w.source,
        a.style_tags_json, a.mood_tags_json
@@ -151,6 +166,7 @@ def build_seed(conn, now: datetime | None = None) -> dict:
             key: value / source_norm
             for key, value in profile.source_weights.items()
         },
+        "avoid_tags": list(DEFAULT_AVOID_TAGS),
     }
 
 
@@ -188,8 +204,14 @@ def seed_profile(seed: dict) -> PreferenceProfile:
         for key, value in (seed.get("source_weights") or {}).items()
         if isinstance(value, (int, float))
     }
+    avoid = tuple(
+        str(value).strip().lower()
+        for value in (seed.get("avoid_tags") or DEFAULT_AVOID_TAGS)
+        if isinstance(value, str) and value.strip()
+    )
     return PreferenceProfile(
         tag_weights=tags,
         source_weights=sources,
         rating_count=int(seed.get("rating_count") or 0),
+        avoid_tags=avoid,
     )
