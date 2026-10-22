@@ -167,6 +167,19 @@ def default_config_path() -> Path:
     return Path.cwd() / "config.toml"
 
 
+def install_prefs() -> dict:
+    """The installer's one-time choices (seed / autostart).
+
+    A missing file means "no choice made": treat everything as the default.
+    """
+    path = user_data_dir() / "install_prefs.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _create_default_config(path: Path) -> None:
     """First run of an installed copy: copy the shipped example."""
     from dailywallpaper.resources import resource
@@ -175,7 +188,14 @@ def _create_default_config(path: Path) -> None:
     if not example.is_file():
         raise FileNotFoundError(f"config not found: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(example, path)
+    text = example.read_text(encoding="utf-8")
+    if install_prefs().get("autostart"):
+        # The installer asked for autostart; the config is the source of
+        # truth, so record the choice before the first launch syncs it.
+        text = text.replace(
+            "start_with_windows = false", "start_with_windows = true", 1
+        )
+    path.write_text(text, encoding="utf-8")
 
 
 def load_config(path: Path) -> Config:

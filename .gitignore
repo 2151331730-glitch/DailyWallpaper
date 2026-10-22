@@ -26,3 +26,7 @@ data/
 build/
 dist/
 *.spec
+!dailywallpaper.spec
+
+# Bundled binaries fetched by scripts/fetch_ffmpeg.py
+vendor/

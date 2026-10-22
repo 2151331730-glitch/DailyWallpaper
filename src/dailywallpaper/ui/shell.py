@@ -168,9 +168,15 @@ def build_gui(cfg, config_path=None) -> int:
     from dailywallpaper.app import build_application
     from dailywallpaper.state.machine import SystemClock
     from dailywallpaper.ui.commands import CommandService
+    from dailywallpaper.ui.first_run import ensure_first_run
 
     from dailywallpaper.ui.worker import Worker
 
+    app = QApplication.instance() or QApplication(sys.argv)
+    # Ask for the key before building anything: the pipeline raises without
+    # one, and a GUI launch would otherwise die with an invisible traceback.
+    if not ensure_first_run(cfg):
+        return 1
     application = build_application(cfg)
     machine = application.machine
     # The worker builds its own application inside its own thread: a sqlite
@@ -198,7 +204,6 @@ def build_gui(cfg, config_path=None) -> int:
         if cfg.vision.review_model != cfg.vision.screen_model
         else None
     )
-    app = QApplication.instance() or QApplication(sys.argv)
     shell = UiShell(
         service, machine, on_quit=app.quit, worker=worker,
         budget_cny=cfg.budget.monthly_cny,

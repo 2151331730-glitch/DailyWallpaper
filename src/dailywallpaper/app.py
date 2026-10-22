@@ -86,6 +86,18 @@ logger = logging.getLogger(__name__)
 ESTIMATE_CNY = 0.003
 
 
+def _install_allows_seed() -> bool:
+    """Did the installer checkbox say "use the author's default curation"?
+
+    The choice is written once by the installer and lives next to the user's
+    data, not in config.toml (the installer cannot safely edit TOML). Missing
+    file means yes: source runs and older installs keep the seed.
+    """
+    from dailywallpaper.config import install_prefs
+
+    return bool(install_prefs().get("use_seed", True))
+
+
 def _rate_limited(exc: Exception) -> bool:
     """True when the provider refused the call for being overloaded."""
     text = str(exc)
@@ -283,7 +295,7 @@ class RealPipeline:
         # including the one that produced them.
         from dailywallpaper.curation.seed import load_seed, seed_profile
 
-        seed = load_seed()
+        seed = load_seed() if _install_allows_seed() else None
         if seed is not None:
             rules = seed_profile(seed)
             if profile.rating_count == 0:

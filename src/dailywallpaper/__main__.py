@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from dailywallpaper.app import AlreadyRunning, SingleInstance
@@ -39,6 +40,18 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         args.once = True
 
     cfg = load_config(args.config)
+    if getattr(sys, "frozen", False):
+        # The bundled ffmpeg is not on PATH; point the config at it.
+        from dataclasses import replace as _replace
+
+        from dailywallpaper.resources import resource
+
+        bundled_ffmpeg = resource("ffmpeg", "ffmpeg.exe")
+        if bundled_ffmpeg.is_file():
+            cfg = _replace(
+                cfg,
+                tools=_replace(cfg.tools, ffmpeg_path=str(bundled_ffmpeg)),
+            )
     setup_logging(
         cfg.app.data_dir,
         cfg.app.log_level,
