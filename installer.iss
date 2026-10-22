@@ -61,6 +61,22 @@ begin
   SeedPage.Values[0] := True;
 end;
 
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  DirName: String;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    DirName := ExpandConstant('{localappdata}\DailyWallpaper');
+    if DirExists(DirName) and not WizardSilent then
+    begin
+      if MsgBox('是否同时删除配置、壁纸缓存和评分数据？' + #13#10 + DirName,
+                mbConfirmation, MB_YESNO) = IDYES then
+        DelTree(DirName, True, True, True);
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DirName, Json: String;

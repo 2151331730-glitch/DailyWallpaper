@@ -93,6 +93,12 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
     except AlreadyRunning:
         print("另一个 DailyWallpaper 实例已经在运行，本次启动已退出。")
         return 1
+    except RuntimeError as exc:
+        # The headless path has no first-run dialog; say what is missing
+        # instead of dying with a traceback in a console nobody watches.
+        print(f"启动失败：{exc}")
+        print("提示：先运行 scripts/set_key_gui.py 或 scripts/set_key.py 填入智谱 key。")
+        return 1
 
 
 if __name__ == "__main__":

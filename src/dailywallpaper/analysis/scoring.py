@@ -26,6 +26,8 @@ RARITY_WINDOW = 30
 # genuinely earns its subject (creative, not a template) is exempt, so this
 # is a penalty rather than a hard gate.
 AVOID_PENALTY = 12
+# A "local" note ("this one is too dark") only softens similar pictures.
+SOFT_AVOID_PENALTY = 6
 AVOID_CREATIVITY_EXEMPT = 60
 AVOID_FORMULAIC_LIMIT = 40
 # What the curator asked for more of (surreal / mysterious). Capped so a
@@ -98,27 +100,31 @@ def personalize_score(scores: VisionScores, profile, source: str, weather_code: 
     )
 
 
-def avoid_penalty(scores: VisionScores, avoid_tags) -> float:
-    """Dock generic game/anime scenes, without banning the whole category.
+def avoid_penalty(scores: VisionScores, avoid_tags,
+                  soft_avoid_tags=()) -> float:
+    """Dock unwanted traits, without banning a whole category.
 
-    A familiar subject treated with a real idea is exactly what the curator
-    wants; only the template-like ones lose points.
+    ``avoid_tags`` are lasting dislikes (full weight); ``soft_avoid_tags``
+    come from one picture's critique (half weight, so one dark picture does
+    not blacklist every dark wallpaper). A genuinely creative picture is
+    exempt either way.
     """
-    if not avoid_tags:
-        return 0.0
-    hits = sum(
-        1
-        for tag in scores.style_tags
-        if any(key in tag.lower() for key in avoid_tags)
-    )
-    if not hits:
+    hard = 0
+    soft = 0
+    for tag in scores.style_tags:
+        lowered = tag.lower()
+        if avoid_tags and any(key in lowered for key in avoid_tags):
+            hard += 1
+        elif soft_avoid_tags and any(key in lowered for key in soft_avoid_tags):
+            soft += 1
+    if not hard and not soft:
         return 0.0
     if (
         scores.creativity >= AVOID_CREATIVITY_EXEMPT
         and scores.formulaic <= AVOID_FORMULAIC_LIMIT
     ):
         return 0.0
-    return AVOID_PENALTY * hits
+    return AVOID_PENALTY * hard + SOFT_AVOID_PENALTY * soft
 
 
 def boost_score(scores: VisionScores, boost_tags) -> float:
@@ -147,7 +153,11 @@ def final_score(
     else:
         personalize = COLD_START_PRIOR
     penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
-    penalty += avoid_penalty(scores, getattr(profile, "avoid_tags", ()))
+    penalty += avoid_penalty(
+        scores,
+        getattr(profile, "avoid_tags", ()),
+        getattr(profile, "soft_avoid_tags", ()),
+    )
     boost = boost_score(scores, getattr(profile, "boost_tags", ()))
     adjust = 0.0
     if desktop_fit is not None:

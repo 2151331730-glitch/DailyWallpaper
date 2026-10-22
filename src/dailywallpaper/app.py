@@ -400,12 +400,13 @@ class RealPipeline:
         # from the today page); merge them after the seed rules.
         from dailywallpaper.recommend.intents import preference_terms
 
-        boost, avoid = preference_terms(self.conn)
-        if boost or avoid:
+        boost, avoid, soft = preference_terms(self.conn)
+        if boost or avoid or soft:
             profile = replace(
                 profile,
                 avoid_tags=_merge_tags(profile.avoid_tags, avoid),
                 boost_tags=_merge_tags(profile.boost_tags, boost),
+                soft_avoid_tags=_merge_tags(profile.soft_avoid_tags, soft),
             )
         return profile
 

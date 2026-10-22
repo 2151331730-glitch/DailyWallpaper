@@ -71,10 +71,26 @@ def test_preference_terms_split_by_polarity(tmp_path):
         None, "不要动漫",
     )
 
-    boost, avoid = intents.preference_terms(conn)
+    boost, avoid, soft = intents.preference_terms(conn)
 
     assert "surreal" in boost
     assert "anime" in avoid
+    assert soft == []
+
+
+def test_a_local_note_only_softens(tmp_path):
+    conn = _db(tmp_path)
+    intents.store(
+        conn,
+        {"kind": "local", "polarity": -1, "tags": ["dark"],
+         "query_zh": "", "query_en": "", "confidence": 0.9},
+        7, "这张太暗",
+    )
+
+    boost, avoid, soft = intents.preference_terms(conn)
+
+    assert "dark" in soft
+    assert "dark" not in avoid
 
 
 def test_search_intents_go_to_sources_that_can_search(tmp_path):

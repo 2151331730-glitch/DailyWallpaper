@@ -147,15 +147,37 @@ def _start_prefetcher(cfg) -> None:
 
 def _sync_autostart(cfg, config_path) -> None:
     """Heal a lost Run value at launch; the config is the source of truth."""
+    import json
+    import logging
+    from dataclasses import replace
+    from pathlib import Path
+
     from dailywallpaper.app_autostart import AutostartService, default_command
+    from dailywallpaper.config import install_prefs, save_config, user_data_dir
 
+    wanted = cfg.app.start_with_windows
+    prefs = install_prefs()
+    if prefs.get("autostart") and not wanted:
+        # The installer asked for autostart but an existing config predates
+        # the choice. Record it in the config so the settings page agrees.
+        wanted = True
+        try:
+            save_config(
+                config_path,
+                replace(cfg, app=replace(cfg.app, start_with_windows=True)),
+            )
+            prefs["autostart"] = False
+            prefs_path = user_data_dir() / "install_prefs.json"
+            prefs_path.write_text(
+                json.dumps(prefs, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                f"autostart config update failed: {exc}"
+            )
     try:
-        AutostartService(command=default_command(config_path)).sync(
-            cfg.app.start_with_windows
-        )
+        AutostartService(command=default_command(config_path)).sync(wanted)
     except Exception as exc:  # a locked registry must not block the shell
-        import logging
-
         logging.getLogger(__name__).warning(f"autostart sync failed: {exc}")
 
 

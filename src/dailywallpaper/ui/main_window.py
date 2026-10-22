@@ -222,7 +222,8 @@ class MainWindow(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self.intents_title.setVisible(bool(intents))
-        for intent in intents[:6]:
+        shown = intents[:12]
+        for intent in shown:
             row = QWidget()
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
@@ -238,6 +239,10 @@ class MainWindow(QWidget):
             line.addWidget(label, 1)
             line.addWidget(button)
             self.intents_box.addWidget(row)
+        if len(intents) > len(shown):
+            more = QLabel(f"还有 {len(intents) - len(shown)} 条未显示")
+            more.setStyleSheet("color:#9ca3af;font-size:11px;")
+            self.intents_box.addWidget(more)
 
     def _remove_intent(self, intent_id: int) -> None:
         self.service.remove_intent(intent_id)

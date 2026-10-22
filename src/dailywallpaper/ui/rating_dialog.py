@@ -228,7 +228,8 @@ class RatingDialog(QDialog):
     def _on_intent(self, intent) -> None:
         if not intent:
             # Silence looked like success: say the sentence was saved but
-            # could not be understood.
+            # could not be understood. Clear the mark so the next save retries.
+            self._last_classified = ""
             self.intent_label.setText(
                 "没识别出来；这句评语已保存，但不会影响推荐"
             )

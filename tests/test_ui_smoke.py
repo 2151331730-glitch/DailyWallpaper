@@ -836,3 +836,54 @@ def test_the_desktop_guard_does_nothing_while_paused(tmp_path):
     conn.execute("delete from state where key='paused_until'")
     conn.commit()
     assert worker._paused_state(conn, _Clock()) is False
+
+
+def test_today_lists_active_intents(qapp, tmp_path):
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend import intents
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    intents.store(
+        conn,
+        {"kind": "search", "polarity": 1, "tags": [],
+         "query_zh": "足球", "query_en": "football", "confidence": 0.9},
+        None, "想看足球",
+    )
+    service = _Service()
+    service.intents = lambda: intents.list_intents(conn)
+    service.remove_intent = lambda intent_id: None
+
+    window = MainWindow(service, conn)
+    window.refresh()
+
+    assert window.intents_box.count() == 1
+
+
+def test_revoking_an_intent_calls_the_service(qapp, tmp_path):
+    from PySide6.QtWidgets import QPushButton
+
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.recommend import intents
+    from dailywallpaper.ui.main_window import MainWindow
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    intent_id = intents.store(
+        conn,
+        {"kind": "search", "polarity": 1, "tags": [],
+         "query_zh": "足球", "query_en": "football", "confidence": 0.9},
+        None, "想看足球",
+    )
+    calls = []
+    service = _Service()
+    service.intents = lambda: intents.list_intents(conn)
+    service.remove_intent = lambda value: calls.append(value)
+
+    window = MainWindow(service, conn)
+    window.refresh()
+    row = window.intents_box.itemAt(0).widget()
+    row.findChildren(QPushButton)[0].click()
+
+    assert calls == [intent_id]

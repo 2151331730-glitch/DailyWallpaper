@@ -98,6 +98,10 @@ class PreferenceProfile:
     # Keywords the curator asked to see more of (e.g. surreal / mysterious).
     # scoring.boost_score applies them, capped so tag-stacking does not win.
     boost_tags: tuple[str, ...] = ()
+    # Tags from "this picture is too dark" style notes. They soften similar
+    # pictures instead of banning the trait, so one bad picture does not
+    # blacklist every dark wallpaper.
+    soft_avoid_tags: tuple[str, ...] = ()
 
     @classmethod
     def from_ratings(cls, rows, now: datetime) -> "PreferenceProfile":

@@ -50,24 +50,30 @@ Rules:
 """
 
 
-def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL) -> dict | None:
-    """Return a validated intent dict, or None when the model cannot decide."""
+def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
+                  client=None) -> dict | None:
+    """Return a validated intent dict, or None when the model cannot decide.
+
+    ``client`` is injectable so tests can exercise the parse path without a
+    network call.
+    """
     text = (text or "").strip()
     if not text:
         return None
-    from openai import OpenAI
+    if client is None:
+        from openai import OpenAI
 
-    try:
-        import httpx2 as httpx
-    except ImportError:  # older openai
-        import httpx  # type: ignore[no-redef]
+        try:
+            import httpx2 as httpx
+        except ImportError:  # older openai
+            import httpx  # type: ignore[no-redef]
 
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-        max_retries=0,
-        http_client=httpx.Client(trust_env=False, timeout=30.0),
-    )
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            max_retries=0,
+            http_client=httpx.Client(trust_env=False, timeout=30.0),
+        )
     try:
         response = client.chat.completions.create(
             model=model,
@@ -208,22 +214,37 @@ def remove_intent(conn, intent_id: int) -> None:
     conn.commit()
 
 
-def preference_terms(conn) -> tuple[list[str], list[str]]:
-    """(boost_tags, avoid_tags) learned from local/preference intents."""
+def preference_terms(conn) -> tuple[list[str], list[str], list[str]]:
+    """(boost_tags, avoid_tags, soft_avoid_tags) from local/preference notes.
+
+    A "local" note judges one picture ("too dark"), so its negative tags only
+    soften similar pictures; a "preference" note is a lasting taste and gets
+    the full weight.
+    """
     boost: list[str] = []
     avoid: list[str] = []
+    soft: list[str] = []
     for row in conn.execute(
-        "select payload_json from user_intents where kind in ('local','preference')"
+        "select kind, payload_json from user_intents"
+        " where kind in ('local','preference')"
     ).fetchall():
         try:
-            payload = json.loads(row[0] or "{}")
+            payload = json.loads(row[1] or "{}")
         except ValueError:
             continue
-        target = boost if int(payload.get("polarity") or 1) > 0 else avoid
-        for tag in payload.get("tags") or []:
-            if isinstance(tag, str) and tag.strip():
-                target.append(tag.strip().lower())
-    return boost, avoid
+        tags = [
+            tag.strip().lower()
+            for tag in (payload.get("tags") or [])
+            if isinstance(tag, str) and tag.strip()
+        ]
+        positive = _as_int(payload.get("polarity"), 1) > 0
+        if row[0] == "local":
+            (boost if positive else soft).extend(tags)
+        elif positive:
+            boost.extend(tags)
+        else:
+            avoid.extend(tags)
+    return boost, avoid, soft
 
 
 def search_queries(conn) -> list[dict]:
