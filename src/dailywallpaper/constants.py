@@ -25,4 +25,4 @@ ESTIMATE_CNY = 0.003
 # Video files that can be used directly from disk.
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 # Sponsor page (爱发电). Empty hides the tray entry and the README line.
-DONATE_URL = ""
+DONATE_URL = "https://afdian.com/a/guoxinha"
