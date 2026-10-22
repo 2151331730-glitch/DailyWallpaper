@@ -17,3 +17,10 @@ MAX_FORCED_PREPARES = 6
 MATERIALIZE_TOP_N = 3
 # Stop a prepare pass after this many rate-limit refusals in a row.
 RATE_LIMIT_ABORT_AFTER = 6
+# At most this many search intents are honoured per prepare; each one costs a
+# request per source, and the newest matter most.
+MAX_SEARCH_INTENTS = 3
+# A rough per-call estimate handed to the budget guard before paid work.
+ESTIMATE_CNY = 0.003
+# Video files that can be used directly from disk.
+VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}

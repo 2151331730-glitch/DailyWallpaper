@@ -967,7 +967,7 @@ def test_a_dynamic_day_falls_back_when_every_scene_fails_prefilter(tmp_path):
 
 def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
     from dataclasses import replace
-    import dailywallpaper.app as app_module
+    import dailywallpaper.pipeline.evaluate as evaluate_module
 
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")
@@ -978,7 +978,7 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
                       str(video_file), "video", 0, 0, 0, [], {})
 
     calls = []
-    original = app_module.video_contact_sheet
+    original = evaluate_module.video_contact_sheet
 
     def fake_sheet(asset, dest, ffmpeg="ffmpeg"):
         calls.append(Path(asset))
@@ -988,7 +988,7 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
         Path(dest).write_bytes(buffer.getvalue())
         return Path(dest)
 
-    app_module.video_contact_sheet = fake_sheet
+    evaluate_module.video_contact_sheet = fake_sheet
     try:
         vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
         cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
@@ -997,7 +997,7 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
         )
         pipeline.prepare(datetime(2026, 10, 18, 9, 0))
     finally:
-        app_module.video_contact_sheet = original
+        evaluate_module.video_contact_sheet = original
 
     assert calls == [video_file]
     assert len(pipeline.shortlist) == 1
