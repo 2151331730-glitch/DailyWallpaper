@@ -995,6 +995,9 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
         pipeline = RealPipeline(
             cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100)
         )
+        # CI runners have no ffmpeg; force the video branch so the test checks
+        # the contact-sheet path rather than the environment.
+        pipeline._ffmpeg_ok = True
         pipeline.prepare(datetime(2026, 10, 18, 9, 0))
     finally:
         evaluate_module.video_contact_sheet = original
@@ -1050,11 +1053,16 @@ def test_video_falls_back_to_the_poster_without_ffmpeg(tmp_path):
     assert len(pipeline.shortlist) == 1
 
 
-def test_the_workshop_source_is_off_unless_enabled(tmp_path):
+def test_the_workshop_source_is_off_unless_enabled(tmp_path, monkeypatch):
     from dataclasses import replace
+
+    import keyring
 
     from dailywallpaper.app import build_pipeline
 
+    # A CI runner has no credential store; the pipeline refuses to build
+    # without a model key, so provide one for this wiring test.
+    monkeypatch.setattr(keyring, "get_password", lambda *args, **kwargs: "fake-key")
     cfg = _config(tmp_path)
     cfg = replace(
         cfg,
