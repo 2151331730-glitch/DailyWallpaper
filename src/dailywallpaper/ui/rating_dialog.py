@@ -124,7 +124,7 @@ class RatingDialog(QDialog):
         self.comment_edit = QLineEdit()
         self.comment_edit.setMaxLength(COMMENT_MAX)
         self.comment_edit.setPlaceholderText(
-            "补充一句（可选，比如“太暗了”或“想看 C 罗”）"
+            "补充一句（可选，比如“太暗了”或“想看足球”）"
         )
         self.comment_edit.setText(self.comment_edit_text)
         self.comment_edit.editingFinished.connect(self._resave)
