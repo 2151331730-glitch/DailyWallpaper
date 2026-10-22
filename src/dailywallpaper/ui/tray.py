@@ -133,8 +133,6 @@ class TrayIcon(QSystemTrayIcon):
         self.settings_action.triggered.connect(lambda: self.on_open())
         self.folder_action = QAction("打开壁纸文件夹", self.menu)
         self.folder_action.triggered.connect(self._open_folder)
-        self.theme_action = QAction("任务栏适配深色桌面", self.menu)
-        self.theme_action.triggered.connect(self._match_dark_taskbar)
         self.support_action = QAction("支持作者", self.menu)
         self.support_action.triggered.connect(self._open_support)
         self.quit_action = QAction("退出", self.menu)
@@ -149,7 +147,6 @@ class TrayIcon(QSystemTrayIcon):
             self.pause_action,
             self.settings_action,
             self.folder_action,
-            self.theme_action,
         ):
             self.menu.addAction(action)
         if DONATE_URL:
@@ -158,21 +155,6 @@ class TrayIcon(QSystemTrayIcon):
         self.menu.addAction(self.quit_action)
         self.setContextMenu(self.menu)
         self.refresh()
-
-    def _match_dark_taskbar(self) -> None:
-        from dailywallpaper.apply.desktop_theme import darken_taskbar
-
-        result = darken_taskbar()
-        if result.get("taskbar") != "applied":
-            self.notify("任务栏", f"没有改成功：{result.get('taskbar')}")
-        elif result.get("search") == "applied":
-            self.notify("任务栏", "已改成深色，搜索框缩成一个图标")
-        else:
-            self.notify(
-                "任务栏",
-                "已改成深色；搜索框需要在「设置 > 个性化 > 任务栏 > 搜索」"
-                "里选「仅搜索图标」",
-            )
 
     def _open_support(self) -> None:
         if DONATE_URL:

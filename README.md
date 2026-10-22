@@ -207,7 +207,7 @@ steam_account = "你的 Steam 用户名"   # 只填用户名，不是密码
 | `src/dailywallpaper/state/` | 每日调度状态机 |
 | `src/dailywallpaper/ui/` | PySide6 托盘、四个页面、评分窗 |
 | `scripts/` | 探针与运维脚本（非产品代码） |
-| `docs/` | 设计文档、实施计划、探针与验收记录；`docs/CURATION.md` 策展目标（审美原则）、`docs/桌面适配.md` 任务栏深色化 |
+| `docs/` | 设计文档、实施计划、探针与验收记录；`docs/CURATION.md` 策展目标（审美原则） |
 | `data/` | 运行期数据：`app.db`、`logs/`、`cache/`（Git 忽略） |
 
 ---
