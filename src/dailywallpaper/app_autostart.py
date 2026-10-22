@@ -19,13 +19,17 @@ def default_command(config_path=None) -> str:
         from dailywallpaper.config import default_config_path
 
         config_path = default_config_path()
-    executable = Path(sys.executable)
-    pythonw = executable.with_name("pythonw.exe")
-    launcher = pythonw if pythonw.exists() else executable
-    # Start the tray GUI: the wallpaper must be visible at login, and the tray
-    # is what the user interacts with. The single-instance lock keeps a second
-    # launch from starting a second scheduler.
-    command = f'"{launcher}" -m dailywallpaper'
+    if getattr(sys, "frozen", False):
+        # An installed build is its own launcher; there is no -m module.
+        command = f'"{Path(sys.executable)}"'
+    else:
+        executable = Path(sys.executable)
+        pythonw = executable.with_name("pythonw.exe")
+        launcher = pythonw if pythonw.exists() else executable
+        # Start the tray GUI: the wallpaper must be visible at login, and the
+        # tray is what the user interacts with. The single-instance lock keeps
+        # a second launch from starting a second scheduler.
+        command = f'"{launcher}" -m dailywallpaper'
     if config_path is not None:
         command += f' --config "{Path(config_path).absolute()}"'
     return command

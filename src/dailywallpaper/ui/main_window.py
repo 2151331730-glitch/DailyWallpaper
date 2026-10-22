@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from dailywallpaper.cost.report import CostService
 from dailywallpaper.recommend.ratings import RatingsService, rating_text
+from dailywallpaper.resources import asset
 from dailywallpaper.state.machine import SystemClock
 from dailywallpaper.ui.cost_page import CostPage
 from dailywallpaper.ui.settings_page import SettingsPage
@@ -48,13 +49,14 @@ class MainWindow(QWidget):
     """Read-only view of the newest decision plus the manual actions."""
 
     def __init__(self, service, conn, parent=None, budget_cny=10.0,
-                 config=None, config_path=None, review_model=None):
+                 config=None, config_path=None, review_model=None,
+                 on_settings_saved=None):
         super().__init__(parent)
         self.service = service
         self.conn = conn
         self.review_model = review_model
         self.setWindowTitle("每日壁纸")
-        icon_path = Path(__file__).resolve().parents[3] / "assets" / "icon.png"
+        icon_path = asset("icon.png")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self.resize(560, 660)
@@ -74,7 +76,9 @@ class MainWindow(QWidget):
         self.tabs.addTab(self.cost, "成本")
         self.settings = None
         if config is not None and config_path is not None:
-            self.settings = SettingsPage(config, config_path)
+            self.settings = SettingsPage(
+                config, config_path, on_saved=on_settings_saved
+            )
             self.tabs.addTab(self.settings, "设置")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._polls = 0

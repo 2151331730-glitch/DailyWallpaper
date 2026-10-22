@@ -28,6 +28,7 @@ class UiShell:
             config=getattr(command_service, "full_config", None),
             config_path=getattr(command_service, "config_path", None),
             review_model=getattr(command_service, "review_model", None),
+            on_settings_saved=self._settings_saved,
         )
         config = getattr(command_service, "full_config", None)
         wallpapers_dir = (
@@ -67,6 +68,12 @@ class UiShell:
         self.window.refresh()
         if self.window.tabs.currentWidget() is self.window.history:
             self.window.history.refresh()
+
+    def _settings_saved(self, cfg) -> None:
+        """Hand a saved config to the worker; it applies at the next tick."""
+        self.service.full_config = cfg
+        if self.worker is not None:
+            self.worker.reload_config(cfg)
 
     def _poll(self) -> None:
         # Resolving the desktop wallpaper costs a filesystem scan; doing it

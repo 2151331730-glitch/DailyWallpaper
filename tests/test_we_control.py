@@ -106,3 +106,20 @@ def test_same_project_rejects_other_folder():
 
 def test_same_project_rejects_empty_current():
     assert not same_project("", Path("D:/workshop/content/431960/1132505365/project.json"))
+
+
+def test_replace_selection_keeps_a_backup(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "win11": {"general": {"wallpaperconfig": {
+            "selectedwallpapers": {"Monitor0": {"file": "D:/bad/scene.pkg"}},
+        }}},
+    }, indent="\t"), encoding="utf-8")
+    ctl = WeControl(Path("C:/WE"), cfg, runner=FakeRunner())
+
+    ctl.replace_selection(Path("D:/good/1212.apply.jpg"))
+
+    backup = tmp_path / "config.json.bak"
+    assert backup.is_file()
+    assert "D:/bad/scene.pkg" in backup.read_text(encoding="utf-8")
+    assert not (tmp_path / "config.json.tmp").exists()

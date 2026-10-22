@@ -16,12 +16,12 @@ from pathlib import Path
 
 from dailywallpaper.db import now_iso
 from dailywallpaper.recommend.profile import PreferenceProfile
+from dailywallpaper.resources import asset
 
 logger = logging.getLogger(__name__)
 
 SEED_VERSION = 1
-ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_SEED_PATH = ROOT / "assets" / "seed_profile.json"
+DEFAULT_SEED_PATH = asset("seed_profile.json")
 
 # What the curator asked to see less of: random game scenes and anime scenes
 # with no idea of their own. Keywords, not full tags -- the vision model

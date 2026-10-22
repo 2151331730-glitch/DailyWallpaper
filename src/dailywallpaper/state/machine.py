@@ -112,7 +112,10 @@ class DailyStateMachine:
             if repeat is not None:
                 decision = repeat(now)
         if decision is None:
-            return TickResult("kept", "no candidate passed")
+            # The pipeline knows whether the queue was empty or the downloads
+            # failed; a generic "no candidate passed" hid both.
+            reason = getattr(self.pipeline, "last_pick_reason", "")
+            return TickResult("kept", reason or "no candidate passed")
         if dry_run:
             return TickResult("dry_run", decision.reason, decision.wallpaper_id)
 

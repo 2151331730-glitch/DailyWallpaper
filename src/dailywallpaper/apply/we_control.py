@@ -173,8 +173,20 @@ class WeControl:
                 entry["file"] = str(file)
                 changed = True
         if changed:
-            self.config_path.write_text(
-                json.dumps(config.raw, ensure_ascii=False, indent="\t"),
-                encoding="utf-8",
+            text = json.dumps(config.raw, ensure_ascii=False, indent="\t")
+            # A crash halfway through a direct write would leave WE without a
+            # readable config. Keep the old file, write a temp one, swap it in.
+            backup = self.config_path.with_name(
+                self.config_path.name + ".bak"
             )
+            try:
+                backup.write_text(
+                    self.config_path.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+            except OSError:  # a missing/unreadable old file is not fatal
+                pass
+            tmp = self.config_path.with_name(self.config_path.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, self.config_path)
         return changed

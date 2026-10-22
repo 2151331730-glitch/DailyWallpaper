@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import sys
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -140,13 +142,48 @@ def _section(cls: type[T], raw: dict[str, Any]) -> T:
     return cls(**{k: v for k, v in raw.items() if k in allowed})
 
 
+def user_data_dir() -> Path:
+    """Where an installed copy keeps config, data and logs.
+
+    ``%LOCALAPPDATA%\\DailyWallpaper`` needs no admin rights, survives app
+    updates and is not wiped by uninstall.
+    """
+    override = os.environ.get("DAILYWALLPAPER_HOME")
+    if override:
+        return Path(override)
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return Path(base) / "DailyWallpaper"
+    return Path.home() / ".dailywallpaper"
+
+
 def default_config_path() -> Path:
-    return Path(os.environ.get("DAILYWALLPAPER_CONFIG", Path.cwd() / "config.toml"))
+    override = os.environ.get("DAILYWALLPAPER_CONFIG")
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return user_data_dir() / "config.toml"
+    # Source runs keep the historical behaviour: config.toml in the cwd.
+    return Path.cwd() / "config.toml"
+
+
+def _create_default_config(path: Path) -> None:
+    """First run of an installed copy: copy the shipped example."""
+    from dailywallpaper.resources import resource
+
+    example = resource("config.example.toml")
+    if not example.is_file():
+        raise FileNotFoundError(f"config not found: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(example, path)
 
 
 def load_config(path: Path) -> Config:
     if not path.exists():
-        raise FileNotFoundError(f"config not found: {path}")
+        if getattr(sys, "frozen", False):
+            _create_default_config(path)
+        else:
+            raise FileNotFoundError(f"config not found: {path}")
     with path.open("rb") as f:
         raw = tomllib.load(f)
     vision_raw = dict(raw.get("vision", {}))

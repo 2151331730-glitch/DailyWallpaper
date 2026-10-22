@@ -53,32 +53,31 @@ from dailywallpaper.sources.steam_workshop import (
     SteamWorkshopClient,
     SteamWorkshopSource,
 )
+from dailywallpaper.constants import (
+    BANNED_MAX_RATING,
+    MATERIALIZE_TOP_N,
+    MAX_FORCED_PREPARES,
+    RATE_LIMIT_ABORT_AFTER,
+)
 from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.sources.workshop import WorkshopSource
 from dailywallpaper.state.machine import DailyStateMachine, SystemClock
 
 ERROR_ALREADY_EXISTS = 183
 DEFAULT_INTERVAL_SECONDS = 60
+# A dead CDN should not cost 30 s per candidate, but one timeout must not ban
+# a host for the whole session either: Wallhaven serves every image from a
+# single host, so a permanent ban empties the pool. Cool down, then retry.
+HOST_COOLDOWN_SECONDS = 300
+# How many download failures a single "换一张" click may walk past before it
+# gives up; without a cap a dead network turned one click into a 20-minute
+# freeze over the whole shortlist.
+MATERIALIZE_ATTEMPTS = 3
 STEAM_KEY_ACCOUNT = "steam_api_key"
-# Only the head of the ranked list is downloaded up front; every other
-# candidate fetches its full image on demand, when a click actually reaches
-# it (see RealPipeline._materialize_one).
-MATERIALIZE_TOP_N = 3
-# A day's shortlist can be used up by several manual changes. Refilling it
-# means fetching and screening again, so the budget is finite -- but two was
-# too tight: the fifth click of a day had nothing left to try.
-MAX_FORCED_PREPARES = 6
-# Zhipu answers 429/1305 while a model is overloaded. Each retry costs about a
-# second, and the endpoint was refusing every request in a burst, so one slow
-# click paid that wait for all 41 candidates. After this many refusals in a row
-# the rest of the pass is pointless: keep what scored and stop.
-RATE_LIMIT_ABORT_AFTER = 6
 # Below this many fresh candidates the day's pool is considered broken (the
 # proxy is down and only Bing answers) and downloaded wallpapers stand in.
 OFFLINE_POOL_MIN = 5
 OFFLINE_POOL_LIMIT = 60
-# A rating this low means "never show me this again", not "rank it lower".
-BANNED_MAX_RATING = 2
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 logger = logging.getLogger(__name__)
@@ -199,9 +198,41 @@ class RealPipeline:
         self._rate_limited_streak = 0
         # A host that just timed out will time out again; without this one
         # dead CDN cost 30 s per candidate and the click looked broken.
-        self._failed_hosts: set[str] = set()
+        # Value is the failure time: the ban lapses after HOST_COOLDOWN_SECONDS.
+        self._failed_hosts: dict[str, float] = {}
         # Wallpapers the user rated 1-2; they never enter a pool again.
         self._banned: set[int] = set()
+        # Why the last pick() came back empty; the tray shows this instead of
+        # the old catch-all "no candidate passed".
+        self.last_pick_reason = ""
+
+    def apply_config(self, cfg) -> None:
+        """Pick up settings saved while the app is running.
+
+        The time window and city read ``self.cfg`` directly; the budget guard
+        and the enabled-source list are objects, so they are updated here.
+        """
+        self.cfg = cfg
+        if self.budget is not None:
+            self.budget.monthly_cny = cfg.budget.monthly_cny
+            self.budget.warn_ratio = cfg.budget.warn_ratio
+        enabled = {
+            "WallhavenSource": cfg.sources.wallhaven_enabled,
+            "BingSource": cfg.sources.bing_enabled,
+            "WorkshopSource": cfg.sources.we_workshop_enabled,
+        }
+        self.sources = [
+            source
+            for source in self.sources
+            if enabled.get(type(source).__name__, True)
+        ]
+
+    def _host_failed(self, host: str) -> bool:
+        failed_at = self._failed_hosts.get(host)
+        return (
+            failed_at is not None
+            and time.time() - failed_at < HOST_COOLDOWN_SECONDS
+        )
 
     def _recent_styles(self):
         rows = self.conn.execute(
@@ -397,9 +428,11 @@ class RealPipeline:
 
         self._rate_limited_streak = 0
         # A refill must be quick: re-scoring 41 candidates against a new
-        # prompt version took minutes and looked like a dead click. Spend at
-        # most a handful of fresh analyses, then reuse what is cached.
-        self._reanalyze_budget = 5 if force else None
+        # prompt version took minutes and looked like a dead click. Spend a
+        # bounded number of fresh analyses, then reuse what is cached. Eight
+        # is the speed/freshness compromise: enough to keep the refilled head
+        # honestly scored, still well under a minute.
+        self._reanalyze_budget = 8 if force else None
         self._failed_hosts.clear()
         self._banned = {
             int(row[0])
@@ -572,7 +605,7 @@ class RealPipeline:
             if not url.startswith(("http://", "https://")):
                 continue
             host = urlparse(url).netloc
-            if host in self._failed_hosts:
+            if self._host_failed(host):
                 continue
             try:
                 raw = data_dir / "downloads" / f"{decision.wallpaper_id}.img"
@@ -599,7 +632,7 @@ class RealPipeline:
                 kept.append(replace(decision, apply_path=dest))
             except Exception as exc:
                 if host:
-                    self._failed_hosts.add(host)
+                    self._failed_hosts[host] = time.time()
                 logger.warning(
                     f"full image for {decision.wallpaper_id} failed: {exc}"
                 )
@@ -621,7 +654,7 @@ class RealPipeline:
         if not url.startswith(("http://", "https://")):
             return None
         host = urlparse(url).netloc
-        if host in self._failed_hosts:
+        if self._host_failed(host):
             return None
         data_dir = Path(self.cfg.app.data_dir)
         try:
@@ -646,7 +679,7 @@ class RealPipeline:
             return replace(decision, apply_path=dest)
         except Exception as exc:
             if host:
-                self._failed_hosts.add(host)
+                self._failed_hosts[host] = time.time()
             logger.warning(
                 f"full image for {decision.wallpaper_id} failed: {exc}"
             )
@@ -935,6 +968,7 @@ class RealPipeline:
 
     def pick(self, now, dry_run: bool = False):
         if not self.shortlist:
+            self.last_pick_reason = "候选队列已用完，稍后会自动补充"
             return None
         # The pool is prepared before the click, and a rating can land in
         # between: "rated 1" must win over a stale shortlist entry.
@@ -945,6 +979,7 @@ class RealPipeline:
                 (BANNED_MAX_RATING,),
             ).fetchall()
         }
+        attempts = 0
         while self.shortlist:
             decision = self.shortlist.pop(0)
             if decision.wallpaper_id in banned:
@@ -954,9 +989,20 @@ class RealPipeline:
                 continue
             if decision.apply_path is None:
                 # The head is pre-downloaded; everything else is fetched only
-                # when a click actually reaches it.
+                # when a click actually reaches it. Cap the retries: with the
+                # network down every candidate would otherwise burn its full
+                # timeout and freeze the click for tens of minutes.
                 decision = self._materialize_one(decision)
                 if decision is None:
+                    attempts += 1
+                    if attempts >= MATERIALIZE_ATTEMPTS:
+                        logger.warning(
+                            "pick gave up after repeated download failures"
+                        )
+                        self.last_pick_reason = (
+                            "图片下载失败，检查网络或代理后重试"
+                        )
+                        return None
                     continue
             if decision.source == "steam_workshop" and (
                 decision.apply_path is None or not Path(decision.apply_path).is_file()
@@ -965,6 +1011,7 @@ class RealPipeline:
                 continue
             break
         else:
+            self.last_pick_reason = "候选队列已用完，稍后会自动补充"
             return None
         # Recorded before the apply; promoted to 'applied' only once the
         # desktop actually changed.

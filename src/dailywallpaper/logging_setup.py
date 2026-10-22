@@ -15,6 +15,9 @@ PATTERNS = [
     # exceptions quote the full URL.
     re.compile(r"([?&]key=)[^\s&\"']+"),
     re.compile(r"[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"),
+    # Zhipu keys are 32-char hex ids (sometimes with a .secret suffix). The
+    # earlier patterns only caught the dotted form, so a bare id leaked.
+    re.compile(r"\b[0-9a-f]{32}\b", re.I),
 ]
 
 

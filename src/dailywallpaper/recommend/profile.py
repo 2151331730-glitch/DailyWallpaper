@@ -20,11 +20,8 @@ FRESH_WEIGHT = 1.0
 AGING_WEIGHT = 0.5
 OLD_WEIGHT = 0.25
 NEUTRAL = 50.0
-# Ratings this low mean "never show me this again" (app.py bans the same
-# rows from the pool), but the profile still has to LEARN from them: the
-# style that produced a 1 is a taste to avoid, and skipping the row would
-# leave the recommender free to serve the same look under a new filename.
-BANNED_MAX_RATING = 2
+from dailywallpaper.constants import BANNED_MAX_RATING
+
 # A 1 is not "one step below neutral": it is the strongest dislike there is,
 # so it is pushed past the linear -1 the scale would give it.
 BANNED_PENALTY = 1.5

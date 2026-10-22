@@ -16,6 +16,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from dailywallpaper.resources import asset
+
 STATE_COLOURS = {
     "idle": "#6b7280",
     "busy": "#2563eb",
@@ -32,7 +34,7 @@ PAUSE_OPTIONS = (("1 天", 1), ("7 天", 7), ("直到手动恢复", None))
 BUBBLE_MS = 5000
 ICON_SIZE = 32
 BADGE = 12
-ICON_PATH = Path(__file__).resolve().parents[3] / "assets" / "icon.png"
+ICON_PATH = asset("icon.png")
 # Decoding the icon on every 2 s poll would be wasteful; one pixmap serves all
 # states. None means "asset missing", i.e. fall back to a plain coloured dot.
 _base_icon = False

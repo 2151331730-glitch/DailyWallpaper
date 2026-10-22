@@ -15,8 +15,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 60
-# How often the desktop is checked for a takeover.
-KEEP_ALIVE_SECONDS = 5
+# How often the desktop is checked for a takeover. Five seconds meant an
+# EnumWindows walk every few heartbeats for no visible gain; ten still closes
+# a WE takeover long before the user notices.
+KEEP_ALIVE_SECONDS = 10
+
+
+def _set_thread_priority(below_normal: bool) -> None:
+    """Lower this thread while a prepare runs; the UI should win.
+
+    Best effort: a non-Windows host or a denied call is not an error.
+    """
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetThreadPriority(
+            kernel32.GetCurrentThread(), -1 if below_normal else 0
+        )
+    except Exception:
+        pass
 
 
 class Worker:
@@ -29,6 +47,9 @@ class Worker:
         self._manual = threading.Event()
         self._manual_busy = False
         self._lock = threading.Lock()
+        # A settings save lands here and is applied at the next tick, on the
+        # thread that owns the machine.
+        self._pending_config = None
         # Any work in flight (a tick or the warm-up prepare). The tray reads
         # this so a two-minute change does not look like a dead grey icon.
         self._working = threading.Event()
@@ -151,10 +172,13 @@ class Worker:
         clock = getattr(self._machine, "clock", None)
         if pipeline is None or clock is None:
             return
+        _set_thread_priority(True)
         try:
             pipeline.prepare(clock.now())
         except Exception as exc:  # warming must never kill the tick thread
             logger.warning(f"shortlist warm-up failed: {exc}")
+        finally:
+            _set_thread_priority(False)
 
     def _guard_loop(self) -> None:
         """Hold the desktop between ticks, on a connection of its own."""
@@ -219,21 +243,44 @@ class Worker:
         except Exception:
             pass
 
-    def _tick_once(self, manual: bool = False) -> None:
-        try:
-            result = self._machine.tick(manual=manual)
-        except Exception as exc:  # one bad tick must not end the thread
-            logger.warning(f"tick failed: {exc}")
-            self.last_action = "tick_failed"
-            self.last_result = ("tick_failed", str(exc), manual)
-            self.result_seq += 1
+    def reload_config(self, cfg) -> None:
+        """Apply a saved config at the next tick without restarting."""
+        with self._lock:
+            self._pending_config = cfg
+
+    def _apply_pending_config(self) -> None:
+        pending = self._pending_config
+        if pending is None or self._machine is None:
             return
-        action = getattr(result, "action", "")
-        reason = getattr(result, "reason", "")
-        if action:
-            self.last_action = action
-        self.last_result = (action, reason, manual)
-        self.result_seq += 1
+        self._pending_config = None
+        self._machine.config = pending
+        pipeline = getattr(self._machine, "pipeline", None)
+        apply_config = getattr(pipeline, "apply_config", None)
+        if apply_config is not None:
+            apply_config(pending)
+
+    def _tick_once(self, manual: bool = False) -> None:
+        # The tick can spend minutes screening pictures; let the desktop stay
+        # responsive by running it below normal priority.
+        _set_thread_priority(True)
+        self._apply_pending_config()
+        try:
+            try:
+                result = self._machine.tick(manual=manual)
+            except Exception as exc:  # one bad tick must not end the thread
+                logger.warning(f"tick failed: {exc}")
+                self.last_action = "tick_failed"
+                self.last_result = ("tick_failed", str(exc), manual)
+                self.result_seq += 1
+                return
+            action = getattr(result, "action", "")
+            reason = getattr(result, "reason", "")
+            if action:
+                self.last_action = action
+            self.last_result = (action, reason, manual)
+            self.result_seq += 1
+        finally:
+            _set_thread_priority(False)
 
     # -- manual change -------------------------------------------------
     def change_now(self) -> bool:

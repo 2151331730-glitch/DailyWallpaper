@@ -14,15 +14,11 @@ from dailywallpaper.apply.we_control import desktop_window_visible
 
 # A failed live-wallpaper reopen must not spawn WE every guard cycle.
 DYNAMIC_RETRY_SECONDS = 60.0
-# Kept in step with app.BANNED_MAX_RATING: a rating this low means "never
-# again", so WE must not restore it either.
-BANNED_MAX_RATING = 2
-# The tray's sound switch. Stored in the DB (not config.toml) so the worker's
-# connection and the UI's connection see the same value.
-SOUND_KEY = "sound_enabled"
-# WE forgets its mute state when it restarts, so while sound is off the guard
-# re-sends the command every minute instead of once per wallpaper.
-SOUND_REASSERT_SECONDS = 60.0
+from dailywallpaper.constants import (
+    BANNED_MAX_RATING,
+    SOUND_KEY,
+    SOUND_REASSERT_SECONDS,
+)
 from dailywallpaper.apply.windows_static import WallpaperState
 from dailywallpaper.db import now_iso, parse_ts, today_iso
 

@@ -17,13 +17,12 @@ from dailywallpaper.steamcmd import SteamCmd
 
 logger = logging.getLogger(__name__)
 
+from dailywallpaper.constants import BANNED_MAX_RATING
+
 APP_ID = 431960
 INTERVAL_SECONDS = 900
 CANDIDATE_WINDOW = 50
 FAILURE_RETRY_SECONDS = 30 * 60
-# Same meaning as app.BANNED_MAX_RATING: never spend disk or bandwidth on a
-# workshop item the user rated 1-2 (a 291 MB download is not a rounding error).
-BANNED_MAX_RATING = 2
 
 
 class Prefetcher:
