@@ -16,6 +16,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from dailywallpaper.constants import DONATE_URL
 from dailywallpaper.resources import asset
 
 STATE_COLOURS = {
@@ -134,6 +135,8 @@ class TrayIcon(QSystemTrayIcon):
         self.folder_action.triggered.connect(self._open_folder)
         self.theme_action = QAction("任务栏适配深色桌面", self.menu)
         self.theme_action.triggered.connect(self._match_dark_taskbar)
+        self.support_action = QAction("支持作者", self.menu)
+        self.support_action.triggered.connect(self._open_support)
         self.quit_action = QAction("退出", self.menu)
         self.quit_action.triggered.connect(lambda: self.on_quit())
 
@@ -149,6 +152,8 @@ class TrayIcon(QSystemTrayIcon):
             self.theme_action,
         ):
             self.menu.addAction(action)
+        if DONATE_URL:
+            self.menu.addAction(self.support_action)
         self.menu.addSeparator()
         self.menu.addAction(self.quit_action)
         self.setContextMenu(self.menu)
@@ -168,6 +173,10 @@ class TrayIcon(QSystemTrayIcon):
                 "已改成深色；搜索框需要在「设置 > 个性化 > 任务栏 > 搜索」"
                 "里选「仅搜索图标」",
             )
+
+    def _open_support(self) -> None:
+        if DONATE_URL:
+            QDesktopServices.openUrl(QUrl(DONATE_URL))
 
     def _open_folder(self) -> None:
         if self.wallpapers_dir is not None:
