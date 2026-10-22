@@ -87,17 +87,17 @@ def test_search_intents_go_to_sources_that_can_search(tmp_path):
 
     class SteamWorkshopSource:
         def fetch(self, limit=None, query=None):
-            calls.append(("steam", query))
+            calls.append(("steam", query, limit))
             return ["steam-item"]
 
     class WallhavenSource:
         def fetch(self, limit=None, query=None):
-            calls.append(("wallhaven", query))
+            calls.append(("wallhaven", query, limit))
             return ["wallhaven-item"]
 
     class BingSource:
         def fetch(self, limit=None):
-            calls.append(("bing", None))
+            calls.append(("bing", None, None))
             return ["bing-item"]
 
     pipeline.sources = [SteamWorkshopSource(), WallhavenSource(), BingSource()]
@@ -106,7 +106,8 @@ def test_search_intents_go_to_sources_that_can_search(tmp_path):
         datetime(2026, 10, 22, 9, 0), "2026-10-22"
     )
 
-    assert ("steam", "C罗") in calls
-    assert ("wallhaven", "cristiano ronaldo") in calls
+    # One search takes half the 40-analysis budget.
+    assert ("steam", "C罗", 20) in calls
+    assert ("wallhaven", "cristiano ronaldo", 20) in calls
     assert all(call[0] != "bing" for call in calls)
     assert len(found) == 2

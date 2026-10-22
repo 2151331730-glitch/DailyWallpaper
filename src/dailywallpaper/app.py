@@ -260,7 +260,10 @@ class RealPipeline:
         if not queries:
             return []
         budget = max(1, self.cfg.app.max_analyses_per_day)
-        per_query = max(4, int(budget * 0.8 / len(queries)))
+        # A single search gets half the pool: enough to see that subject every
+        # day without drowning the regular sources. Several split 80% evenly.
+        share = 0.5 if len(queries) == 1 else 0.8
+        per_query = max(4, int(budget * share / len(queries)))
         found = []
         for item in queries:
             zh = item.get("query_zh") or ""
