@@ -162,3 +162,59 @@ def test_seed_profile_reads_boost_tags():
     )
 
     assert profile.boost_tags == ("surreal", "mysterious")
+
+
+def test_ratings_keep_the_seed_rules(tmp_path, monkeypatch):
+    from dailywallpaper.app import RealPipeline
+    from dailywallpaper.config import (
+        AppSection,
+        BudgetSection,
+        Config,
+        RetentionSection,
+        SourcesSection,
+        ToolsSection,
+        VisionSection,
+        WallpaperEngineSection,
+        WallpaperSection,
+        WeatherSection,
+    )
+
+    conn = _db(tmp_path)
+    wid = _wallpaper(conn, "1")
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,created_at) values(?,7,?)",
+        (wid, "2026-10-01T10:00:00"),
+    )
+    conn.commit()
+    seed_path = tmp_path / "seed.json"
+    seed_mod.export_seed(
+        {
+            "version": 1,
+            "rating_count": 5,
+            "tag_weights": {"fog": 0.6},
+            "source_weights": {},
+            "avoid_tags": ["anime"],
+            "boost_tags": ["surreal"],
+        },
+        seed_path,
+    )
+    monkeypatch.setattr(seed_mod, "DEFAULT_SEED_PATH", seed_path)
+    cfg = Config(
+        app=AppSection(data_dir=str(tmp_path)),
+        sources=SourcesSection(),
+        vision=VisionSection(),
+        budget=BudgetSection(),
+        weather=WeatherSection(),
+        wallpaper=WallpaperSection(),
+        wallpaper_engine=WallpaperEngineSection(),
+        tools=ToolsSection(),
+        retention=RetentionSection(),
+    )
+    pipeline = RealPipeline(cfg, conn, None, [], None, None)
+
+    profile = pipeline._profile(datetime.now().astimezone())
+
+    # The ratings win for weights, but the curator rules still apply.
+    assert profile.rating_count == 1
+    assert profile.avoid_tags == ("anime",)
+    assert profile.boost_tags == ("surreal",)

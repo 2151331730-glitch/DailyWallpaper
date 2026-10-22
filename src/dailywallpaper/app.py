@@ -246,19 +246,26 @@ class RealPipeline:
             """
         ).fetchall()
         profile = PreferenceProfile.from_ratings(rows, now)
-        if profile.rating_count == 0:
-            # A fresh install starts from the human-curated seed instead of a
-            # flat cold-start prior; the user's own ratings replace it as soon
-            # as they rate anything.
-            from dailywallpaper.curation.seed import load_seed, seed_profile
+        # The curator seed has two halves. Weights are only a cold start: the
+        # user's own ratings replace them. The rules (avoid/boost) are not
+        # personal ratings at all -- they must apply on every machine,
+        # including the one that produced them.
+        from dailywallpaper.curation.seed import load_seed, seed_profile
 
-            seed = load_seed()
-            if seed is not None:
+        seed = load_seed()
+        if seed is not None:
+            rules = seed_profile(seed)
+            if profile.rating_count == 0:
                 logger.info(
                     f"cold start from curated seed"
                     f" ({seed.get('rating_count', 0)} ratings)"
                 )
-                return seed_profile(seed)
+                return rules
+            profile = replace(
+                profile,
+                avoid_tags=rules.avoid_tags,
+                boost_tags=rules.boost_tags,
+            )
         return profile
 
     def _cached_steam_candidates(self, limit: int) -> list[Candidate]:
