@@ -43,7 +43,10 @@ class _IntentWorker(QObject):
 def _describe(intent: dict) -> str:
     if intent.get("kind") == "search":
         query = intent.get("query_zh") or intent.get("query_en") or ""
-        return f"已识别为搜索：想看「{query}」"
+        return (
+            f"已识别为搜索：想看「{query}」\n"
+            "点「换一张」立即应用；不点则明天自动换图时生效"
+        )
     tags = intent.get("tags") or []
     if not tags:
         return "已记录这条评语"
@@ -224,6 +227,11 @@ class RatingDialog(QDialog):
 
     def _on_intent(self, intent) -> None:
         if not intent:
+            # Silence looked like success: say the sentence was saved but
+            # could not be understood.
+            self.intent_label.setText(
+                "没识别出来；这句评语已保存，但不会影响推荐"
+            )
             return
         from dailywallpaper.recommend.intents import store
 

@@ -73,6 +73,9 @@ HOST_COOLDOWN_SECONDS = 300
 # gives up; without a cap a dead network turned one click into a 20-minute
 # freeze over the whole shortlist.
 MATERIALIZE_ATTEMPTS = 3
+# At most this many search intents are honoured per prepare; each one costs a
+# request per source, and the newest matter most.
+MAX_SEARCH_INTENTS = 3
 STEAM_KEY_ACCOUNT = "steam_api_key"
 # Below this many fresh candidates the day's pool is considered broken (the
 # proxy is down and only Bing answers) and downloaded wallpapers stand in.
@@ -84,6 +87,19 @@ logger = logging.getLogger(__name__)
 
 # Per-call estimate handed to the budget guard before any paid work.
 ESTIMATE_CNY = 0.003
+
+
+def _interleave(batches) -> list:
+    """Round-robin several lists so no single source owns the head."""
+    if not batches:
+        return []
+    out = []
+    longest = max(len(batch) for batch in batches)
+    for index in range(longest):
+        for batch in batches:
+            if index < len(batch):
+                out.append(batch[index])
+    return out
 
 
 def _merge_tags(base, extra) -> tuple[str, ...]:
@@ -256,18 +272,23 @@ class RealPipeline:
         """
         from dailywallpaper.recommend.intents import search_queries
 
-        queries = search_queries(self.conn)
+        # Cap the number of searches: every active intent costs a Steam and a
+        # Wallhaven request per prepare, and ten of them would make the daily
+        # pass crawl. The three newest win.
+        queries = search_queries(self.conn)[:MAX_SEARCH_INTENTS]
         if not queries:
             return []
         budget = max(1, self.cfg.app.max_analyses_per_day)
         # A single search gets half the pool: enough to see that subject every
         # day without drowning the regular sources. Several split 80% evenly.
         share = 0.5 if len(queries) == 1 else 0.8
-        per_query = max(4, int(budget * share / len(queries)))
+        target_total = max(4, int(budget * share))
+        per_query = max(4, target_total // len(queries))
         found = []
         for item in queries:
             zh = item.get("query_zh") or ""
             en = item.get("query_en") or ""
+            batches = []
             for source in self.sources:
                 name = type(source).__name__
                 if source_is_down(self.conn, name, today):
@@ -286,15 +307,21 @@ class RealPipeline:
                     if name == "WallhavenSource":
                         # One page is enough for a keyword search; the default
                         # four pages cost four seconds for the same result.
-                        found.extend(
+                        batches.append(
                             source.fetch(per_query, query=text, max_pages=1)
                         )
                     else:
-                        found.extend(source.fetch(per_query, query=text))
+                        batches.append(source.fetch(per_query, query=text))
                 except Exception as exc:
                     logger.warning(
                         f"search {text!r} via {name} failed: {exc}"
                     )
+            # Interleave the sources before cutting: taking the head of a
+            # concatenation would spend the whole quota on Steam and drop
+            # every Wallhaven hit.
+            found.extend(_interleave(batches)[:per_query])
+        # Never more than the agreed share, even if both sources over-deliver.
+        found = found[:target_total]
         if found:
             logger.info(f"search intents: {len(found)} candidate(s) fetched")
         return found
