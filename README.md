@@ -74,6 +74,19 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 
 ---
 
+## 安装（Windows，推荐）
+
+1. 下载 `DailyWallpaper-Setup-0.1.0.exe`（约 82 MB）
+2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\DailyWallpaper`
+3. 首次启动会要求填写智谱 API key（免费注册：open.bigmodel.cn → API Keys）
+4. 安装时会问一次「是否使用作者的默认审美筛选」，可以选不使用
+
+卸载：设置 → 应用 → 每日壁纸 → 卸载。卸载不会删除 `%LOCALAPPDATA%\DailyWallpaper` 里的配置和数据。
+
+> 安装包没有代码签名，Windows 可能提示「未知发布者」，点「仍要运行」即可。
+
+## 从源码运行
+
 ## 环境准备
 
 ```powershell
