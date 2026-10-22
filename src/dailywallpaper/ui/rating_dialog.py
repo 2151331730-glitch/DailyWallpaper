@@ -46,7 +46,7 @@ def _describe(intent: dict) -> str:
         return f"已识别为搜索：想看「{query}」"
     tags = intent.get("tags") or []
     if not tags:
-        return ""
+        return "已记录这条评语"
     want = "想要" if int(intent.get("polarity") or 1) > 0 else "不想要"
     return f"已识别：{want} " + "、".join(tags)
 
@@ -208,12 +208,13 @@ class RatingDialog(QDialog):
         text = self.comment_edit.text().strip()
         if not text or text == self._last_classified:
             return
-        self._last_classified = text
         import keyring
 
         api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
         if not api_key:
+            # Do not mark it classified: a key added later should still work.
             return
+        self._last_classified = text
         worker = _IntentWorker(text, api_key)
         worker.done.connect(self._on_intent)
         # Keep a reference: a worker that goes out of scope cancels nothing,
@@ -227,7 +228,14 @@ class RatingDialog(QDialog):
         from dailywallpaper.recommend.intents import store
 
         try:
-            store(self.service.conn, intent, self.wallpaper_id, self.comment_edit.text())
+            # Store the sentence that was actually classified, not a newer
+            # edit the user made while the model was thinking.
+            store(
+                self.service.conn,
+                intent,
+                self.wallpaper_id,
+                self._last_classified,
+            )
         except Exception as exc:  # a full database must not break the dialog
             import logging
 

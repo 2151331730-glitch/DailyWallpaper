@@ -32,11 +32,13 @@ class WallhavenSource:
         self.config = config or SourcesSection()
         self._requests_made = 0
 
-    def fetch(self, limit: int = PAGE_SIZE, query: str | None = None) -> list[Candidate]:
+    def fetch(self, limit: int = PAGE_SIZE, query: str | None = None,
+              max_pages: int | None = None) -> list[Candidate]:
         if limit <= 0:
             return []
         pages: list[list[Candidate]] = []
-        for page in range(1, self.config.wallhaven_pages + 1):
+        page_count = max(1, max_pages or self.config.wallhaven_pages)
+        for page in range(1, page_count + 1):
             payload = self._search(page, query=query)
             data = payload.get("data")
             if not isinstance(data, list):

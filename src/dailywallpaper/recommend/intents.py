@@ -86,6 +86,20 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL) -> dict |
     return _validate(payload)
 
 
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _validate(payload: dict) -> dict | None:
     if not isinstance(payload, dict):
         return None
@@ -96,11 +110,11 @@ def _validate(payload: dict) -> dict | None:
         # Stored for display, but neither changes the pool or the score yet.
         return {
             "kind": kind,
-            "polarity": int(payload.get("polarity") or 1),
+            "polarity": _as_int(payload.get("polarity"), 1),
             "tags": [],
             "query_zh": "",
             "query_en": "",
-            "confidence": float(payload.get("confidence") or 0.5),
+            "confidence": _as_float(payload.get("confidence"), 0.5),
         }
     tags = [
         str(tag).strip().lower()
@@ -109,11 +123,11 @@ def _validate(payload: dict) -> dict | None:
     ][:5]
     intent = {
         "kind": kind,
-        "polarity": -1 if int(payload.get("polarity") or 1) < 0 else 1,
+        "polarity": -1 if _as_int(payload.get("polarity"), 1) < 0 else 1,
         "tags": tags,
         "query_zh": str(payload.get("query_zh") or "").strip(),
         "query_en": str(payload.get("query_en") or "").strip(),
-        "confidence": max(0.0, min(1.0, float(payload.get("confidence") or 0.5))),
+        "confidence": max(0.0, min(1.0, _as_float(payload.get("confidence"), 0.5))),
     }
     if kind == "search" and not (intent["query_zh"] or intent["query_en"]):
         return None
@@ -121,6 +135,30 @@ def _validate(payload: dict) -> dict | None:
 
 
 def store(conn, intent: dict, wallpaper_id: int | None, text: str) -> int:
+    # Re-saving the same sentence (or asking for the same search again) must
+    # not stack duplicate rows: every duplicate would take another share of
+    # the search budget.
+    for existing in list_intents(conn):
+        if existing["kind"] != intent["kind"]:
+            continue
+        payload = existing.get("payload") or {}
+        if intent["kind"] == "search":
+            if (payload.get("query_zh") or payload.get("query_en")) == (
+                intent.get("query_zh") or intent.get("query_en")
+            ):
+                return existing["id"]
+        elif intent["kind"] == "local":
+            if (
+                payload.get("tags") == intent.get("tags")
+                and existing["wallpaper_id"] == wallpaper_id
+            ):
+                return existing["id"]
+        elif (
+            payload.get("tags") == intent.get("tags")
+            and _as_int(payload.get("polarity"), 1)
+            == _as_int(intent.get("polarity"), 1)
+        ):
+            return existing["id"]
     cursor = conn.execute(
         "insert into user_intents(kind,payload_json,wallpaper_id,source_comment,"
         "created_at) values(?,?,?,?,?)",

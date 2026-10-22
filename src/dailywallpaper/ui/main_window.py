@@ -95,6 +95,9 @@ class MainWindow(QWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._polls = 0
         self._shown_decision_id = None
+        # Rebuilding the intent rows every 2 s poll made the buttons flicker;
+        # only rebuild when the list actually changed.
+        self._intents_signature = None
 
         outer = QVBoxLayout(self)
         outer.addWidget(self.tabs)
@@ -203,15 +206,21 @@ class MainWindow(QWidget):
 
     def _sync_intents(self) -> None:
         """List the intents the user can still revoke, newest first."""
+        try:
+            intents = self.service.intents()
+        except Exception:
+            intents = []
+        signature = tuple(
+            (item["id"], item["kind"], item.get("comment")) for item in intents
+        )
+        if signature == self._intents_signature:
+            return
+        self._intents_signature = signature
         while self.intents_box.count():
             item = self.intents_box.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        try:
-            intents = self.service.intents()
-        except Exception:
-            intents = []
         self.intents_title.setVisible(bool(intents))
         for intent in intents[:6]:
             row = QWidget()

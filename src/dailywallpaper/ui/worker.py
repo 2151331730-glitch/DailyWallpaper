@@ -290,8 +290,13 @@ class Worker:
         # The tick can spend minutes screening pictures; let the desktop stay
         # responsive by running it below normal priority.
         _set_thread_priority(True)
-        self._apply_pending_config()
         try:
+            # A failure while applying a pending config or rebuilding the pool
+            # must not leave the thread at low priority.
+            try:
+                self._apply_pending_config()
+            except Exception as exc:
+                logger.warning(f"pending config not applied: {exc}")
             try:
                 result = self._machine.tick(manual=manual)
             except Exception as exc:  # one bad tick must not end the thread

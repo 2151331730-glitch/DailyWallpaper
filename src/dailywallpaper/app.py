@@ -283,7 +283,14 @@ class RealPipeline:
                 if not text:
                     continue
                 try:
-                    found.extend(source.fetch(per_query, query=text))
+                    if name == "WallhavenSource":
+                        # One page is enough for a keyword search; the default
+                        # four pages cost four seconds for the same result.
+                        found.extend(
+                            source.fetch(per_query, query=text, max_pages=1)
+                        )
+                    else:
+                        found.extend(source.fetch(per_query, query=text))
                 except Exception as exc:
                     logger.warning(
                         f"search {text!r} via {name} failed: {exc}"

@@ -91,8 +91,8 @@ def test_search_intents_go_to_sources_that_can_search(tmp_path):
             return ["steam-item"]
 
     class WallhavenSource:
-        def fetch(self, limit=None, query=None):
-            calls.append(("wallhaven", query, limit))
+        def fetch(self, limit=None, query=None, max_pages=None):
+            calls.append(("wallhaven", query, limit, max_pages))
             return ["wallhaven-item"]
 
     class BingSource:
@@ -106,8 +106,29 @@ def test_search_intents_go_to_sources_that_can_search(tmp_path):
         datetime(2026, 10, 22, 9, 0), "2026-10-22"
     )
 
-    # One search takes half the 40-analysis budget.
+    # One search takes half the 40-analysis budget; Wallhaven only needs one
+    # page (max_pages=1), Steam keeps its usual page size.
     assert ("steam", "C罗", 20) in calls
-    assert ("wallhaven", "cristiano ronaldo", 20) in calls
+    assert ("wallhaven", "cristiano ronaldo", 20, 1) in calls
     assert all(call[0] != "bing" for call in calls)
     assert len(found) == 2
+
+
+def test_validate_tolerates_string_numbers():
+    intent = intents._validate(
+        {"kind": "preference", "polarity": "high", "tags": ["Fog"],
+         "confidence": "0.8"}
+    )
+
+    assert intent["polarity"] == 1
+    assert intent["confidence"] == 0.8
+
+
+def test_the_same_search_is_stored_once(tmp_path):
+    conn = _db(tmp_path)
+
+    first = intents.store(conn, _search_intent(), None, "想看C罗")
+    second = intents.store(conn, _search_intent(), None, "想看C罗")
+
+    assert first == second
+    assert len(intents.list_intents(conn)) == 1
