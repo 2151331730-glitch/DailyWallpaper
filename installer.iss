@@ -32,6 +32,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："
 Name: "autostart"; Description: "开机自动启动"; GroupDescription: "启动选项："
+Name: "darktaskbar"; Description: "将任务栏和搜索框改成深色（适配深色壁纸）"; GroupDescription: "外观选项："
 
 [Files]
 Source: "dist\DailyWallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -44,6 +45,31 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+const
+  WM_SETTINGCHANGE = $001A;
+  SMTO_ABORTIFHUNG = $0002;
+
+function SendMessageTimeoutW(hWnd: HWND; Msg: UINT; wParam: Longint;
+  lParam: Longint; fuFlags: UINT; uTimeout: UINT;
+  var lpdwResult: DWORD): Longint;
+  external 'SendMessageTimeoutW@user32.dll stdcall';
+
+procedure ApplyDarkTaskbar();
+var
+  ignored: DWORD;
+begin
+  RegWriteDWordValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
+    'SystemUsesLightTheme', 0);
+  { The Search key is owned by SYSTEM on some machines; a refusal is fine. }
+  RegWriteDWordValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Search',
+    'SearchboxTaskbarMode', 1);
+  { Broadcast a settings change so the shell re-reads the theme. }
+  SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0,
+    SMTO_ABORTIFHUNG, 1000, ignored);
+end;
+
 var
   SeedPage: TInputOptionWizardPage;
 
@@ -94,5 +120,7 @@ begin
     else
       Json := Json + ', "autostart": false}';
     SaveStringToFile(DirName + '\install_prefs.json', Json, False);
+    if WizardIsTaskSelected('darktaskbar') then
+      ApplyDarkTaskbar();
   end;
 end;
