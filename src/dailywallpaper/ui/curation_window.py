@@ -299,7 +299,13 @@ def run_curation(cfg, config_path=None, count: int = 300) -> int:
     progress.show()
     QApplication.processEvents()
 
-    candidates = collect_wallhaven(session, count, cfg.sources)
+    seen = [
+        str(row[0])
+        for row in conn.execute(
+            "select source_id from wallpapers where source='wallhaven'"
+        )
+    ]
+    candidates = collect_wallhaven(session, count, cfg.sources, skip_ids=seen)
     if progress.wasCanceled() or not candidates:
         progress.close()
         return 0

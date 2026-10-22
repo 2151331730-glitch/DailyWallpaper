@@ -16,14 +16,18 @@ from dailywallpaper.sources.wallhaven import WallhavenSource, _to_candidate
 
 logger = logging.getLogger(__name__)
 
-# Wallhaven returns 24 items per page; 13 pages is a little over 300.
-MAX_PAGES = 20
+# Wallhaven returns 24 items per page. A second pass on a machine that has
+# already seen 700+ candidates needs to page further; the random sort keeps
+# turning up new ones.
+MAX_PAGES = 40
 THUMB_TIMEOUT = 30
 
 
-def collect_wallhaven(session, count: int = 300, config: SourcesSection | None = None):
-    """Return up to ``count`` Wallhaven candidates for a curation pass."""
+def collect_wallhaven(session, count: int = 300, config: SourcesSection | None = None,
+                      skip_ids=None):
+    """Return up to ``count`` Wallhaven candidates not seen before."""
     source = WallhavenSource(session, config or SourcesSection())
+    skip = {str(value) for value in (skip_ids or ())}
     candidates = []
     page = 1
     while len(candidates) < count and page <= MAX_PAGES:
@@ -37,9 +41,12 @@ def collect_wallhaven(session, count: int = 300, config: SourcesSection | None =
             break
         for item in data:
             try:
-                candidates.append(_to_candidate(item))
+                candidate = _to_candidate(item)
             except Exception:
                 continue
+            if candidate.source_id in skip:
+                continue
+            candidates.append(candidate)
             if len(candidates) >= count:
                 break
         page += 1
