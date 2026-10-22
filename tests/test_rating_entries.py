@@ -240,18 +240,17 @@ def test_rating_dialog_prefills_the_existing_rating(qapp, tmp_path):
     assert dialog.score_buttons[8].isChecked() is True
 
 
-def test_rating_dialog_restores_the_checked_reasons(qapp, tmp_path):
+def test_rating_dialog_restores_the_comment(qapp, tmp_path):
     from dailywallpaper.recommend.ratings import RatingsService
     from dailywallpaper.ui.rating_dialog import RatingDialog
 
     conn = _db(tmp_path)
     wid = _wallpaper(conn)
-    RatingsService(conn).rate(wid, 2, reasons=["太暗"])
+    RatingsService(conn).rate(wid, 2, comment="太暗")
 
     dialog = RatingDialog(RatingsService(conn), wid)
 
-    assert dialog.reason_buttons["太暗"].isChecked() is True
-    assert dialog.comment_edit.text() == ""
+    assert dialog.comment_edit.text() == "太暗"
 
 
 def test_shell_rating_entry_opens_the_dialog_for_the_latest(qapp, tmp_path, monkeypatch):

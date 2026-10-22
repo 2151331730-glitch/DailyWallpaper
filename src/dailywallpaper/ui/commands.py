@@ -124,6 +124,21 @@ class CommandService:
     def undo(self) -> bool:
         return bool(self.apply_service.undo_last())
 
+    def intents(self):
+        """Search/preference intents the user asked for in comments."""
+        from dailywallpaper.recommend.intents import list_intents
+
+        return list_intents(self.conn)
+
+    def remove_intent(self, intent_id: int) -> None:
+        """Drop one intent and make the prepared shortlist stale."""
+        from dailywallpaper.recommend.intents import remove_intent
+
+        remove_intent(self.conn, intent_id)
+        reset = getattr(self.runner, "reset_shortlist", None)
+        if reset is not None:
+            reset()
+
     def sound_enabled(self) -> bool:
         probe = getattr(self.apply_service, "sound_enabled", None)
         return True if probe is None else bool(probe())

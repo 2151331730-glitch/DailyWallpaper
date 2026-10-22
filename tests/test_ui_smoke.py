@@ -374,7 +374,7 @@ def test_worker_ignores_a_second_manual_request_while_busy():
     assert worker.change_now() is False
 
 
-def test_rating_dialog_saves_a_score_and_reason(qapp, tmp_path):
+def test_rating_dialog_saves_a_score_and_comment(qapp, tmp_path):
     from dailywallpaper.db import connect, migrate
     from dailywallpaper.recommend.ratings import RatingsService
     from dailywallpaper.ui.rating_dialog import RatingDialog
@@ -386,13 +386,13 @@ def test_rating_dialog_saves_a_score_and_reason(qapp, tmp_path):
     conn.commit()
 
     dialog = RatingDialog(RatingsService(conn), wid)
-    dialog.reason_buttons["太暗"].click()
+    dialog.comment_edit.setText("太暗")
     dialog.score_buttons[8].click()
 
     assert dialog.chosen == 8
     row = conn.execute("select rating, comment from ratings").fetchone()
     assert row["rating"] == 8
-    assert "太暗" in row["comment"]
+    assert row["comment"] == "太暗"
 
 
 def test_rating_dialog_stays_open_after_saving(qapp, tmp_path):
@@ -416,7 +416,7 @@ def test_rating_dialog_stays_open_after_saving(qapp, tmp_path):
     assert "已保存" in dialog.hint_label.text()
 
 
-def test_reasons_typed_after_the_score_update_the_saved_row(qapp, tmp_path):
+def test_a_comment_typed_after_the_score_updates_the_saved_row(qapp, tmp_path):
     from dailywallpaper.db import connect, migrate
     from dailywallpaper.recommend.ratings import RatingsService
     from dailywallpaper.ui.rating_dialog import RatingDialog
@@ -429,11 +429,12 @@ def test_reasons_typed_after_the_score_update_the_saved_row(qapp, tmp_path):
 
     dialog = RatingDialog(RatingsService(conn), wid)
     dialog.score_buttons[8].click()
-    dialog.reason_buttons["太暗"].click()
+    dialog.comment_edit.setText("太暗")
+    dialog.comment_edit.editingFinished.emit()
 
     row = conn.execute("select rating, comment from ratings").fetchone()
     assert row["rating"] == 8
-    assert "太暗" in row["comment"]
+    assert row["comment"] == "太暗"
 
 
 def test_rating_dialog_opens_at_the_bottom_right(qapp, tmp_path):
@@ -460,13 +461,10 @@ def test_rating_dialog_opens_at_the_bottom_right(qapp, tmp_path):
         dialog.close()
 
 
-def test_rating_dialog_exposes_the_documented_reasons(qapp):
-    from dailywallpaper.ui.rating_dialog import QUICK_REASONS
+def test_rating_dialog_has_no_quick_reasons_anymore(qapp):
+    import dailywallpaper.ui.rating_dialog as dialog
 
-    assert QUICK_REASONS == [
-        "太花哨", "太暗", "不喜欢动漫", "想要风景",
-        "想要暗色", "想要简约", "想要人物", "其他",
-    ]
+    assert not hasattr(dialog, "QUICK_REASONS")
 
 
 def test_history_page_lists_recent_decisions(qapp, tmp_path):

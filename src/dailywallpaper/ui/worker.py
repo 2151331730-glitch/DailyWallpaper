@@ -50,6 +50,9 @@ class Worker:
         # A settings save lands here and is applied at the next tick, on the
         # thread that owns the machine.
         self._pending_config = None
+        # Removing an intent invalidates the prepared shortlist; also applied
+        # at the next tick so the list is never mutated from the UI thread.
+        self._pending_reset = False
         # Any work in flight (a tick or the warm-up prepare). The tray reads
         # this so a two-minute change does not look like a dead grey icon.
         self._working = threading.Event()
@@ -248,16 +251,40 @@ class Worker:
         with self._lock:
             self._pending_config = cfg
 
+    def reset_shortlist(self) -> None:
+        """Ask the tick thread to rebuild the pool (an intent was removed)."""
+        with self._lock:
+            self._pending_reset = True
+
     def _apply_pending_config(self) -> None:
-        pending = self._pending_config
-        if pending is None or self._machine is None:
+        if self._machine is None:
             return
-        self._pending_config = None
-        self._machine.config = pending
-        pipeline = getattr(self._machine, "pipeline", None)
-        apply_config = getattr(pipeline, "apply_config", None)
-        if apply_config is not None:
-            apply_config(pending)
+        pending = self._pending_config
+        if pending is not None:
+            self._pending_config = None
+            self._machine.config = pending
+            pipeline = getattr(self._machine, "pipeline", None)
+            apply_config = getattr(pipeline, "apply_config", None)
+            if apply_config is not None:
+                apply_config(pending)
+        dirty = False
+        if self._pending_reset:
+            self._pending_reset = False
+            dirty = True
+        conn = getattr(self._machine, "conn", None)
+        if conn is not None:
+            row = conn.execute(
+                "select 1 from state where key='pool_dirty'"
+            ).fetchone()
+            if row is not None:
+                conn.execute("delete from state where key='pool_dirty'")
+                conn.commit()
+                dirty = True
+        if dirty:
+            pipeline = getattr(self._machine, "pipeline", None)
+            if pipeline is not None:
+                pipeline.shortlist = []
+                pipeline._prepared_on = None
 
     def _tick_once(self, manual: bool = False) -> None:
         # The tick can spend minutes screening pictures; let the desktop stay

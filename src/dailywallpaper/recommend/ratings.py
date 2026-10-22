@@ -11,41 +11,11 @@ from dailywallpaper.db import now_iso
 MIN_RATING = 1
 MAX_RATING = 10
 ALLOWED = tuple(range(MIN_RATING, MAX_RATING + 1))
-QUICK_REASONS = [
-    "太花哨",
-    "太暗",
-    "不喜欢动漫",
-    "想要风景",
-    "想要暗色",
-    "想要简约",
-    "想要人物",
-    "其他",
-]
-REASON_SEPARATOR = "、"
 COMMENT_MAX = 200
 
 
 def rating_text(rating: int | None) -> str:
     return "未评分" if rating is None else f"{rating} / 10"
-
-
-def split_reasons(comment: str) -> tuple[str, list[str]]:
-    """Separate the free text from the quick reasons appended by ``rate``.
-
-    ``rate`` has always stored the two in one column, so editing an existing
-    rating used to append the same reason again. Recognise the trailing
-    "原因1、原因2" block and hand it back to the dialog instead.
-    """
-    text = (comment or "").strip()
-    head, _, tail = text.rpartition(" ")
-    if head and tail:
-        reasons = tail.split(REASON_SEPARATOR)
-        if all(reason in QUICK_REASONS for reason in reasons):
-            return head.strip(), reasons
-    parts = text.split(REASON_SEPARATOR)
-    if parts and all(part in QUICK_REASONS for part in parts):
-        return "", parts
-    return text, []
 
 HISTORY_SQL = """
 select d.wallpaper_id, w.title, w.local_path, d.decision_date, d.final_score,
@@ -89,13 +59,11 @@ class RatingsService:
         tags = json.loads(row["style_tags_json"] or "[]")
         return tags[:1] if tags else []
 
-    def rate(self, wallpaper_id: int, rating: int, comment: str = "", reasons=None) -> None:
+    def rate(self, wallpaper_id: int, rating: int, comment: str = "") -> None:
         """Insert or replace the one rating row this wallpaper may have."""
         if rating not in ALLOWED:
             raise ValueError(f"rating must be between {MIN_RATING} and {MAX_RATING}")
         text = (comment or "").strip()
-        if reasons:
-            text = (text + " " + "、".join(reasons)).strip()
         self.conn.execute(
             """
             insert into ratings(wallpaper_id,rating,comment,derived_tags_json,created_at)

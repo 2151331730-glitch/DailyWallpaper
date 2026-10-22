@@ -32,12 +32,12 @@ class WallhavenSource:
         self.config = config or SourcesSection()
         self._requests_made = 0
 
-    def fetch(self, limit: int = PAGE_SIZE) -> list[Candidate]:
+    def fetch(self, limit: int = PAGE_SIZE, query: str | None = None) -> list[Candidate]:
         if limit <= 0:
             return []
         pages: list[list[Candidate]] = []
         for page in range(1, self.config.wallhaven_pages + 1):
-            payload = self._search(page)
+            payload = self._search(page, query=query)
             data = payload.get("data")
             if not isinstance(data, list):
                 raise SourceError("wallhaven response is missing the data list")
@@ -60,7 +60,7 @@ class WallhavenSource:
         sorting = SORT_PLAN[(page - 1) % len(SORT_PLAN)]
         return sorting, ("1M" if sorting == "toplist" else None)
 
-    def _search(self, page: int) -> dict:
+    def _search(self, page: int, query: str | None = None) -> dict:
         if self._requests_made:
             time.sleep(REQUEST_SPACING_SECONDS)
         self._requests_made += 1
@@ -73,6 +73,9 @@ class WallhavenSource:
             "sorting": sorting,
             "page": page,
         }
+        if query:
+            # Wallhaven's q is an English keyword search; it ignores Chinese.
+            params["q"] = query
         if top_range:
             params["topRange"] = top_range
         try:

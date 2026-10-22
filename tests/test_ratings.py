@@ -115,27 +115,10 @@ def test_history_includes_unrated_entries(tmp_path):
     assert RatingsService(conn).history()[0].rating is None
 
 
-def test_split_reasons_returns_text_and_the_quick_reasons(tmp_path):
-    from dailywallpaper.recommend.ratings import split_reasons
-
+def test_the_comment_is_stored_verbatim(tmp_path):
     conn, wid = _setup(tmp_path)
     service = RatingsService(conn)
-    service.rate(wid, 2, comment="画得太满", reasons=["太暗", "想要简约"])
 
-    comment = conn.execute("select comment from ratings").fetchone()[0]
+    service.rate(wid, 2, comment="画得太满")
 
-    assert split_reasons(comment) == ("画得太满", ["太暗", "想要简约"])
-
-
-def test_resaving_the_same_reasons_does_not_duplicate_them(tmp_path):
-    from dailywallpaper.recommend.ratings import split_reasons
-
-    conn, wid = _setup(tmp_path)
-    service = RatingsService(conn)
-    service.rate(wid, 8, reasons=["太暗"])
-
-    comment = conn.execute("select comment from ratings").fetchone()[0]
-    text, reasons = split_reasons(comment)
-    service.rate(wid, 8, comment=text, reasons=reasons)
-
-    assert conn.execute("select comment from ratings").fetchone()[0] == "太暗"
+    assert conn.execute("select comment from ratings").fetchone()[0] == "画得太满"

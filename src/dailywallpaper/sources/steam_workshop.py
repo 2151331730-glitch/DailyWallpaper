@@ -71,16 +71,20 @@ class SteamWorkshopClient:
         self.timeout = timeout
         self.url = url
 
-    def browse(self, days: int = 30, per_page: int = 50) -> list[dict]:
+    def browse(self, days: int = 30, per_page: int = 50,
+               search_text: str | None = None) -> list[dict]:
         """The public workshop listing, without the Web API."""
+        params = {
+            "appid": APP_ID,
+            "browsesort": "trend",
+            "days": days,
+            "p": 1,
+        }
+        if search_text:
+            params["searchtext"] = search_text
         response = self.session.get(
             BROWSE_URL,
-            params={
-                "appid": APP_ID,
-                "browsesort": "trend",
-                "days": days,
-                "p": 1,
-            },
+            params=params,
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -90,7 +94,7 @@ class SteamWorkshopClient:
         return items
 
     def query(self, query_type: int = 3, days: int = 30, per_page: int = 20,
-              page: int = 1) -> list[dict]:
+              page: int = 1, search_text: str | None = None) -> list[dict]:
         params = {
             "key": self.api_key,
             "appid": APP_ID,
@@ -104,6 +108,9 @@ class SteamWorkshopClient:
             # filter and the scene/video split silently do nothing.
             "return_tags": "true",
         }
+        if search_text:
+            # Steam's search_text accepts Chinese titles as well as English.
+            params["search_text"] = search_text
         response = self.session.get(self.url, params=params, timeout=self.timeout)
         response.raise_for_status()
         payload = response.json()
@@ -142,10 +149,12 @@ class SteamWorkshopSource:
         self.days = days
         self.per_page = per_page
 
-    def fetch(self, limit: int | None = None) -> list[Candidate]:
+    def fetch(self, limit: int | None = None,
+              query: str | None = None) -> list[Candidate]:
         try:
             details = self.client.query(
-                query_type=self.query_type, days=self.days, per_page=self.per_page
+                query_type=self.query_type, days=self.days,
+                per_page=self.per_page, search_text=query,
             )
         except Exception as exc:
             # The API host is unreachable from here even through a proxy; the
@@ -153,7 +162,9 @@ class SteamWorkshopSource:
             logger.warning(
                 f"steam api unavailable ({exc}); reading the workshop page"
             )
-            details = self.client.browse(days=self.days, per_page=self.per_page)
+            details = self.client.browse(
+                days=self.days, per_page=self.per_page, search_text=query
+            )
         found = [c for c in (self._candidate(item) for item in details) if c]
         return found if limit is None else found[:limit]
 

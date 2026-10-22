@@ -25,6 +25,18 @@ from dailywallpaper.ui.history_page import HistoryPage
 
 PREVIEW_HEIGHT = 280
 
+
+def _intent_text(intent: dict) -> str:
+    payload = intent.get("payload") or {}
+    if intent.get("kind") == "search":
+        query = payload.get("query_zh") or payload.get("query_en") or ""
+        return f"搜索：{query}"
+    tags = payload.get("tags") or []
+    if tags:
+        want = "想要" if int(payload.get("polarity") or 1) > 0 else "不想要"
+        return f"偏好：{want} " + "、".join(tags)
+    return f"评语：{intent.get('comment') or ''}"
+
 LATEST_SQL = """
 select d.id, w.title, w.source, w.local_path, d.explore_score, d.personalize_score,
        d.final_score, d.reason
@@ -117,6 +129,11 @@ class MainWindow(QWidget):
         actions.addWidget(self.undo_button)
         actions.addWidget(self.rate_button)
 
+        self.intents_title = QLabel("当前生效的偏好")
+        self.intents_title.setStyleSheet("color:#6b7280;font-size:11px;")
+        self.intents_box = QVBoxLayout()
+        self.intents_box.setContentsMargins(0, 0, 0, 0)
+
         layout = QVBoxLayout(self.today)
         layout.addWidget(self.preview_label)
         layout.addWidget(self.title_label)
@@ -127,6 +144,8 @@ class MainWindow(QWidget):
         layout.addWidget(self.reviewed_label)
         layout.addLayout(actions)
         layout.addWidget(self.rating_status_label)
+        layout.addWidget(self.intents_title)
+        layout.addLayout(self.intents_box)
 
     def _change_now(self):
         self.service.change_now()
@@ -182,7 +201,41 @@ class MainWindow(QWidget):
                 f"我的评分：{rating_text(rating)}（会影响明天的推荐）"
             )
 
+    def _sync_intents(self) -> None:
+        """List the intents the user can still revoke, newest first."""
+        while self.intents_box.count():
+            item = self.intents_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        try:
+            intents = self.service.intents()
+        except Exception:
+            intents = []
+        self.intents_title.setVisible(bool(intents))
+        for intent in intents[:6]:
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            label = QLabel(_intent_text(intent))
+            label.setWordWrap(True)
+            button = QPushButton("撤销")
+            button.setFixedWidth(56)
+            button.clicked.connect(
+                lambda _checked=False, intent_id=intent["id"]: self._remove_intent(
+                    intent_id
+                )
+            )
+            line.addWidget(label, 1)
+            line.addWidget(button)
+            self.intents_box.addWidget(row)
+
+    def _remove_intent(self, intent_id: int) -> None:
+        self.service.remove_intent(intent_id)
+        self._sync_intents()
+
     def refresh(self) -> None:
+        self._sync_intents()
         wallpaper_id = self._current_wallpaper_id()
         row = None
         info = None

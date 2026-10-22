@@ -86,6 +86,15 @@ logger = logging.getLogger(__name__)
 ESTIMATE_CNY = 0.003
 
 
+def _merge_tags(base, extra) -> tuple[str, ...]:
+    """Ordered union, so a repeated tag is only matched once."""
+    seen: list[str] = []
+    for tag in tuple(base) + tuple(extra):
+        if tag and tag not in seen:
+            seen.append(tag)
+    return tuple(seen)
+
+
 def _install_allows_seed() -> bool:
     """Did the installer checkbox say "use the author's default curation"?
 
@@ -239,6 +248,47 @@ class RealPipeline:
             if enabled.get(type(source).__name__, True)
         ]
 
+    def _fetch_search_candidates(self, now, today: str) -> list:
+        """Fetch each active search intent from the sources that can search.
+
+        Steam accepts the user's own language; Wallhaven's q is English-only,
+        so the classifier supplies both spellings.
+        """
+        from dailywallpaper.recommend.intents import search_queries
+
+        queries = search_queries(self.conn)
+        if not queries:
+            return []
+        budget = max(1, self.cfg.app.max_analyses_per_day)
+        per_query = max(4, int(budget * 0.8 / len(queries)))
+        found = []
+        for item in queries:
+            zh = item.get("query_zh") or ""
+            en = item.get("query_en") or ""
+            for source in self.sources:
+                name = type(source).__name__
+                if source_is_down(self.conn, name, today):
+                    continue
+                # Matched by name, not isinstance: the source classes are
+                # interchangeable in tests and the site only needs the kind.
+                if name == "SteamWorkshopSource":
+                    text = zh or en
+                elif name == "WallhavenSource":
+                    text = en or zh
+                else:
+                    continue
+                if not text:
+                    continue
+                try:
+                    found.extend(source.fetch(per_query, query=text))
+                except Exception as exc:
+                    logger.warning(
+                        f"search {text!r} via {name} failed: {exc}"
+                    )
+        if found:
+            logger.info(f"search intents: {len(found)} candidate(s) fetched")
+        return found
+
     def _host_failed(self, host: str) -> bool:
         failed_at = self._failed_hosts.get(host)
         return (
@@ -308,6 +358,17 @@ class RealPipeline:
                 profile,
                 avoid_tags=rules.avoid_tags,
                 boost_tags=rules.boost_tags,
+            )
+        # Comments the user wrote become lasting tags (permanent until removed
+        # from the today page); merge them after the seed rules.
+        from dailywallpaper.recommend.intents import preference_terms
+
+        boost, avoid = preference_terms(self.conn)
+        if boost or avoid:
+            profile = replace(
+                profile,
+                avoid_tags=_merge_tags(profile.avoid_tags, avoid),
+                boost_tags=_merge_tags(profile.boost_tags, boost),
             )
         return profile
 
@@ -455,6 +516,11 @@ class RealPipeline:
         }
         raw = []
         today = now.date().isoformat()
+        # Search intents ("want Ronaldo") change what we fetch, not just how
+        # we rank. Their candidates go first so they take up to 80% of the
+        # analysis budget; when a query returns less, the regular fetch fills
+        # the rest instead of padding with duplicates.
+        raw.extend(self._fetch_search_candidates(now, today))
         for source in self.sources:
             name = type(source).__name__
             # A manual refill is the user asking us to try again: yesterday's

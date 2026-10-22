@@ -1,8 +1,10 @@
 # src/dailywallpaper/ui/rating_dialog.py
-"""Rating window (spec 11.3)."""
+"""Rating window: a 1-10 score plus one optional sentence."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import threading
+
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -13,26 +15,47 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from dailywallpaper.recommend.ratings import (
-    MAX_RATING,
-    MIN_RATING,
-    QUICK_REASONS,
-    rating_text,
-    split_reasons,
-)
+from dailywallpaper.analysis.vision import KEYRING_ACCOUNT, KEYRING_SERVICE
+from dailywallpaper.recommend.ratings import MAX_RATING, MIN_RATING, rating_text
 
 COMMENT_MAX = 200
-REASONS_PER_ROW = 4
 SCORES_PER_ROW = 5
 # Breathing room between the window and the screen edge, in pixels.
 CORNER_MARGIN = 24
 
 
+class _IntentWorker(QObject):
+    """Classify one sentence off the UI thread; the model call takes seconds."""
+
+    done = Signal(object)
+
+    def __init__(self, text: str, api_key: str):
+        super().__init__()
+        self.text = text
+        self.api_key = api_key
+
+    def run(self) -> None:
+        from dailywallpaper.recommend.intents import classify_note
+
+        self.done.emit(classify_note(self.text, self.api_key))
+
+
+def _describe(intent: dict) -> str:
+    if intent.get("kind") == "search":
+        query = intent.get("query_zh") or intent.get("query_en") or ""
+        return f"已识别为搜索：想看「{query}」"
+    tags = intent.get("tags") or []
+    if not tags:
+        return ""
+    want = "想要" if int(intent.get("polarity") or 1) > 0 else "不想要"
+    return f"已识别：{want} " + "、".join(tags)
+
+
 class RatingDialog(QDialog):
-    """A 1-10 score plus optional reasons.
+    """A 1-10 score plus one free sentence.
 
     Picking a score saves it but leaves the window open: the score is often
-    chosen first and the reasons typed afterwards, and closing on the first
+    chosen first and the sentence typed afterwards, and closing on the first
     click made that impossible.
     """
 
@@ -73,17 +96,16 @@ class RatingDialog(QDialog):
                 "select comment from ratings where wallpaper_id=?",
                 (wallpaper_id,),
             ).fetchone()
-            # The comment column also holds the earlier quick reasons; pull
-            # them back out so re-saving does not duplicate them.
-            text, reasons = split_reasons(row["comment"] if row else "")
-            self.comment_edit_text = text
-            self.prefilled_reasons = reasons
+            self.comment_edit_text = (row["comment"] if row else "") or ""
         else:
             self.comment_edit_text = ""
-            self.prefilled_reasons = []
-        # The last score actually written; reason/comment edits re-save with
-        # it, so the row always matches what the window shows.
+        # The last score actually written; sentence edits re-save with it, so
+        # the row always matches what the window shows.
         self._last_score = existing
+        # The last sentence already classified; re-saving the same text must
+        # not fire another model call.
+        self._last_classified = ""
+        self._intent_worker = None
 
         self.score_buttons: dict[int, QPushButton] = {}
         score_grid = QGridLayout()
@@ -99,25 +121,18 @@ class RatingDialog(QDialog):
                 button, index // SCORES_PER_ROW, index % SCORES_PER_ROW
             )
 
-        self.reason_buttons = {}
-        grid = QGridLayout()
-        for index, reason in enumerate(QUICK_REASONS):
-            button = QPushButton(reason)
-            button.setCheckable(True)
-            button.setChecked(reason in self.prefilled_reasons)
-            self.reason_buttons[reason] = button
-            grid.addWidget(button, index // REASONS_PER_ROW, index % REASONS_PER_ROW)
-            # Connected after the initial check, or restoring a saved rating
-            # would write it back before the window even opens.
-            button.toggled.connect(self._resave)
-
         self.comment_edit = QLineEdit()
         self.comment_edit.setMaxLength(COMMENT_MAX)
-        self.comment_edit.setPlaceholderText("补充一句（可选）")
+        self.comment_edit.setPlaceholderText(
+            "补充一句（可选，比如“太暗了”或“想看 C 罗”）"
+        )
         self.comment_edit.setText(self.comment_edit_text)
         self.comment_edit.editingFinished.connect(self._resave)
 
-        self.hint_label = QLabel("点一个分数就保存，关掉窗口前可以继续改理由")
+        self.intent_label = QLabel("")
+        self.intent_label.setWordWrap(True)
+        self.intent_label.setStyleSheet("color:#2563eb;font-size:11px;")
+        self.hint_label = QLabel("点一个分数就保存，关掉窗口前可以继续补一句话")
         self.close_button = QPushButton("完成")
         self.close_button.clicked.connect(self.accept)
 
@@ -127,9 +142,8 @@ class RatingDialog(QDialog):
         layout.addWidget(self.current_label)
         layout.addWidget(QLabel("评分（1–10，越高越喜欢）"))
         layout.addLayout(score_grid)
-        layout.addWidget(QLabel("快捷理由"))
-        layout.addLayout(grid)
         layout.addWidget(self.comment_edit)
+        layout.addWidget(self.intent_label)
         layout.addWidget(self.hint_label)
         layout.addWidget(self.close_button)
 
@@ -152,9 +166,6 @@ class RatingDialog(QDialog):
             area.bottom() - self.height() - CORNER_MARGIN + 1,
         )
 
-    def selected_reasons(self) -> list[str]:
-        return [reason for reason, button in self.reason_buttons.items() if button.isChecked()]
-
     def _save(self, rating: int) -> None:
         if not self._persist(rating):
             return
@@ -165,7 +176,7 @@ class RatingDialog(QDialog):
                 button.setChecked(False)
 
     def _resave(self, *_args) -> None:
-        """Re-write the saved row after a reason or comment edit."""
+        """Re-write the saved row after a comment edit."""
         if self._last_score is None:
             return
         self._persist(self._last_score)
@@ -176,7 +187,6 @@ class RatingDialog(QDialog):
                 self.wallpaper_id,
                 rating,
                 comment=self.comment_edit.text(),
-                reasons=self.selected_reasons(),
             )
         except Exception as exc:  # a DB hiccup must not lose the dialog
             import logging
@@ -188,6 +198,39 @@ class RatingDialog(QDialog):
         self._last_score = rating
         self.current_label.setText(f"当前评分：{rating_text(rating)}")
         self.hint_label.setText(
-            f"已保存：{rating} 分（改分数、理由或补一句话会自动更新）"
+            f"已保存：{rating} 分（改分数或补一句话会自动更新）"
         )
+        self._maybe_classify()
         return True
+
+    def _maybe_classify(self) -> None:
+        """Classify a new sentence in the background; failures stay silent."""
+        text = self.comment_edit.text().strip()
+        if not text or text == self._last_classified:
+            return
+        self._last_classified = text
+        import keyring
+
+        api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        if not api_key:
+            return
+        worker = _IntentWorker(text, api_key)
+        worker.done.connect(self._on_intent)
+        # Keep a reference: a worker that goes out of scope cancels nothing,
+        # but the signal must still have a live receiver.
+        self._intent_worker = worker
+        threading.Thread(target=worker.run, daemon=True).start()
+
+    def _on_intent(self, intent) -> None:
+        if not intent:
+            return
+        from dailywallpaper.recommend.intents import store
+
+        try:
+            store(self.service.conn, intent, self.wallpaper_id, self.comment_edit.text())
+        except Exception as exc:  # a full database must not break the dialog
+            import logging
+
+            logging.getLogger(__name__).warning(f"intent not stored: {exc}")
+            return
+        self.intent_label.setText(_describe(intent))

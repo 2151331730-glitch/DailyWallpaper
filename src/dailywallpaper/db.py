@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Spec 6.1, verbatim.
 SCHEMA_SQL = """
@@ -111,6 +111,17 @@ CREATE TABLE IF NOT EXISTS api_usage (
 CREATE TABLE IF NOT EXISTS state (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- What the user asked for in rating comments. Permanent until removed from
+-- the today page; see recommend/intents.py for the shapes.
+CREATE TABLE IF NOT EXISTS user_intents (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind           TEXT NOT NULL,            -- local | preference | search
+  payload_json   TEXT NOT NULL,
+  wallpaper_id   INTEGER,
+  source_comment TEXT NOT NULL DEFAULT '',
+  created_at     TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_wallpapers_source ON wallpapers(source, source_id);
