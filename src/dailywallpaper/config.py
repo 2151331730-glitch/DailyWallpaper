@@ -94,6 +94,9 @@ class WallpaperSection:
 class WallpaperEngineSection:
     install_dir: str = ""
     config_path: str = ""
+    # Read the Steam registry and library list at launch. Turning this off
+    # makes the app use install_dir exactly as written, with no guessing.
+    auto_detect: bool = True
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,7 @@ log_level = "INFO"
 [sources]
 wallhaven_enabled = true
 bing_enabled = true
+# 启动时如果检测到 Wallpaper Engine 和它的工坊目录，会自动改成 true。
 we_workshop_enabled = false
 allow_mature = false
 wallhaven_categories = "111"
@@ -63,8 +64,12 @@ dynamic_every_n_days = 3
 dynamic_requires_ac = true
 
 [wallpaper_engine]
-install_dir = "D:/games/steam/steamapps/common/wallpaper_engine"
-config_path = "D:/games/steam/steamapps/common/wallpaper_engine/config.json"
+# 留空即可：启动时会读注册表和 Steam 的 steamapps/libraryfolders.vdf，
+# 自动找到 Wallpaper Engine。只有自动识别失败时才在这里手填。
+install_dir = ""
+config_path = ""
+# 设为 false 则完全不自动探测，install_dir 写什么就用什么。
+auto_detect = true
 
 [tools]
 ffmpeg_path = "ffmpeg"

@@ -92,6 +92,10 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 3. 首次启动会要求填写智谱 API key（免费注册：open.bigmodel.cn → API Keys）
 4. 安装时会问一次「是否使用作者的默认审美筛选」，可以选不使用
 
+**想用 Steam 的 Wallpaper Engine 壁纸**：安装前先在自己电脑上装好 Steam 和
+Wallpaper Engine（付费软件，需自行购买），程序启动时会自动找到它。国内打开
+Steam 商店/创意工坊需要的设置，见安装目录下的《Steam 壁纸设置》（`docs/STEAM_SETUP.md`）。
+
 卸载：设置 → 应用 → 每日壁纸 → 卸载。卸载不会删除 `%LOCALAPPDATA%\DailyWallpaper` 里的配置和数据。
 
 > 安装包没有代码签名，Windows 可能提示「未知发布者」，点「仍要运行」即可。

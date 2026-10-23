@@ -9,6 +9,7 @@ from pathlib import Path
 from dailywallpaper.app import AlreadyRunning, SingleInstance
 from dailywallpaper.config import default_config_path, load_config
 from dailywallpaper.logging_setup import setup_logging
+from dailywallpaper.steam_env import apply_to_config
 
 
 INSTANCE_NAME = "DailyWallpaper"
@@ -40,6 +41,9 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         args.once = True
 
     cfg = load_config(args.config)
+    # A new install has no wallpaper_engine path yet; find Steam's own copy
+    # of Wallpaper Engine before anything reads the config.
+    cfg = apply_to_config(cfg)
     if getattr(sys, "frozen", False):
         # The bundled ffmpeg is not on PATH; point the config at it.
         from dataclasses import replace as _replace

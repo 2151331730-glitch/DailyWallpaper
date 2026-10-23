@@ -59,6 +59,10 @@ class SettingsPage(QWidget):
         self.autostart_check = QCheckBox("开机自动启动")
         self.autostart_check.setChecked(config.app.start_with_windows)
 
+        self.steam_button = QPushButton("检测 Steam 环境")
+        self.steam_button.clicked.connect(self.check_steam)
+        self.steam_status = QLabel("")
+
         form = QFormLayout()
         form.addRow("每日更换时间", self.daily_time_edit)
         form.addRow("最晚更换时间", self.latest_time_edit)
@@ -78,7 +82,57 @@ class SettingsPage(QWidget):
         layout.addLayout(form)
         layout.addWidget(self.save_button)
         layout.addWidget(self.status)
+        layout.addSpacing(12)
+        layout.addWidget(self.steam_button)
+        layout.addWidget(self.steam_status)
         layout.addStretch(1)
+
+    def check_steam(self) -> None:
+        """Find Wallpaper Engine and report whether Steam is reachable.
+
+        The result is only written to the config when the user saves, so a
+        detection tick can never surprise them with a changed setting.
+        """
+        from dailywallpaper.steam_env import (
+            apply_to_config,
+            check_sites,
+            detect,
+            is_wallpaper_engine_dir,
+        )
+
+        configured = str(self.config.wallpaper_engine.install_dir or "").strip()
+        auto = getattr(self.config.wallpaper_engine, "auto_detect", True)
+        if is_wallpaper_engine_dir(configured):
+            install = configured
+        else:
+            install = detect().we_install_dir
+        if install is None:
+            self.steam_status.setText(
+                "没找到 Wallpaper Engine。先在 Steam 商店购买并安装它"
+                "（详见随附的《Steam 壁纸设置》）。"
+            )
+            return
+        if auto:
+            self.config = apply_to_config(self.config)
+            prefix = "已找到 Wallpaper Engine。"
+        else:
+            prefix = "已找到 Wallpaper Engine（手动配置路径，自动探测已关闭）。"
+        blocked = [
+            name
+            for name, ok in check_sites(
+                proxy=self.config.sources.proxy, timeout=2.0
+            ).items()
+            if not ok
+        ]
+        if blocked:
+            self.steam_status.setText(
+                prefix + f"打不开：{'、'.join(blocked)}。"
+                "开 Watt Toolkit（Steam++）商店/社区加速或游戏加速器后重试。"
+            )
+        elif auto:
+            self.steam_status.setText(prefix + "商店和社区都能打开。点“保存”写入配置。")
+        else:
+            self.steam_status.setText(prefix + "商店和社区都能打开。")
 
     def collect(self):
         """Return a new Config, or None when a field is invalid."""
