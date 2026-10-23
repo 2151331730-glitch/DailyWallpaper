@@ -36,6 +36,7 @@ Name: "darktaskbar"; Description: "将任务栏和搜索框改成深色（适配
 
 [Files]
 Source: "dist\DailyWallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "docs\STEAM_SETUP.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -74,6 +75,9 @@ var
   SeedPage: TInputOptionWizardPage;
 
 procedure InitializeWizard;
+var
+  Existing: String;
+  Raw: AnsiString;
 begin
   SeedPage := CreateInputOptionPage(wpSelectDir,
     '初始审美筛选',
@@ -85,6 +89,14 @@ begin
   SeedPage.Add('使用这份初始筛选（推荐）');
   SeedPage.Add('不使用，从零开始');
   SeedPage.Values[0] := True;
+  { An upgrade should show the choice made last time, not quietly reset it. }
+  Existing := '';
+  if LoadStringFromFile(
+       ExpandConstant('{localappdata}\DailyWallpaper\install_prefs.json'),
+       Raw) then
+    Existing := Raw;
+  if Pos('"use_seed": false', Existing) > 0 then
+    SeedPage.Values[0] := False;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -93,6 +105,11 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    { The Run value is written by the app at first launch, not declared in
+      the Registry section, so Setup must remove it explicitly -- otherwise
+      Windows keeps trying to start an executable that no longer exists. }
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
+      'DailyWallpaper');
     DirName := ExpandConstant('{localappdata}\DailyWallpaper');
     if DirExists(DirName) and not WizardSilent then
     begin
@@ -103,23 +120,58 @@ begin
   end;
 end;
 
+procedure WriteInstallPrefs(DirName: String);
+var
+  Path, Fresh, Existing: String;
+  Raw: AnsiString;
+begin
+  Path := DirName + '\install_prefs.json';
+  if SeedPage.Values[0] then
+    Fresh := '{"use_seed": true'
+  else
+    Fresh := '{"use_seed": false';
+  if WizardIsTaskSelected('autostart') then
+    Fresh := Fresh + ', "autostart": true}'
+  else
+    Fresh := Fresh + ', "autostart": false}';
+
+  Existing := '';
+  if FileExists(Path) then
+    if LoadStringFromFile(Path, Raw) then
+      Existing := Raw;
+
+  if Existing <> '' then
+  begin
+    { Keep keys this page does not own (first_run_done) and apply the
+      choices made in this run. A silent upgrade has no page to read a
+      choice from, so it leaves the recorded choices untouched instead of
+      resetting them to the defaults. }
+    if not WizardSilent then
+    begin
+      if SeedPage.Values[0] then
+        StringChangeEx(Existing, '"use_seed": false', '"use_seed": true', True)
+      else
+        StringChangeEx(Existing, '"use_seed": true', '"use_seed": false', True);
+      if WizardIsTaskSelected('autostart') then
+        StringChangeEx(Existing, '"autostart": false', '"autostart": true', True)
+      else
+        StringChangeEx(Existing, '"autostart": true', '"autostart": false', True);
+    end;
+    SaveStringToFile(Path, Existing, False);
+  end
+  else
+    SaveStringToFile(Path, Fresh, False);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  DirName, Json: String;
+  DirName: String;
 begin
   if CurStep = ssPostInstall then
   begin
     DirName := ExpandConstant('{localappdata}\DailyWallpaper');
     ForceDirectories(DirName);
-    if SeedPage.Values[0] then
-      Json := '{"use_seed": true'
-    else
-      Json := '{"use_seed": false';
-    if WizardIsTaskSelected('autostart') then
-      Json := Json + ', "autostart": true}'
-    else
-      Json := Json + ', "autostart": false}';
-    SaveStringToFile(DirName + '\install_prefs.json', Json, False);
+    WriteInstallPrefs(DirName);
     if WizardIsTaskSelected('darktaskbar') then
       ApplyDarkTaskbar();
   end;

@@ -46,6 +46,9 @@ a = Analysis(
         (str(project / "assets" / "icon.png"), "assets"),
         (str(project / "assets" / "seed_profile.json"), "assets"),
         (str(project / "config.example.toml"), "."),
+        # Shipped so a green/portable build has the same Steam guide the
+        # installer drops next to the exe.
+        (str(project / "docs" / "STEAM_SETUP.md"), "docs"),
         (str(project / "vendor" / "ffmpeg" / "ffmpeg.exe"), "ffmpeg"),
     ],
     hiddenimports=["keyring.backends.windows"],
