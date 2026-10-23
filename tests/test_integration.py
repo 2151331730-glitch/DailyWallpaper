@@ -148,6 +148,19 @@ class DaySource:
         ]
 
 
+class _AcPower:
+    """Deterministic AC power.
+
+    ``RealPipeline`` asks the host for its power state when
+    ``dynamic_requires_ac`` is on, so a laptop running these tests on battery
+    would silently turn every "dynamic day" test into a static one. Tests
+    that care about battery pass their own stub instead.
+    """
+
+    def on_battery(self):
+        return False
+
+
 class SynthSession:
     """Serve a distinct, sharp, mid-tone image for any https://img/... URL."""
 
@@ -871,7 +884,10 @@ def test_a_dynamic_day_only_keeps_scene_and_video(tmp_path):
     from dataclasses import replace
 
     cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
-    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([scene, still])], vision, budget)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene, still])], vision, budget,
+        power=_AcPower(),
+    )
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
@@ -892,7 +908,10 @@ def test_a_static_day_falls_back_when_only_dynamic_exists(tmp_path):
                       "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="static_only"))
-    pipeline = RealPipeline(cfg, conn, SynthSession(), [Source([scene])], vision, CountingBudget(100))
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene])], vision, CountingBudget(100),
+        power=_AcPower(),
+    )
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
@@ -956,7 +975,8 @@ def test_a_dynamic_day_falls_back_when_every_scene_fails_prefilter(tmp_path):
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
     pipeline = RealPipeline(
-        cfg, conn, BlurSession(), [Source([scene, still])], vision, CountingBudget(100)
+        cfg, conn, BlurSession(), [Source([scene, still])], vision, CountingBudget(100),
+        power=_AcPower(),
     )
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
@@ -993,7 +1013,8 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
         vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
         cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
         pipeline = RealPipeline(
-            cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100)
+            cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100),
+            power=_AcPower(),
         )
         # CI runners have no ffmpeg; force the video branch so the test checks
         # the contact-sheet path rather than the environment.
@@ -1044,7 +1065,8 @@ def test_video_falls_back_to_the_poster_without_ffmpeg(tmp_path):
     vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
     cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
     pipeline = RealPipeline(
-        cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100)
+        cfg, conn, SynthSession(), [Source([video])], vision, CountingBudget(100),
+        power=_AcPower(),
     )
     pipeline._ffmpeg_ok = False
 
@@ -1374,7 +1396,9 @@ def test_downloaded_steam_items_survive_a_dead_workshop_api(tmp_path):
     )
     conn.commit()
     wid = conn.execute("select id from wallpapers").fetchone()[0]
-    pipeline = RealPipeline(cfg, conn, SynthSession(), [], vision, budget)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [], vision, budget, power=_AcPower()
+    )
 
     pipeline.prepare(clock.now())
 
