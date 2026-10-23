@@ -638,6 +638,56 @@ def test_settings_page_toggles_a_source(qapp, tmp_path):
     assert load_config(path).sources.wallhaven_enabled is False
 
 
+def test_settings_steam_check_fills_an_empty_install_dir(qapp, tmp_path, monkeypatch):
+    from dailywallpaper import steam_env
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    install = tmp_path / "steamapps" / "common" / "wallpaper_engine"
+    install.mkdir(parents=True)
+    (install / "wallpaper64.exe").write_bytes(b"")
+    monkeypatch.setattr(
+        steam_env,
+        "detect",
+        lambda: steam_env.SteamEnv(
+            steam_root=tmp_path,
+            library_folders=(tmp_path,),
+            we_install_dir=install,
+            workshop_dir=None,
+            we_owned=True,
+        ),
+    )
+    monkeypatch.setattr(
+        steam_env,
+        "check_sites",
+        lambda **kwargs: {"Steam 商店": True, "Steam 社区 / 创意工坊": True},
+    )
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
+    page.check_steam()
+
+    assert "已找到" in page.steam_status.text()
+    assert page.save() is True
+    assert load_config(path).wallpaper_engine.install_dir == str(install)
+
+
+def test_settings_steam_check_never_guesses_when_auto_detect_is_off(qapp, tmp_path):
+    from dataclasses import replace
+
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    cfg = replace(
+        cfg,
+        wallpaper_engine=replace(cfg.wallpaper_engine, auto_detect=False),
+    )
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
+    page.check_steam()
+
+    assert "自动探测已关闭" in page.steam_status.text()
+
+
 def test_today_tab_marks_a_reviewed_wallpaper(qapp, tmp_path):
     from dailywallpaper.db import connect, migrate
     from dailywallpaper.ui.main_window import MainWindow

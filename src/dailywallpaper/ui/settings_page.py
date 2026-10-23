@@ -104,8 +104,22 @@ class SettingsPage(QWidget):
         auto = getattr(self.config.wallpaper_engine, "auto_detect", True)
         if is_wallpaper_engine_dir(configured):
             install = configured
+            prefix = (
+                "已找到 Wallpaper Engine。"
+                if auto
+                else "已找到 Wallpaper Engine（手动配置路径，自动探测已关闭）。"
+            )
+        elif not auto:
+            # The user opted out of detection; guessing for them would be a
+            # surprise, so say what is missing instead.
+            self.steam_status.setText(
+                "自动探测已关闭，且 config.toml 里没有可用的 install_dir。"
+                "填入路径，或把 auto_detect 改回 true。"
+            )
+            return
         else:
             install = detect().we_install_dir
+            prefix = "已找到 Wallpaper Engine。"
         if install is None:
             self.steam_status.setText(
                 "没找到 Wallpaper Engine。先在 Steam 商店购买并安装它"
@@ -114,9 +128,6 @@ class SettingsPage(QWidget):
             return
         if auto:
             self.config = apply_to_config(self.config)
-            prefix = "已找到 Wallpaper Engine。"
-        else:
-            prefix = "已找到 Wallpaper Engine（手动配置路径，自动探测已关闭）。"
         blocked = [
             name
             for name, ok in check_sites(
