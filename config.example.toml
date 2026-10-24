@@ -59,9 +59,19 @@ cache_minutes = 60
 [wallpaper]
 style = "fill"
 monitor = 0
+# mixed：每天比较两个池子的最高分，动态严格更高才用动态（不再按天轮换）。
+# static_only / dynamic_only：强制一种，另一种只在当天一个都不合格时兜底。
 media_strategy = "mixed"
+# 旧版本按天轮换用的值，mixed 已不再读取，保留以兼容老配置。
 dynamic_every_n_days = 3
 dynamic_requires_ac = true
+# 动态要比最高静态高出多少分才换；0 = 严格高于即可。
+selection_margin = 0.0
+# 防止小动态池被抽干：最多连续 dynamic_max_streak 天动态，
+# 任意 dynamic_quota_days 天窗口内最多 dynamic_quota_max 天动态。
+dynamic_max_streak = 2
+dynamic_quota_days = 10
+dynamic_quota_max = 5
 
 [wallpaper_engine]
 # 留空即可：启动时会读注册表和 Steam 的 steamapps/libraryfolders.vdf，

@@ -9,6 +9,7 @@ from dailywallpaper.config import AppSection
 from dailywallpaper.db import connect, migrate
 from dailywallpaper.models import Decision
 from dailywallpaper.state.machine import PREPARED_KEY, DailyStateMachine
+from dailywallpaper.state.media_history import load_history, record_applied
 
 
 class FakeClock:
@@ -455,3 +456,93 @@ def test_parked_live_wallpaper_survives_on_ac(tmp_path):
 
     assert machine.tick(startup=True).action == "applied"
     assert svc.calls == [(wid, "auto")]
+
+
+def test_a_parked_live_wallpaper_is_dropped_when_the_dynamic_streak_is_full(tmp_path):
+    # The pick parked yesterday was chosen before today's history existed.
+    # Two dynamic days in a row means today must be static; applying the
+    # parked one anyway would make the streak three.
+    conn, machine, clock, pipeline, svc = _setup(
+        tmp_path, datetime(2026, 10, 18, 9, 0)
+    )
+    machine.config = SimpleNamespace(
+        app=AppSection(),
+        wallpaper=SimpleNamespace(
+            dynamic_requires_ac=False,
+            media_strategy="mixed",
+            dynamic_max_streak=2,
+            dynamic_quota_days=10,
+            dynamic_quota_max=5,
+        ),
+    )
+    record_applied(conn, datetime(2026, 10, 16).date(), "dynamic")
+    record_applied(conn, datetime(2026, 10, 17).date(), "dynamic")
+    conn.execute(
+        "insert into wallpapers(source,source_id,created_at) values('t','parked','x')"
+    )
+    conn.commit()
+    parked = conn.execute(
+        "select max(id) from wallpapers"
+    ).fetchone()[0]
+    _park_prepared(conn, tmp_path, parked, media_kind="video")
+    picked = conn.execute("select min(id) from wallpapers").fetchone()[0]
+
+    result = machine.tick()
+
+    assert result.action == "applied"
+    assert svc.calls == [(picked, "auto")]
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is None
+
+
+def test_a_parked_live_wallpaper_is_kept_when_the_streak_allows_it(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(
+        tmp_path, datetime(2026, 10, 18, 9, 0)
+    )
+    machine.config = SimpleNamespace(
+        app=AppSection(),
+        wallpaper=SimpleNamespace(
+            dynamic_requires_ac=False,
+            media_strategy="mixed",
+            dynamic_max_streak=2,
+            dynamic_quota_days=10,
+            dynamic_quota_max=5,
+        ),
+    )
+    record_applied(conn, datetime(2026, 10, 17).date(), "dynamic")
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid, media_kind="video")
+
+    assert machine.tick().action == "applied"
+    assert svc.calls == [(wid, "auto")]
+
+
+def test_an_applied_parked_wallpaper_is_recorded_in_the_media_history(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid, media_kind="video")
+
+    machine.tick(startup=True)
+
+    assert load_history(conn) == [("2026-10-18", "dynamic")]
+
+
+def test_a_direct_apply_records_the_media_history(tmp_path):
+    from dataclasses import replace
+
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    pipeline.decision = replace(_decision(wid), media_type="image")
+
+    machine.tick()
+
+    assert load_history(conn) == [("2026-10-18", "static")]
+
+
+def test_a_dry_run_does_not_record_the_media_history(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+
+    machine.tick(dry_run=True)
+
+    assert load_history(conn) == []

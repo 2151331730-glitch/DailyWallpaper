@@ -86,8 +86,20 @@ class WallpaperSection:
     style: str = "fill"
     monitor: int = 0
     media_strategy: str = "mixed"
+    # Kept for older config files. The mixed strategy no longer rotates by
+    # date: it compares the best dynamic candidate against the best static
+    # one on every prepare (see recommend/media_plan.py).
     dynamic_every_n_days: int = 3
     dynamic_requires_ac: bool = True
+    # How much higher the best dynamic candidate must score to win the day.
+    # 0 means "strictly higher"; the comparison is only as good as the
+    # calibration, so this is the dial to raise if dynamic days disappoint.
+    selection_margin: float = 0.0
+    # Keep a small live pool from being drained: at most this many dynamic
+    # days in a row, and no more than quota_max in any quota_days window.
+    dynamic_max_streak: int = 2
+    dynamic_quota_days: int = 10
+    dynamic_quota_max: int = 5
 
 
 @dataclass(frozen=True)

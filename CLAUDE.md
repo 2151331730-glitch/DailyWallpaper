@@ -30,7 +30,7 @@ git status --short                       # 有哪些未提交改动（别把别�
 .venv\Scripts\python -m pytest -q        # 必须全绿，约 50 秒
 ```
 
-当前基线（2026-10-24 实测）：**569 passed in 45s**。当天开工前积压了 41 个文件、约 2.1k 行未提交改动，已提交为检查点；之后每做完一件事就提交一次，别让工作区长期不落盘。
+当前基线（2026-10-24 实测）：**624 passed in 45s**。当天开工前积压了 41 个文件、约 2.1k 行未提交改动，已提交为检查点；之后每做完一件事就提交一次，别让工作区长期不落盘。
 另有一个 worktree `.claude/worktrees/phase0-1a`（分支 `worktree-phase0-1a`，旧的 Phase 0 工作，别和 main 混用）。
 
 代码基线之外还有运行基线：托盘在跑、点「换一张」有反应、`data\logs\` 有今天的记录。
@@ -68,7 +68,7 @@ git status --short                       # 有哪些未提交改动（别把别�
 ## 测试与提交前
 
 ```powershell
-.venv\Scripts\python -m pytest -q        # 569 个用例 / 约 9.6k 行测试 / 约 50 秒
+.venv\Scripts\python -m pytest -q        # 624 个用例 / 约 9.6k 行测试 / 约 45 秒
 .venv\Scripts\python scripts\check_secrets.py   # 提交前必跑
 ```
 
@@ -97,6 +97,10 @@ git status --short                       # 有哪些未提交改动（别把别�
 
 ## 当前阶段（2026-10-24）
 
+0. **静态/动态自适应**：已完成（`docs/PLAN-media-selection.md` 阶段 4）。`mixed` 不再按日期轮换，
+   两个池子都打分后比较（动态严格更高才换），联系表分数校准 +5.8/+3.1/−2.1，
+   连续 2 天 / 10 天 5 天的动态配额。决策日志：`media decision: dynamic X vs static Y -> kind`。
+   下一步是重启托盘观察一周（阶段 5）。
 1. **离线评估框架**：第一版已完成。`scripts/evaluate.py` 读 `data/app.db` 只读回放，输出 `docs/EVALUATION.md`；11 个单测在 `tests/test_evaluate.py`。
    - 已知短板：可评估样本只有 147 张（361 条评分里其余没有 v3 分析），测试集 45 张只够切出 **1 个候选池**，NDCG 没有方差，结论只能当方向。
    - 下一步：补齐剩余 214 张的分析（约 ¥0.2），把池子做到 5–6 个再做结论。

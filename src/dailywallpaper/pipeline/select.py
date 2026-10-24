@@ -36,7 +36,7 @@ class SelectMixin:
         rows = self.conn.execute(
             """
             select d.wallpaper_id, d.explore_score, d.personalize_score,
-                   d.final_score, w.source, w.local_path
+                   d.final_score, w.source, w.local_path, w.media_type
             from decisions d
             join wallpapers w on w.id = d.wallpaper_id
             left join ratings r on r.wallpaper_id = w.id
@@ -70,6 +70,7 @@ class SelectMixin:
                 source=row["source"] or "",
                 apply_path=path,
                 ready=True,
+                media_type=row["media_type"] or "image",
             )
         return None
 

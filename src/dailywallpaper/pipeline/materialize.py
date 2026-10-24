@@ -164,8 +164,15 @@ class MaterializeMixin:
             )
             return None
 
-    def _keep_ready(self) -> None:
-        self.shortlist = [decision for decision in self.shortlist if decision.ready]
+    def _ready(self, decisions):
+        """Drop items that cannot be applied yet (a remote Steam download).
+
+        A remote Steam item that has not been downloaded yet must not be
+        picked: applying it would either use the preview thumbnail or block
+        the tick on a download. It must not count as a qualified candidate
+        either, or the media plan would choose a type it cannot deliver.
+        """
+        return [decision for decision in decisions if decision.ready]
 
     def _ffmpeg_available(self) -> bool:
         """A missing ffmpeg must not silently drop every video candidate."""

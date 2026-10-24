@@ -3,7 +3,8 @@
 Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wallpaper Engine 工坊** 中挑选一张壁纸，
 先用视觉模型打分筛选，再按"探索 / 个性化"加权排序，把当天最合适的那一张设为桌面。
 
-支持**静态图片**和**Wallpaper Engine 动态壁纸**（scene / 视频），并可按策略安排"哪几天用动态"。
+支持**静态图片**和**Wallpaper Engine 动态壁纸**（scene / 视频）；每天把两边的最高分放在一起比，
+动态严格更高才用动态。
 
 ---
 
@@ -13,7 +14,10 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 - 每天 **08:30** 自动换（可配置），**22:00** 之后当天不再换
 - **一天最多成功一次**，重复运行不会换第二次
 - 候选全都不达标时**保留原壁纸**，不硬凑
-- **动态壁纸日**：`media_strategy=mixed` 时每 N 天安排 1 天动态（默认 n=3）
+- **自适应的静态/动态**：`media_strategy=mixed` 时同时给两个候选池打分，动态的最高分**严格高于**
+  静态才换动态；联系表分数会先按测得偏差校准（creativity +5.8 / novelty +3.1 / formulaic −2.1）。
+  动态最多连续 2 天、最近 10 天最多 5 天（`selection_margin` / `dynamic_max_streak` /
+  `dynamic_quota_days` / `dynamic_quota_max`）
 - **电池保护**：默认只有插电时才应用动态壁纸
 
 ### 三级筛选
@@ -219,7 +223,7 @@ steam_account = "你的 Steam 用户名"   # 只填用户名，不是密码
 | `src/dailywallpaper/sources/` | Bing / Wallhaven / 本地工坊适配器、去重入库 |
 | `src/dailywallpaper/analysis/` | 图片规范化、预筛、视频联系表、视觉调用与缓存、打分排序 |
 | `src/dailywallpaper/cost/` | 用量账本、月度预算、成本报表 |
-| `src/dailywallpaper/recommend/` | 偏好画像、评分、天气、静态/动态日计划 |
+| `src/dailywallpaper/recommend/` | 偏好画像、评分、天气、静态/动态自适应选择 |
 | `src/dailywallpaper/apply/` | 静态壁纸 / Wallpaper Engine 控制、应用与撤销 |
 | `src/dailywallpaper/state/` | 每日调度状态机 |
 | `src/dailywallpaper/ui/` | PySide6 托盘、四个页面、评分窗 |
@@ -235,7 +239,7 @@ steam_account = "你的 Steam 用户名"   # 只填用户名，不是密码
   可以在 `[sources] proxy` 填本地代理（例如 `http://127.0.0.1:7892`），程序启动时会先探测端口，
   没监听就自动退回直连；SteamCMD 也用同一个代理。
 - 只操作**主显示器**。
-- 依赖本地 Wallpaper Engine **正在运行**；未运行时动态日回退静态，不会自动启动它。
+- 依赖本地 Wallpaper Engine **正在运行**；未运行时没有动态候选，自动只用静态，不会自动启动它。
 - **桌面守护**每 5 秒检查一次：Wallpaper Engine 若把你的壁纸盖回去，程序会把它关掉并恢复自己那张。
   想临时手动用 WE，先在托盘点「暂停自动更换」，暂停期间守护同样让路。
 - 评分 **1–2 分**的壁纸会永久剔除：不再进候选池，已准备好的队列里也会被跳过；

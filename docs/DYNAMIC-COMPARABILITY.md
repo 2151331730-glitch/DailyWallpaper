@@ -21,6 +21,10 @@
 | novelty | +3.1 |
 | formulaic | -2.1 |
 
+这组数已接进生产排序：`src/dailywallpaper/analysis/calibration.py` 的 `DIMENSION_OFFSETS`
+在 `final_score` 之前只作用于**联系表 / GIF 首帧**的分数，作者封面和静态图不校准。
+硬门槛（画质、套路分上限）仍按模型原始分判断。`scripts/evaluate_mixed.py` 从同一个常量读校准值。
+
 ## 注意
 
 - 视频 12 个、GIF 12 个，均值标准误约 ±3 分；校准值按方向用，别当精确补偿。

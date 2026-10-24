@@ -46,12 +46,19 @@ from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
 from dailywallpaper.power import PowerStatus
-from dailywallpaper.recommend.media_plan import MediaPlan
+from dailywallpaper.recommend.media_plan import (
+    DYNAMIC,
+    DYNAMIC_TYPES,
+    STATIC,
+    MediaChoice,
+    MediaPlan,
+)
 from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
 from dailywallpaper.sources.base import Candidate
+from dailywallpaper.state.media_history import load_history
 from dailywallpaper.sources.repository import (
     mark_source_down,
     set_local_path,
@@ -307,6 +314,23 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
     def _state_clear(self, key: str) -> None:
         self.conn.execute("delete from state where key=?", (key,))
 
+    def _fill_from_cache(self, pool, seen, media_types) -> None:
+        """Top a thin pool up from wallpapers already on disk.
+
+        A dead proxy leaves Bing's single daily image as the whole pool,
+        which is why "换一张" did nothing and the picks were poor. The images
+        downloaded on earlier days are still on disk and already scored (a
+        cache hit), so they can stand in for the day.
+        """
+        if len(pool) >= OFFLINE_POOL_MIN:
+            return
+        for cached in self._cached_local_candidates(media_types, OFFLINE_POOL_LIMIT):
+            key = (cached.source, cached.source_id)
+            if key not in seen:
+                pool.append(cached)
+                seen.add(key)
+        logger.info(f"online sources thin; {len(pool)} candidate(s) after local cache")
+
     def prepare(self, now, force: bool = False, dry_run: bool = False) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
@@ -399,30 +423,24 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             if key not in seen:
                 raw.append(cached)
                 seen.add(key)
-        kind = MediaPlan.decide(
-            now.date(),
-            self.cfg.wallpaper.media_strategy,
-            self.cfg.wallpaper.dynamic_every_n_days,
-            on_battery,
+        strategy = self.cfg.wallpaper.media_strategy
+        # Battery (when the user asked for it) is a hard veto on live
+        # wallpapers. static_only still allows one as the last resort when no
+        # static candidate qualified -- an empty desktop is the worse outcome
+        # -- but ``allow_dynamic`` marks the paths where it is a real choice.
+        dynamic_allowed_by_power = not (
+            on_battery and self.cfg.wallpaper.dynamic_requires_ac
         )
-        wanted = {"scene", "video"} if kind == "dynamic" else {"image"}
-        primary = [candidate for candidate in raw if candidate.media_type in wanted]
-        secondary = [candidate for candidate in raw if candidate.media_type not in wanted]
-        if len(primary) < OFFLINE_POOL_MIN:
-            # A dead proxy leaves Bing's single daily image as the whole pool,
-            # which is why "换一张" did nothing and the picks were poor. The
-            # images already downloaded on earlier days are still on disk and
-            # already scored (a cache hit), so they can stand in for the day.
-            for cached in self._cached_local_candidates(wanted, OFFLINE_POOL_LIMIT):
-                key = (cached.source, cached.source_id)
-                if key not in seen:
-                    raw.append(cached)
-                    primary.append(cached)
-                    seen.add(key)
-            logger.info(
-                f"online sources thin; {len(primary)} candidate(s) after local cache"
-            )
-        logger.info(f"media plan: {kind} day, {len(primary)} candidate(s)")
+        allow_dynamic = strategy != "static_only" and dynamic_allowed_by_power
+        dynamic_pool = [c for c in raw if c.media_type in DYNAMIC_TYPES]
+        static_pool = [c for c in raw if c.media_type not in DYNAMIC_TYPES]
+        if dynamic_allowed_by_power and dynamic_pool:
+            # Only when a live source actually offered a dynamic candidate:
+            # with Wallpaper Engine gone, reusing old scene/video rows from
+            # the database would pick a wallpaper nothing can apply.
+            self._fill_from_cache(dynamic_pool, seen, set(DYNAMIC_TYPES))
+        if strategy != "dynamic_only":
+            self._fill_from_cache(static_pool, seen, {"image"})
 
         recent = self._recent_styles()
         profile = self._profile(now)
@@ -461,32 +479,92 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
                 logger.warning(f"weather unavailable, scoring neutral: {exc}")
 
         data_dir = Path(self.cfg.app.data_dir)
-        self.shortlist = []
         counters = {"downloads": 0, "analyses": 0}
-        self._evaluate(
-            primary, data_dir, profile, recent, weather_code, weather_text,
-            recent_hashes, counters, hour=now.hour,
-        )
-        # A remote Steam item that has not been downloaded yet must not be
-        # picked: applying it would either use the preview thumbnail or block
-        # the tick on a download. It must not count as a qualified candidate
-        # either, or the fallback below would never run.
-        self._keep_ready()
-        fallback = secondary
-        if on_battery and self.cfg.wallpaper.dynamic_requires_ac:
-            # Never fall back INTO a live wallpaper while on battery.
-            fallback = [c for c in secondary if c.media_type not in ("scene", "video")]
-        if not self.shortlist and fallback:
-            # Spec 9.2.1: fall back only when nothing of the planned type
-            # actually PASSED, not merely when none were fetched.
-            logger.info(f"no {kind} candidate qualified; falling back")
-            self._evaluate(
-                fallback, data_dir, profile, recent, weather_code, weather_text,
-                recent_hashes, counters, hour=now.hour,
+        dynamic_decisions: list[Decision] = []
+        static_decisions: list[Decision] = []
+        if strategy == "dynamic_only":
+            # A forced type is only scored when it is allowed; the other pool
+            # stays as the last resort, and only when nothing of the asked
+            # type actually PASSED (spec 9.2.1).
+            if allow_dynamic:
+                dynamic_decisions = self._evaluate(
+                    dynamic_pool, data_dir, profile, recent, weather_code,
+                    weather_text, recent_hashes, counters, hour=now.hour,
+                )
+            if not self._ready(dynamic_decisions):
+                static_decisions = self._evaluate(
+                    static_pool, data_dir, profile, recent, weather_code,
+                    weather_text, recent_hashes, counters, hour=now.hour,
+                )
+        elif strategy == "mixed":
+            # The adaptive path needs both pools on the same ruler. Dynamic
+            # goes first because it is the smaller pool and its candidates are
+            # the ones the calibration exists for.
+            if allow_dynamic:
+                dynamic_decisions = self._evaluate(
+                    dynamic_pool, data_dir, profile, recent, weather_code,
+                    weather_text, recent_hashes, counters, hour=now.hour,
+                )
+            static_decisions = self._evaluate(
+                static_pool, data_dir, profile, recent, weather_code,
+                weather_text, recent_hashes, counters, hour=now.hour,
             )
-            self._keep_ready()
+        else:
+            # static_only, or an unrecognised value: static unless nothing
+            # static qualified, which is the old fallback rule.
+            static_decisions = self._evaluate(
+                static_pool, data_dir, profile, recent, weather_code,
+                weather_text, recent_hashes, counters, hour=now.hour,
+            )
+            if not self._ready(static_decisions) and dynamic_allowed_by_power:
+                dynamic_decisions = self._evaluate(
+                    dynamic_pool, data_dir, profile, recent, weather_code,
+                    weather_text, recent_hashes, counters, hour=now.hour,
+                )
 
-        self.shortlist = rank(self.shortlist, now.date().isoformat())
+        ready_dynamic = self._ready(dynamic_decisions)
+        ready_static = self._ready(static_decisions)
+        best_dynamic = max((d.final for d in ready_dynamic), default=None)
+        best_static = max((d.final for d in ready_static), default=None)
+        choice = MediaPlan.choose(
+            day=now.date(),
+            strategy=strategy,
+            best_dynamic=best_dynamic,
+            best_static=best_static,
+            on_battery=on_battery,
+            dynamic_available=bool(dynamic_pool),
+            history=load_history(self.conn),
+            margin=self.cfg.wallpaper.selection_margin,
+            max_streak=self.cfg.wallpaper.dynamic_max_streak,
+            quota_days=self.cfg.wallpaper.dynamic_quota_days,
+            quota_max=self.cfg.wallpaper.dynamic_quota_max,
+        )
+        chosen = ready_dynamic if choice.kind == DYNAMIC else ready_static
+        if not chosen:
+            # The chosen pool scored something but none of it can be applied
+            # (a remote Steam item still downloading). The other type is a
+            # better wallpaper than none at all.
+            other_kind = STATIC if choice.kind == DYNAMIC else DYNAMIC
+            other = ready_static if choice.kind == DYNAMIC else ready_dynamic
+            if other:
+                logger.info(
+                    f"no applicable {choice.kind} candidate; falling back to"
+                    f" {other_kind}"
+                )
+                choice = MediaChoice(other_kind, f"{choice.kind} pool empty")
+                chosen = other
+        logger.info(
+            "media decision: dynamic %s vs static %s -> %s (%s)",
+            "-" if best_dynamic is None else f"{best_dynamic:.1f}",
+            "-" if best_static is None else f"{best_static:.1f}",
+            choice.kind,
+            choice.reason,
+        )
+        self.shortlist = rank(chosen, now.date().isoformat())
+        logger.info(
+            f"media plan: {choice.kind} day, {len(self.shortlist)} candidate(s)"
+        )
+
         # A refill is a click the user is waiting on: the review pass costs
         # five more model calls and only re-ranks the head, which is not
         # worth a minute of "换一张" looking broken.

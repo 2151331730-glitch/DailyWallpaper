@@ -7,6 +7,7 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
+from dailywallpaper.analysis.calibration import calibrate_scores
 from dailywallpaper.analysis.desktop_fit import measure as measure_desktop_fit
 from dailywallpaper.analysis.images import canonicalize, download
 from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
@@ -147,8 +148,9 @@ class EvaluateMixin:
         return profile
 
     def _evaluate(self, candidates, data_dir, profile, recent, weather_code,
-                  weather_text, recent_hashes, counters, hour=None) -> None:
-        """Screen and score one group of candidates into ``self.shortlist``."""
+                  weather_text, recent_hashes, counters, hour=None) -> list[Decision]:
+        """Screen and score one group of candidates; returns that group."""
+        found: list[Decision] = []
         for candidate in candidates:
             if counters["downloads"] >= self.cfg.app.max_downloads_per_day:
                 break
@@ -177,6 +179,10 @@ class EvaluateMixin:
                 if not candidate.preview_url:
                     continue
                 asset = Path(candidate.file_url)
+                # A contact sheet or an extracted GIF frame is the shape the
+                # dynamic-score bias was measured on; the author's cover is
+                # not, so only these previews get calibrated.
+                contact_sheet = False
                 if (
                     candidate.media_type == "video"
                     and asset.is_file()
@@ -189,10 +195,12 @@ class EvaluateMixin:
                         data_dir / "cache" / "sheets" / f"{wallpaper_id}.jpg",
                         ffmpeg=self.cfg.tools.ffmpeg_path,
                     )
+                    contact_sheet = True
                 elif asset.is_file() and asset.suffix.lower() == ".gif":
                     preview = gif_first_frame(
                         asset, data_dir / "cache" / "sheets" / f"{wallpaper_id}.jpg"
                     )
+                    contact_sheet = True
                 else:
                     local_preview = Path(candidate.preview_url)
                     if local_preview.is_file():
@@ -258,8 +266,16 @@ class EvaluateMixin:
                 if hard_gate(record.scores):
                     continue
                 fit = self._desktop_fit(canonical)
+                # The gate above judges what the model actually saw; the
+                # ranking below needs the score on the single-picture scale,
+                # or a live wallpaper loses a comparison it should win.
+                scores_now = (
+                    calibrate_scores(record.scores)
+                    if contact_sheet
+                    else record.scores
+                )
                 scores = final_score(
-                    record.scores, candidate.source, profile, recent, weather_code,
+                    scores_now, candidate.source, profile, recent, weather_code,
                     desktop_fit=None if fit is None else fit.score,
                     hour=hour,
                     sugar=self._sugar_score(record.scores),
@@ -267,11 +283,11 @@ class EvaluateMixin:
                 reason = record.scores.reason
                 if weather_text:
                     reason = f"{reason}；天气：{weather_text}"
-                self.shortlist.append(
+                found.append(
                     Decision(
                         wallpaper_id,
                         canonical,
-                        record.scores,
+                        scores_now,
                         scores.explore,
                         scores.personalize,
                         scores.final,
@@ -285,6 +301,8 @@ class EvaluateMixin:
                             candidate.source != "steam_workshop"
                             or Path(candidate.file_url).is_file()
                         ),
+                        media_type=candidate.media_type,
+                        calibrated=contact_sheet,
                     )
                 )
             except Exception as exc:
@@ -301,6 +319,7 @@ class EvaluateMixin:
                     )
                     break
                 continue
+        return found
 
     def _review_top(self, profile, recent, weather_code, hour=None) -> None:
         """Re-score the strongest candidates with the paid model.
@@ -330,8 +349,13 @@ class EvaluateMixin:
                 rejected.add(decision.wallpaper_id)
                 continue
             fit = self._desktop_fit(decision.image_path)
+            scores_now = (
+                calibrate_scores(record.scores)
+                if decision.calibrated
+                else record.scores
+            )
             scores = final_score(
-                record.scores, decision.source, profile, recent, weather_code,
+                scores_now, decision.source, profile, recent, weather_code,
                 desktop_fit=None if fit is None else fit.score,
                 hour=hour,
                 sugar=self._sugar_score(record.scores),
@@ -339,7 +363,7 @@ class EvaluateMixin:
             reviewed.append(
                 replace(
                     decision,
-                    scores=record.scores,
+                    scores=scores_now,
                     explore=scores.explore,
                     personalize=scores.personalize,
                     final=scores.final,

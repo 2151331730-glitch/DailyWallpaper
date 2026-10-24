@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from dailywallpaper.analysis.calibration import DIMENSION_OFFSETS  # noqa: E402
 from dailywallpaper.analysis.scoring import (  # noqa: E402
     EXPLORE_WEIGHT,
     PERSONALIZE_WEIGHT,
@@ -32,8 +33,10 @@ from dailywallpaper.db import connect, migrate  # noqa: E402
 from dailywallpaper.recommend.profile import PreferenceProfile  # noqa: E402
 
 DIMENSIONS = ("quality", "creativity", "novelty", "formulaic")
-# Measured on 24 dynamic wallpapers against a re-encoded noise floor.
-CALIBRATION = {"creativity": 5.8, "novelty": 3.1, "formulaic": -2.1}
+# One source of truth: the app applies these offsets to contact-sheet scores
+# (analysis/calibration.py). This script asks whether that calibration helps
+# the cross-type comparison at all.
+CALIBRATION = DIMENSION_OFFSETS
 DYNAMIC = ROOT / "data" / "concept_batch_dynamic"
 
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 未发布
+
+### 改进
+
+- **静态/动态改为按内容选择**：`media_strategy=mixed` 不再"每 N 天安排一天动态"，
+  而是每天给两个候选池都打分，动态的最高分**严格高于**静态才换动态。
+  日志每次决策打一行 `media decision: dynamic X vs static Y -> kind (reason)`。
+- **动态分数校准**：视频联系表 / GIF 首帧会被视觉模型系统性打低。混排前按实测偏差
+  补回 creativity +5.8 / novelty +3.1、formulaic −2.1；作者封面和静态图不校准。
+  硬门槛仍按模型原始分判断。
+- **防止动态池被抽干**：最多连续 2 天动态，最近 10 天最多 5 天动态。
+  新增 `[wallpaper] selection_margin` / `dynamic_max_streak` / `dynamic_quota_days` /
+  `dynamic_quota_max`，老配置不用改（都有默认值）。
+- 只有**实际应用成功**的那天计入动态配额；dry-run、应用失败、没开机都不算。
+
 ## 0.1.2 — 2026-10-24
 
 ### 修复

@@ -867,6 +867,109 @@ def test_build_pipeline_requires_pricing_for_every_model(tmp_path):
         build_pipeline(broken, conn)
 
 
+def _score(creativity, novelty=60, quality=90, formulaic=10):
+    return VisionScores(
+        quality=quality, creativity=creativity, novelty=novelty,
+        formulaic=formulaic, nsfw=False, watermark=False, text_overlay="none",
+        style_tags=["landscape"], mood_tags=["calm"], palette=["#112233"],
+        subject="s", reason="r",
+    )
+
+
+def test_mixed_takes_dynamic_when_it_scores_higher(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    asset = tmp_path / "scene.pkg"
+    asset.write_bytes(b"x")
+    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    # The dynamic pool is scored first, so the provider answers in that order.
+    vision = VisionClient(Provider([_score(90), _score(70)]), conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene, still])], vision,
+        CountingBudget(100), power=_AcPower(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert [decision.media_type for decision in pipeline.shortlist] == ["scene"]
+    assert pipeline.shortlist[0].calibrated is False
+
+
+def test_mixed_keeps_static_when_dynamic_scores_lower(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    asset = tmp_path / "scene.pkg"
+    asset.write_bytes(b"x")
+    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    vision = VisionClient(Provider([_score(60), _score(90)]), conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene, still])], vision,
+        CountingBudget(100), power=_AcPower(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert [decision.media_type for decision in pipeline.shortlist] == ["image"]
+
+
+def test_mixed_ignores_a_dynamic_candidate_that_is_not_ready(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    root = tmp_path / "steam_workshop"
+    remote = Candidate(
+        "steam_workshop", "123", "Neon", "", str(root / "123" / "project.json"),
+        "https://img/day1/0.png", "scene", 0, 0, 0, [], {},
+    )
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    vision = VisionClient(Provider([_score(95), _score(50)]), conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([remote, still])], vision,
+        CountingBudget(100), power=_AcPower(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert [decision.media_type for decision in pipeline.shortlist] == ["image"]
+
+
+def test_mixed_does_not_evaluate_dynamic_on_battery(tmp_path):
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    asset = tmp_path / "scene.pkg"
+    asset.write_bytes(b"x")
+    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
+                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+    provider = Provider([_score(99), _score(10)])
+
+    class _Battery:
+        def on_battery(self):
+            return True
+
+    vision = VisionClient(provider, conn, cfg.vision.pricing)
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([scene, still])], vision,
+        CountingBudget(100), power=_Battery(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    assert provider.calls == 1
+    assert [decision.media_type for decision in pipeline.shortlist] == ["image"]
+
+
 def test_a_dynamic_day_only_keeps_scene_and_video(tmp_path):
     from datetime import date
 
@@ -1029,6 +1132,9 @@ def test_a_video_candidate_is_scored_from_a_contact_sheet(tmp_path):
 
     assert calls == [video_file]
     assert len(pipeline.shortlist) == 1
+    # A contact sheet is the shape the calibration was measured on.
+    assert pipeline.shortlist[0].calibrated is True
+    assert pipeline.shortlist[0].media_type == "video"
 
 
 def test_battery_never_falls_back_into_a_dynamic_wallpaper(tmp_path):
