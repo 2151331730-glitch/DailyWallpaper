@@ -1,12 +1,17 @@
 # scripts/train_sugar.py
 """Train the tag-based sugar-water model and say how well it generalises.
 
-Five-fold cross validation, stratified by label. The number that matters is
-the pooled out-of-fold AUC: each picture is scored by a model that never saw
-it. A model fitted on all 99 labels and then judged on those same labels
-would only measure how well it memorised them.
+Two numbers, because they answer different questions:
 
-    .venv\\Scripts\\python scripts\\train_sugar.py
+- **Holdout**: fit on the first batch (sampled by keywords), test on the
+  second batch's *random* group (sampled without looking at the label). No
+  picture in the test set was chosen for any reason, and none of them taught
+  the model. This is the number to believe.
+- **Merged k-fold**: five folds over every definite label from both batches.
+  Useful for comparing models, but the second batch's "uncertain" group was
+  selected *because* the model found it hard, so it runs low by design.
+
+    .venv\\Scripts\\python scripts/train_sugar.py
 """
 from __future__ import annotations
 
@@ -50,6 +55,14 @@ def stratified_folds(rows, k: int, seed: int):
     return folds
 
 
+def _score(model, row) -> float:
+    return model.score(row["style"] + row["mood"])
+
+
+def _labels(rows):
+    return [1 if row["sugar"] == "yes" else 0 for row in rows]
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--folds", type=int, default=5)
@@ -58,38 +71,51 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path, default=ROOT / "data" / "sugar_model.json")
     args = parser.parse_args(argv)
 
+    concept = _concept()
     conn = connect(ROOT / "data" / "app.db")
     migrate(conn)
-    rows = [row for row in _concept().load_batch(conn) if row["origin"] != "we"]
-    labeled = [row for row in rows if row["sugar"] in ("yes", "no")]
-    if len(labeled) < 30:
-        print(f"明确标注只有 {len(labeled)} 条，至少需要 30 条")
-        return 1
+    batch1 = concept.load_batch(conn, ROOT / "data" / "concept_batch")
+    batch2 = concept.load_batch(conn, ROOT / "data" / "concept_batch2")
 
-    folds = stratified_folds(labeled, args.folds, args.seed)
-    pooled_scores, pooled_labels, per_fold = [], [], []
+    def definite(row):
+        return row["sugar"] in ("yes", "no")
+
+    # Wallpaper Engine items were labelled from covers, so they stay out.
+    first = [row for row in batch1 if row["origin"] != "we" and definite(row)]
+    holdout = [row for row in batch2 if row["origin"] == "random" and definite(row)]
+    merged = first + [row for row in batch2 if definite(row)]
+
+    print(f"第一批 {len(first)} 条（训练用）")
+    print(f"第二批随机组 {len(holdout)} 条（留出测试用）")
+    print(f"第二批全部明确标注 {sum(1 for r in batch2 if definite(r))} 条"
+          f"（含 {sum(1 for r in batch2 if r['origin'] == 'uncertain' and definite(r))} 条「拿不准」）")
+    print(f"合并 {len(merged)} 条，标签词表 "
+          f"{len(build_vocabulary(merged, args.min_support))} 个\n")
+
+    if first and holdout:
+        model = fit(first, min_support=args.min_support)
+        value = roc_auc([_score(model, row) for row in holdout], _labels(holdout))
+        print(f"**留出验证**（第一批训练 → 第二批随机组测试）: AUC {value:.3f}  n={len(holdout)}")
+    else:
+        print("留出验证跳过：某一侧样本为空")
+
+    folds = stratified_folds(merged, args.folds, args.seed)
+    pooled_scores, pooled_labels = [], []
     for index, test in enumerate(folds):
         train = [row for other, fold in enumerate(folds) if other != index
                  for row in fold]
         model = fit(train, min_support=args.min_support)
-        scores = [model.score(row["style"] + row["mood"]) for row in test]
-        labels = [1 if row["sugar"] == "yes" else 0 for row in test]
+        scores = [_score(model, row) for row in test]
         pooled_scores += scores
-        pooled_labels += labels
-        value = roc_auc(scores, labels)
-        per_fold.append(value)
-        print(f"  折 {index + 1}: n={len(test)} AUC={value:.3f}")
-
+        pooled_labels += _labels(test)
+        print(f"  折 {index + 1}: n={len(test)} AUC={roc_auc(scores, _labels(test)):.3f}")
     pooled = roc_auc(pooled_scores, pooled_labels)
-    print(f"\n合并 AUC（每张图都由没见过它的模型打分）: {pooled:.3f}")
-    print(f"样本 {len(labeled)} 条（糖水 {sum(1 for r in labeled if r['sugar'] == 'yes')}"
-          f" / 不是 {sum(1 for r in labeled if r['sugar'] == 'no')}），"
-          f"标签词表 {len(build_vocabulary(labeled, args.min_support))} 个")
+    print(f"合并 5 折 AUC: {pooled:.3f}（全样本；含按模型挑出的难例，偏低）")
 
-    model = fit(labeled, min_support=args.min_support)
+    model = fit(merged, min_support=args.min_support)
     model.save(args.out)
     pairs = sorted(zip(model.tags, model.weights), key=lambda pair: pair[1])
-    print("\n最像糖水的标签（权重越高越像）：")
+    print("\n最像糖水的标签：")
     for tag, weight in pairs[-8:][::-1]:
         print(f"  {tag:20s} {weight:+.2f}")
     print("最不像糖水的标签：")

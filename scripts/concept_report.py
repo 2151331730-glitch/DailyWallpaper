@@ -174,24 +174,34 @@ def analyze(conn, cfg) -> int:
     return 0
 
 
-def load_batch(conn):
-    meta = json.loads((ROOT / "data" / "concept_batch" / "meta.json").read_text(encoding="utf-8"))
-    labels = json.loads((ROOT / "data" / "concept_batch" / "labels.json").read_text(encoding="utf-8"))
+def load_batch(conn, batch_dir: Path | None = None):
+    batch = batch_dir or (ROOT / "data" / "concept_batch")
+    meta = json.loads((batch / "meta.json").read_text(encoding="utf-8"))
+    labels = json.loads((batch / "labels.json").read_text(encoding="utf-8"))
     rows = []
     for item in meta["items"]:
         label = labels.get(item["key"])
         if not label:
             continue
-        record = conn.execute(
-            """select a.quality,a.creativity,a.novelty,a.formulaic,
-                      a.style_tags_json,a.mood_tags_json
-                 from wallpapers w
-                 join wallpaper_analyses wa on wa.wallpaper_id=w.id
-                 join analyses a on a.id=wa.analysis_id
-                where w.source=? and w.source_id=?
-                order by a.id desc limit 1""",
-            (BATCH_SOURCE, item["key"]),
-        ).fetchone()
+        record = None
+        # Batch 1 was analysed under its own source; batch 2 reuses pictures
+        # the daily pipeline had already analysed under their real source.
+        for source, source_id in ((item.get("source"), item.get("source_id")),
+                                  (BATCH_SOURCE, item["key"])):
+            if not source:
+                continue
+            record = conn.execute(
+                """select a.quality,a.creativity,a.novelty,a.formulaic,
+                          a.style_tags_json,a.mood_tags_json
+                     from wallpapers w
+                     join wallpaper_analyses wa on wa.wallpaper_id=w.id
+                     join analyses a on a.id=wa.analysis_id
+                    where w.source=? and w.source_id=?
+                    order by a.id desc limit 1""",
+                (source, str(source_id)),
+            ).fetchone()
+            if record is not None:
+                break
         if record is None:
             continue
         rows.append({
