@@ -5,6 +5,7 @@ import pytest
 
 from dailywallpaper.analysis.scoring import (
     CONTEXT_WEIGHT,
+    FORMULAIC_PENALTY_CAP,
     context_adjust,
     explore_score,
     final_score,
@@ -70,7 +71,22 @@ def test_a_formulaic_image_is_ranked_down_not_just_gated():
     cliche = final_score(_scores(formulaic=60), "wallhaven", _Profile(n=10), [], 0)
 
     assert cliche.final < original.final
-    assert original.final - cliche.final == pytest.approx(0.5 * (60 - 20))
+    # Below the ceiling the penalty is linear; 60 is already past it.
+    assert original.final - cliche.final == pytest.approx(FORMULAIC_PENALTY_CAP)
+
+
+def test_the_formulaic_penalty_has_a_ceiling():
+    original = final_score(_scores(formulaic=20), "wallhaven", _Profile(n=10), [], 0)
+    mild = final_score(_scores(formulaic=24), "wallhaven", _Profile(n=10), [], 0)
+    extreme = final_score(_scores(formulaic=100), "wallhaven", _Profile(n=10), [], 0)
+
+    # Under the cap the penalty stays proportional: 4 points over the floor.
+    assert original.final - mild.final == pytest.approx(0.5 * 4)
+    # Past it, a worse picture is not punished any further. creativity and
+    # novelty already carry 70% of the explore term on the same axis
+    # (correlation -0.80 / -0.90 with formulaic), so an unbounded penalty
+    # counted one signal twice and could outweigh every other adjustment.
+    assert original.final - extreme.final == pytest.approx(FORMULAIC_PENALTY_CAP)
 
 
 def test_personalize_reads_mood_as_well_as_style():

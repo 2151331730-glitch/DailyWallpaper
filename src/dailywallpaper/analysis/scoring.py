@@ -17,6 +17,12 @@ FORMULAIC_CEILING = 70
 # a generic idea dressed well still loses to an original one.
 FORMULAIC_BASE = 20
 FORMULAIC_PENALTY = 0.5
+# A nudge, not a veto. creativity and novelty already carry 70% of the explore
+# term and correlate -0.80 / -0.90 with formulaic, so an unbounded penalty was
+# charging the same axis twice: at formulaic=70 it took 25 points, more than
+# desktop fit (-9..+9) and the weather bonus (+5) together could give back.
+# Eight keeps the "dress it down" intent at the scale of every other nudge.
+FORMULAIC_PENALTY_CAP = 8.0
 EXPLORE_WEIGHT = 0.55
 PERSONALIZE_WEIGHT = 0.45
 COLD_START_PRIOR = 60.0
@@ -244,7 +250,10 @@ def final_score(
         ) * COLD_START_PRIOR
     else:
         personalize = COLD_START_PRIOR
-    penalty = FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE)
+    penalty = min(
+        FORMULAIC_PENALTY_CAP,
+        FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE),
+    )
     penalty += avoid_penalty(
         scores,
         getattr(profile, "avoid_tags", ()),
