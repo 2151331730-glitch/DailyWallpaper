@@ -586,11 +586,18 @@ def render_report(summary, quality, history, stats, cv) -> str:
     else:
         lines += ["## 真实历史（小样本）", "",
                   "实际应用过且有评分的壁纸不足 5 条，暂无法计算。", ""]
+    if stats.get("by_source"):
+        share = "、".join(f"{name} {count * 100 // stats['usable']}%"
+                         for name, count in stats["by_source"].items())
+        composition = f"评估集的来源构成：{share}。"
+    else:
+        composition = ""
     lines += [
         "## 局限",
         "",
-        "- 评估集是 Wallhaven 的策展样本（占 98%），结论主要说明静态图的审美排序，",
-        "  不代表 Steam 动态壁纸。",
+        "- " + (composition + "静态图占绝大多数，结论主要说明静态图的审美排序，"
+                "不代表 Steam 动态壁纸。" if composition else
+                "结论主要说明静态图的审美排序，不代表 Steam 动态壁纸。"),
         "- 离线回放测的是排序逻辑；它回答不了“换个来源能不能找到更好的图”。",
         "- 训练/测试按评分分层切分，同一张图不会同时出现在两侧；但同一位作者的同系列作品",
         "  可能被分到两侧，会略微高估。",
@@ -619,7 +626,12 @@ def main(argv=None) -> int:
     if len(rows) < 20:
         print(f"可评估的评分只有 {len(rows)} 条，至少需要 20 条（先跑 --curate 打分）。")
         return 1
-    stats = {"ratings": count_ratings(conn), "usable": len(rows)}
+    by_source: dict[str, int] = {}
+    for row in rows:
+        by_source[row["source"]] = by_source.get(row["source"], 0) + 1
+    stats = {"ratings": count_ratings(conn), "usable": len(rows),
+             "by_source": dict(sorted(by_source.items(),
+                                      key=lambda item: -item[1]))}
     train, test = split_rows(rows, args.test_ratio, args.seed)
     stats.update(train=len(train), test=len(test),
                  pool_size=args.pool_size,

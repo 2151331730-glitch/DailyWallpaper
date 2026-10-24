@@ -92,7 +92,7 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 
 ## 安装（Windows，推荐）
 
-1. 下载 `DailyWallpaper-Setup-0.1.0.exe`（约 82 MB）
+1. 下载 `DailyWallpaper-Setup-1.0.0.exe`（约 82 MB）
 2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\DailyWallpaper`
    - 安装时可选「将任务栏和搜索框改成深色」，适配深色壁纸（只改当前用户，可随时改回）
 3. 首次启动会要求填写智谱 API key（免费注册：open.bigmodel.cn → API Keys）
@@ -246,7 +246,7 @@ steam_account = "你的 Steam 用户名"   # 只填用户名，不是密码
   如果是 Wallpaper Engine 项目，程序还会把 WE 配置里“上次壁纸”的指向改掉，
   避免开机时 WE 自己把它恢复出来。它们的风格会以强负权重参与偏好学习。
 - 设置页写回 `config.toml` 时**不保留注释**（不认识的顶层表会原样保留）。
-- 没有安装包，按上面的 venv 方式运行。
+- 安装包没有代码签名（Windows 会提示未知发布者）；也不提供自动更新，升级要手动装新版。
 
 ---
 
