@@ -36,6 +36,7 @@ class _FakeWe:
         self.closed = 0
         self.opened = []
         self.replaced = []
+        self.replaced_monitors = []
         self.sound_calls = []
 
     def current(self):
@@ -53,8 +54,9 @@ class _FakeWe:
         self.opened.append(str(file).replace("\\", "/"))
         return True
 
-    def replace_selection(self, file):
+    def replace_selection(self, file, monitor=None):
         self.replaced.append(str(file).replace("\\", "/"))
+        self.replaced_monitors.append(monitor)
         return True
 
     def mute(self):
@@ -931,6 +933,9 @@ def test_forget_banned_selection_moves_we_off_the_rated_one(tmp_path):
     assert service.forget_banned_selection() is True
     assert we.closed == 1
     assert we.replaced == [str(image.with_suffix(".apply.jpg")).replace("\\", "/")]
+    # The rewrite must target the monitor this app drives, not whichever
+    # entry WE happens to list first.
+    assert we.replaced_monitors == [service.monitor]
 
 
 def test_forget_banned_selection_leaves_a_well_rated_item_alone(tmp_path):

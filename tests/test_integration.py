@@ -1693,3 +1693,55 @@ def test_a_rejected_file_is_remembered_and_not_downloaded_again(tmp_path):
     conn.execute("update rejections set created_at='2020-01-01T00:00:00'")
     conn.commit()
     assert pipeline._rejected_recently(wallpaper_id) is False
+
+
+def test_a_dry_run_before_the_window_does_not_consume_the_day(tmp_path):
+    # The pre-08:30 branch used to call prepare without forwarding dry_run, so
+    # a morning rehearsal marked the day as prepared and the real tick then
+    # found nothing to do.
+    clock = Clock(datetime(2026, 10, 18, 7, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    service = ApplyService(conn, Applier(), clock=clock)
+    machine = DailyStateMachine(conn, cfg, clock, pipeline, service)
+
+    assert machine.tick(dry_run=True).action == "background"
+
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is None
+
+
+def test_a_pending_retry_still_fires_after_the_day_has_changed(tmp_path):
+    # A prepare that ran before the proxy came up schedules a rebuild in 30
+    # minutes. Nothing else calls prepare once the day is marked as changed, so
+    # a machine that boots after 08:30 used to keep the degraded pool forever.
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    pipeline.sources = [Source(_candidates()), _BrokenSource()]
+    service = ApplyService(conn, Applier(), clock=clock)
+    machine = DailyStateMachine(conn, cfg, clock, pipeline, service)
+
+    assert machine.tick().action == "applied"
+    assert conn.execute(
+        "select 1 from state where key='prepare_retry_at_2026-10-18'"
+    ).fetchone() is not None
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is None
+
+    # The retry moment passes and every source is healthy again.
+    conn.execute(
+        "update state set value='0' where key='prepare_retry_at_2026-10-18'"
+    )
+    conn.execute("delete from state where key='source_down_Source_2026-10-18'")
+    conn.commit()
+    pipeline.sources = [Source(_candidates())]
+
+    assert machine.tick().action == "already_changed"
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is not None

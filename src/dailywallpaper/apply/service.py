@@ -580,7 +580,8 @@ class ApplyService:
         # WE writes its config on the way out; give it a moment first.
         self.sleep(0.3)
         try:
-            if self.we is None or not self.we.replace_selection(target):
+            if self.we is None or not self.we.replace_selection(
+                    target, monitor=self.monitor):
                 return False
         except Exception as exc:
             logger.warning(f"WE selection reset failed: {exc}")

@@ -123,3 +123,41 @@ def test_replace_selection_keeps_a_backup(tmp_path):
     assert backup.is_file()
     assert "D:/bad/scene.pkg" in backup.read_text(encoding="utf-8")
     assert not (tmp_path / "config.json.tmp").exists()
+
+
+def test_replace_selection_targets_the_monitor_we_drive(tmp_path):
+    # WE keys its entries Monitor0, Monitor1, ...; the first key in the file is
+    # not necessarily the screen `-monitor` addresses. Rewriting the wrong one
+    # leaves WE still restoring the banned wallpaper on ours.
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "win11": {"general": {"wallpaperconfig": {
+            "selectedwallpapers": {
+                "Monitor0": {"file": "D:/other/desktop.jpg"},
+                "Monitor1": {"file": "D:/bad/scene.pkg"},
+            },
+        }}},
+    }), encoding="utf-8")
+    ctl = WeControl(Path("C:/WE"), cfg, runner=FakeRunner())
+
+    assert ctl.replace_selection(Path("D:/good/1212.apply.jpg"), monitor=1) is True
+
+    saved = json.loads(cfg.read_text(encoding="utf-8"))["win11"]["general"][
+        "wallpaperconfig"]["selectedwallpapers"]
+    assert saved["Monitor1"]["file"] == str(Path("D:/good/1212.apply.jpg"))
+    assert saved["Monitor0"]["file"] == "D:/other/desktop.jpg"
+
+
+def test_replace_selection_falls_back_when_the_monitor_key_is_absent(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "win11": {"general": {"wallpaperconfig": {
+            "selectedwallpapers": {"Monitor0": {"file": "D:/bad/scene.pkg"}},
+        }}},
+    }), encoding="utf-8")
+    ctl = WeControl(Path("C:/WE"), cfg, runner=FakeRunner())
+
+    assert ctl.replace_selection(Path("D:/good/1212.apply.jpg"), monitor=1) is True
+    saved = json.loads(cfg.read_text(encoding="utf-8"))["win11"]["general"][
+        "wallpaperconfig"]["selectedwallpapers"]
+    assert saved["Monitor0"]["file"] == str(Path("D:/good/1212.apply.jpg"))

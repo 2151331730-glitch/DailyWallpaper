@@ -30,7 +30,8 @@ class SystemClock:
 
 
 class Pipeline(Protocol):
-    def prepare(self, now: datetime, force: bool = False) -> None: ...
+    def prepare(self, now: datetime, force: bool = False,
+                dry_run: bool = False) -> None: ...
 
     def pick(self, now: datetime, dry_run: bool = False): ...
 
@@ -227,6 +228,13 @@ class DailyStateMachine:
             if self._paused(now):
                 return TickResult("paused")
             if self._changed_today(now.date()):
+                # The day is settled, so nothing else will rebuild the pool --
+                # but a prepare that ran before the proxy came up scheduled a
+                # retry, and without this call it would wait until tomorrow.
+                # prepare returns at once when the day is complete or the
+                # retry is not due yet, so the steady state costs one lookup.
+                if not dry_run:
+                    self.pipeline.prepare(now)
                 return TickResult("already_changed")
             daily = parse_time(self.config.app.daily_time, "08:30")
             latest = parse_time(self.config.app.latest_change_time, "22:00")
@@ -239,7 +247,9 @@ class DailyStateMachine:
                     if result is not None:
                         return result
             if now.time() < daily:
-                self.pipeline.prepare(now)
+                # Forward dry_run: a dry run before the window must not mark
+                # the day as prepared, or the real tick would find it done.
+                self.pipeline.prepare(now, dry_run=dry_run)
                 return TickResult("background")
             if now.time() > latest:
                 return TickResult("too_late")

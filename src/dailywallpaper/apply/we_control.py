@@ -151,7 +151,21 @@ class WeControl:
     def unmute(self) -> bool:
         return self._run("-control", "unmute")
 
-    def replace_selection(self, file: Path) -> bool:
+    def _selected_key(self, config: "WeConfig", monitor: int | None) -> str:
+        """Which `selectedwallpapers` entry belongs to the monitor we drive.
+
+        WE stores one entry per screen under keys like ``Monitor0``; the first
+        key in the file is not necessarily the one ``-monitor`` addresses, and
+        on a second screen rewriting the wrong entry leaves WE pointing at the
+        file we are trying to get rid of.
+        """
+        if monitor is not None:
+            key = f"Monitor{monitor}"
+            if key in config.selected:
+                return key
+        return config.monitor_key
+
+    def replace_selection(self, file: Path, monitor: int | None = None) -> bool:
         """Rewrite the wallpaper WE restores when it starts.
 
         Closing WE stops the picture, not its memory: every start reloads
@@ -168,7 +182,7 @@ class WeControl:
         target = _norm(file)
         # Only the monitor this app drives. Rewriting every selected entry
         # made a second display lose whatever the user chose for it.
-        entry = config.selected.get(config.monitor_key)
+        entry = config.selected.get(self._selected_key(config, monitor))
         if not isinstance(entry, dict) or _norm(entry.get("file", "")) == target:
             return False
         entry["file"] = str(file)
@@ -179,7 +193,7 @@ class WeControl:
         time.sleep(0.2)
         try:
             after = WeConfig.from_file(self.config_path)
-            entry = after.selected.get(after.monitor_key)
+            entry = after.selected.get(self._selected_key(after, monitor))
             if isinstance(entry, dict) and _norm(entry.get("file", "")) != target:
                 entry["file"] = str(file)
                 self._write_config(after)
