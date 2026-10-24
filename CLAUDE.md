@@ -30,7 +30,7 @@ git status --short                       # 有哪些未提交改动（别把别�
 .venv\Scripts\python -m pytest -q        # 必须全绿，约 50 秒
 ```
 
-当前基线（2026-10-24 实测）：**626 passed in 44s**。当天开工前积压了 41 个文件、约 2.1k 行未提交改动，已提交为检查点；之后每做完一件事就提交一次，别让工作区长期不落盘。
+当前基线（2026-10-24 实测）：**638 passed in 48s**。当天开工前积压了 41 个文件、约 2.1k 行未提交改动，已提交为检查点；之后每做完一件事就提交一次，别让工作区长期不落盘。
 2026-10-24 封版时清掉了 10 个已合并的旧阶段分支和 `phase0-1a` worktree，现在只剩 `main`。
 
 代码基线之外还有运行基线：托盘在跑、点「换一张」有反应、`data\logs\` 有今天的记录。
@@ -68,7 +68,7 @@ git status --short                       # 有哪些未提交改动（别把别�
 ## 测试与提交前
 
 ```powershell
-.venv\Scripts\python -m pytest -q        # 626 个用例 / 约 9.6k 行测试 / 约 45 秒
+.venv\Scripts\python -m pytest -q        # 638 个用例 / 约 9.7k 行测试 / 约 48 秒
 .venv\Scripts\python scripts\check_secrets.py   # 提交前必跑
 ```
 

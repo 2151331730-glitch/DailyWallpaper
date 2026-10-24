@@ -16,7 +16,7 @@
 | Phase 4 | 自适应静态/动态选择（同池比较 + 校准 + 配额） | ✅ |
 | Phase 5 | 离线评估 + 糖水判别式（封版前的最后一步） | ✅ |
 
-测试：634 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。封版 tag `v1.0.0`。
+测试：638 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。封版 tag `v1.0.0`。
 
 ## Phase 5 交付内容（2026-10-24 封版）
 
@@ -25,7 +25,7 @@
 - `scripts/backfill_analyses.py`：把缺当前版本分析的历史评分补齐。361 张评分从
   147 张可评估做到 360 张（1 张模型连续返回不合约字段，排除）。
 - `docs/SUGARWATER.md` + `data/sugar_model.json`：糖水判别式的测量、门槛与留出检验。
-- 测试 626 → 634。
+- 测试 626 → 638。
 
 **结论（`docs/EVALUATION.md` 为准）**：
 
