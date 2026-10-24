@@ -15,7 +15,7 @@
 | Phase 3 | 工程化 + Git/GitHub | ✅ |
 | Phase 4 | 自适应静态/动态选择（同池比较 + 校准 + 配额） | ✅ |
 
-测试：624 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。
+测试：626 个，全绿。远端：`github.com/2151331730-glitch/DailyWallpaper`。
 
 ## Phase 4 交付内容
 

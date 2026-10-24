@@ -253,7 +253,14 @@ class EvaluateMixin:
                             )
                             counters["analyses"] += 1
                             self._rate_limited_streak = 0
-                            if self._reanalyze_budget is not None:
+                            if (
+                                self._reanalyze_budget is not None
+                                and not record.cached
+                            ):
+                                # A cache hit costs nothing; only a real call
+                                # counts against the refill's fresh-analysis
+                                # budget, or cached dynamic candidates would
+                                # starve the static pool of its fair half.
                                 self._reanalyze_budget -= 1
                         except Exception:
                             if stale is None:

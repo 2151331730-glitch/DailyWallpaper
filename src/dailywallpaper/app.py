@@ -480,6 +480,13 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
 
         data_dir = Path(self.cfg.app.data_dir)
         counters = {"downloads": 0, "analyses": 0}
+        # A refill may spend a bounded number of FRESH analyses. When both
+        # pools must be scored, dynamic is evaluated first; give it at most
+        # half, and hand the unused remainder to the static pool, or the
+        # evaluation order would decide the day.
+        refill_total = self._reanalyze_budget
+        both_pools = bool(refill_total is not None and allow_dynamic and dynamic_pool)
+        dynamic_share = max(1, refill_total // 2) if both_pools else None
         dynamic_decisions: list[Decision] = []
         static_decisions: list[Decision] = []
         if strategy == "dynamic_only":
@@ -501,10 +508,15 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             # goes first because it is the smaller pool and its candidates are
             # the ones the calibration exists for.
             if allow_dynamic:
+                if dynamic_share is not None:
+                    self._reanalyze_budget = dynamic_share
                 dynamic_decisions = self._evaluate(
                     dynamic_pool, data_dir, profile, recent, weather_code,
                     weather_text, recent_hashes, counters, hour=now.hour,
                 )
+            if dynamic_share is not None:
+                spent = dynamic_share - self._reanalyze_budget
+                self._reanalyze_budget = max(1, refill_total - spent)
             static_decisions = self._evaluate(
                 static_pool, data_dir, profile, recent, weather_code,
                 weather_text, recent_hashes, counters, hour=now.hour,
