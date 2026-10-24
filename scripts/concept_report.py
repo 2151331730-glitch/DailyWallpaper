@@ -122,7 +122,7 @@ def ensure_wallpaper(conn, item, thumb: Path) -> int:
     ).fetchone()[0]
 
 
-def analyze(conn, cfg) -> int:
+def analyze(conn, cfg, batch_dir: Path | None = None) -> int:
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
         print("凭据管理器里没有智谱 key，先跑 scripts/set_key.py")
@@ -140,14 +140,17 @@ def analyze(conn, cfg) -> int:
         budget=budget,
         max_output_tokens=cfg.vision.max_output_tokens,
     )
-    batch = ROOT / "data" / "concept_batch"
+    batch = batch_dir or (ROOT / "data" / "concept_batch")
     meta = json.loads((batch / "meta.json").read_text(encoding="utf-8"))
-    labels = json.loads((batch / "labels.json").read_text(encoding="utf-8"))
+    labels_path = batch / "labels.json"
+    # A batch that has not been labelled yet still needs analysing; there the
+    # whole batch is the target.
+    labels = json.loads(labels_path.read_text(encoding="utf-8")) if labels_path.exists() else None
     normalized = batch / "normalized"
 
     done = 0
     for item in meta["items"]:
-        if item["key"] not in labels:
+        if labels is not None and item["key"] not in labels:
             continue
         thumb = batch / item["thumb"].replace("\\", "/")
         if not thumb.exists():
@@ -338,6 +341,8 @@ def report(rows) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--analyze", action="store_true", help="先跑视觉分析（会花钱）")
+    parser.add_argument("--analyze-only", action="store_true", help="只分析，不出报告")
+    parser.add_argument("--batch", type=Path, default=ROOT / "data" / "concept_batch")
     parser.add_argument("--config", type=Path, default=ROOT / "config.toml")
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "SUGARWATER.md")
     args = parser.parse_args(argv)
@@ -345,11 +350,13 @@ def main(argv=None) -> int:
     conn = connect(ROOT / "data" / "app.db")
     migrate(conn)
     if args.analyze:
-        code = analyze(conn, load_config(args.config))
+        code = analyze(conn, load_config(args.config), args.batch)
         if code:
             return code
+        if args.analyze_only:
+            return 0
 
-    rows = load_batch(conn)
+    rows = load_batch(conn, args.batch)
     if len(rows) < 20:
         print(f"可用样本只有 {len(rows)} 张，先跑 --analyze")
         return 1
