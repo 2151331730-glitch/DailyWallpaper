@@ -203,7 +203,8 @@ class Application:
 class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
     """Fetch, screen, analyze and rank one day's candidates."""
 
-    def __init__(self, cfg, conn, session, sources, vision, budget, power=None):
+    def __init__(self, cfg, conn, session, sources, vision, budget, power=None,
+                 sugar=None):
         self.cfg = cfg
         self.conn = conn
         self.session = session
@@ -211,6 +212,9 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         self.vision = vision
         self.budget = budget
         self.power = power
+        # Optional: learned from the user's own sugar-water labels. Without it
+        # the formulaic nudge stays in charge, so a fresh install is unchanged.
+        self.sugar = sugar
         self.shortlist = []
         self._ffmpeg_ok = None
         # The worker sets this so a manual click can cut a long prepare short.
@@ -593,7 +597,22 @@ def build_pipeline(cfg, conn):
         budget=budget,
         max_output_tokens=cfg.vision.max_output_tokens,
     )
-    return RealPipeline(cfg, conn, session, sources, vision, budget)
+    return RealPipeline(cfg, conn, session, sources, vision, budget,
+                        sugar=_load_sugar_model(cfg))
+
+
+def _load_sugar_model(cfg):
+    """The tag-based sugar-water model, if one has been trained."""
+    from dailywallpaper.recommend.sugar import SugarModel
+
+    path = Path(cfg.app.data_dir) / "sugar_model.json"
+    if not path.exists():
+        return None
+    try:
+        return SugarModel.load(path)
+    except Exception as exc:  # a broken model must not stop the scheduler
+        logger.warning(f"sugar model not loaded: {exc}")
+        return None
 
 
 def build_application(cfg):

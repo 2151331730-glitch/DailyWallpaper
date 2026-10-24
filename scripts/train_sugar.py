@@ -76,30 +76,40 @@ def main(argv=None) -> int:
     migrate(conn)
     batch1 = concept.load_batch(conn, ROOT / "data" / "concept_batch")
     batch2 = concept.load_batch(conn, ROOT / "data" / "concept_batch2")
+    batch3 = concept.load_batch(conn, ROOT / "data" / "concept_batch3")
 
     def definite(row):
         return row["sugar"] in ("yes", "no")
 
     # Wallpaper Engine items were labelled from covers, so they stay out.
     first = [row for row in batch1 if row["origin"] != "we" and definite(row)]
-    holdout = [row for row in batch2 if row["origin"] == "random" and definite(row)]
-    merged = first + [row for row in batch2 if definite(row)]
+    second = [row for row in batch2 if definite(row)]
+    second_random = [row for row in batch2 if row["origin"] == "random" and definite(row)]
+    live = [row for row in batch3 if definite(row)]
+    merged = first + second
 
-    print(f"第一批 {len(first)} 条（训练用）")
-    print(f"第二批随机组 {len(holdout)} 条（留出测试用）")
-    print(f"第二批全部明确标注 {sum(1 for r in batch2 if definite(r))} 条"
-          f"（含 {sum(1 for r in batch2 if r['origin'] == 'uncertain' and definite(r))} 条「拿不准」）")
-    print(f"合并 {len(merged)} 条，标签词表 "
+    print(f"第一批 {len(first)} 条")
+    print(f"第二批 {len(second)} 条（其中随机组 {len(second_random)}）")
+    print(f"第三批（线上分布）{len(live)} 条，"
+          f"糖水 {sum(1 for r in live if r['sugar'] == 'yes')} / "
+          f"不是 {sum(1 for r in live if r['sugar'] == 'no')}")
+    print(f"训练用 {len(merged)} 条，标签词表 "
           f"{len(build_vocabulary(merged, args.min_support))} 个\n")
 
-    if first and holdout:
+    if first and second_random:
         model = fit(first, min_support=args.min_support)
-        value = roc_auc([_score(model, row) for row in holdout], _labels(holdout))
-        print(f"**留出验证**（第一批训练 → 第二批随机组测试）: AUC {value:.3f}  n={len(holdout)}")
-    else:
-        print("留出验证跳过：某一侧样本为空")
+        value = roc_auc([_score(model, row) for row in second_random],
+                        _labels(second_random))
+        print(f"参考：第一批训练 → 第二批随机组  AUC {value:.3f}  n={len(second_random)}")
 
-    folds = stratified_folds(merged, args.folds, args.seed)
+    if merged and live:
+        model = fit(merged, min_support=args.min_support)
+        value = roc_auc([_score(model, row) for row in live], _labels(live))
+        print(f"**决定性：前两批训练 → 第三批（线上分布）**  AUC {value:.3f}  n={len(live)}")
+    else:
+        print("第三批为空，跳过留出验证")
+
+    folds = stratified_folds(merged + live, args.folds, args.seed)
     pooled_scores, pooled_labels = [], []
     for index, test in enumerate(folds):
         train = [row for other, fold in enumerate(folds) if other != index
@@ -112,7 +122,7 @@ def main(argv=None) -> int:
     pooled = roc_auc(pooled_scores, pooled_labels)
     print(f"合并 5 折 AUC: {pooled:.3f}（全样本；含按模型挑出的难例，偏低）")
 
-    model = fit(merged, min_support=args.min_support)
+    model = fit(merged + live, min_support=args.min_support)
     model.save(args.out)
     pairs = sorted(zip(model.tags, model.weights), key=lambda pair: pair[1])
     print("\n最像糖水的标签：")

@@ -187,10 +187,10 @@ def load_batch(conn, batch_dir: Path | None = None):
         if not label:
             continue
         record = None
-        # Batch 1 was analysed under its own source; batch 2 reuses pictures
-        # the daily pipeline had already analysed under their real source.
-        for source, source_id in ((item.get("source"), item.get("source_id")),
-                                  (BATCH_SOURCE, item["key"])):
+        # Batches 1 and 3 were analysed under their own source; batch 2 reuses
+        # pictures the daily pipeline had already analysed under the real one.
+        for source, source_id in ((BATCH_SOURCE, item["key"]),
+                                  (item.get("source"), item.get("source_id"))):
             if not source:
                 continue
             record = conn.execute(

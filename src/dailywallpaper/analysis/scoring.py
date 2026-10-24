@@ -23,6 +23,23 @@ FORMULAIC_PENALTY = 0.5
 # desktop fit (-9..+9) and the weather bonus (+5) together could give back.
 # Eight keeps the "dress it down" intent at the scale of every other nudge.
 FORMULAIC_PENALTY_CAP = 8.0
+# When a learned sugar-water model is available it takes over from the
+# formulaic nudge: the model separates sugar water at AUC 0.771 on a held-out
+# live batch, where this score manages 0.577 (docs/PLAN-media-selection.md).
+# Its 0..100 output maps onto at most this many points, the scale every other
+# adjustment uses.
+SUGAR_PENALTY_MAX = 10.0
+
+
+def sugar_penalty(score) -> float:
+    """Dock a picture that matches the learned sugar-water pattern.
+
+    ``None`` (no model, or no known tags) and anything at or below the
+    neutral 50 cost nothing -- silence must not be read as approval.
+    """
+    if score is None or score <= 50:
+        return 0.0
+    return SUGAR_PENALTY_MAX * (score - 50.0) / 50.0
 EXPLORE_WEIGHT = 0.55
 PERSONALIZE_WEIGHT = 0.45
 COLD_START_PRIOR = 60.0
@@ -240,6 +257,7 @@ def boost_score(scores: VisionScores, boost_tags) -> float:
 def final_score(
     scores: VisionScores, source: str, profile, recent, weather_code: int,
     desktop_fit: float | None = None, hour: int | None = None,
+    sugar: float | None = None,
 ) -> DecisionScores:
     explore = explore_score(scores, source, recent)
     raw_personalize = personalize_score(scores, profile, source, weather_code)
@@ -250,10 +268,15 @@ def final_score(
         ) * COLD_START_PRIOR
     else:
         personalize = COLD_START_PRIOR
-    penalty = min(
-        FORMULAIC_PENALTY_CAP,
-        FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE),
-    )
+    if sugar is None:
+        penalty = min(
+            FORMULAIC_PENALTY_CAP,
+            FORMULAIC_PENALTY * max(0, scores.formulaic - FORMULAIC_BASE),
+        )
+    else:
+        # A model that knows the concept replaces the blunt score, rather than
+        # stacking on top of it.
+        penalty = sugar_penalty(sugar)
     penalty += avoid_penalty(
         scores,
         getattr(profile, "avoid_tags", ()),

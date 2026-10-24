@@ -41,9 +41,22 @@ from dailywallpaper.analysis.scoring import (  # noqa: E402
     explore_score,
     final_score,
     personalize_score,
+    sugar_penalty,
 )
 from dailywallpaper.analysis.vision import VisionScores  # noqa: E402
 from dailywallpaper.recommend.profile import PreferenceProfile  # noqa: E402
+from dailywallpaper.recommend.sugar import SugarModel  # noqa: E402
+
+
+def _sugar_model(path: Path | None = None):
+    """The trained sugar model, or None (then the old nudge stays in charge)."""
+    target = path or (ROOT / "data" / "sugar_model.json")
+    if not Path(target).exists():
+        return None
+    try:
+        return SugarModel.load(target)
+    except Exception:
+        return None
 
 PROMPT_VERSION = "v3"
 POOL_SIZE = 40
@@ -194,22 +207,26 @@ def kfold_split(rows, k: int = 5, seed: int = SEED):
     ]
 
 
-def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1) -> dict:
+def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1,
+                   sugar=None) -> dict:
     """Pairwise accuracy per strategy, averaged over the folds.
 
     The profile is rebuilt from the training folds every time, so a picture
     that taught the profile never appears in the folds that judge it.
     """
-    names = ("explore", "personalize", "blend", "weighted")
-    per_fold = {name: [] for name in names}
+    per_fold: dict[str, list[float]] = {}
     pairs_total = 0
     for train, test in kfold_split(rows, k, seed):
         profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
         scored = [
-            (score_variants(_scores_from_row(row), row["source"], profile), row["rating"])
+            (score_variants(_scores_from_row(row), row["source"], profile,
+                            sugar=sugar), row["rating"])
             for row in test
         ]
-        for name in names:
+        if not scored:
+            continue
+        for name in scored[0][0]:
+            per_fold.setdefault(name, [])
             accuracy, pairs = pairwise_accuracy(
                 [scores[name] for scores, _ in scored],
                 [rating for _, rating in scored], min_gap)
@@ -257,11 +274,14 @@ def _json(raw, fallback):
 
 
 def score_variants(scores: VisionScores, source: str, profile,
-                   weather_code: int = 0) -> dict[str, float]:
-    """The three things worth comparing, on exactly the same picture.
+                   weather_code: int = 0, sugar=None) -> dict[str, float]:
+    """The strategies worth comparing, on exactly the same picture.
 
     ``personalize`` carries the same cold-start smoothing the weighted score
     uses; without it a profile of a few ratings would look artificially good.
+
+    ``sugar`` is the learned model; when it is present a fourth variant shows
+    what ranking would do with the sugar penalty instead of the formulaic one.
     """
     explore = explore_score(scores, source, ())
     raw = personalize_score(scores, profile, source, weather_code)
@@ -276,12 +296,16 @@ def score_variants(scores: VisionScores, source: str, profile,
     # The plain mix without the formulaic penalty, so a run can tell whether a
     # drop comes from the 55/45 weighting or from the penalty stacked on top.
     blend = EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize
-    return {
+    variants = {
         "explore": explore,
         "personalize": personalize,
         "blend": blend,
         "weighted": full.final,
     }
+    if sugar is not None:
+        tags = list(scores.style_tags) + list(scores.mood_tags)
+        variants["sugar"] = blend - sugar_penalty(sugar.score(tags))
+    return variants
 
 
 def _ordered(rows, scores_by_id, key: str):
@@ -336,16 +360,16 @@ def data_quality(rows) -> dict:
 # ------------------------------------------------------------ evaluation ---
 
 def evaluate(test_rows, profile, seed: int = SEED, pool_size: int = POOL_SIZE,
-             top_k: int = TOP_K) -> dict:
+             top_k: int = TOP_K, sugar=None) -> dict:
     """NDCG@5 per pseudo-pool, averaged; plus a whole-split Spearman."""
     scored = []
     for row in test_rows:
         scores = _scores_from_row(row)
-        variants = score_variants(scores, row["source"], profile)
+        variants = score_variants(scores, row["source"], profile, sugar=sugar)
         scored.append((dict(row), variants))
 
     pools = make_pools(scored, size=pool_size, seed=seed)
-    names = ("explore", "personalize", "blend", "weighted")
+    names = tuple(scored[0][1]) if scored else ()
     per_pool = {name: [] for name in (*names, "random")}
     all_scores = {name: [] for name in names}
     all_ratings = []
@@ -419,10 +443,12 @@ def render_report(summary, quality, history, stats, cv) -> str:
         "explore": "纯探索",
         "personalize": "纯个性化",
         "blend": "55/45 纯混合",
-        "weighted": "55/45 + 惩罚（现状）",
+        "weighted": "55/45 + 惩罚（原状）",
+        "sugar": "55/45 + 糖水判别式",
     }
+    available = [name for name in strategy_labels if name in cv]
     best_label = strategy_labels[
-        max(strategy_labels, key=lambda name: cv[name]["accuracy_mean"])
+        max(available, key=lambda name: cv[name]["accuracy_mean"])
     ]
     lines = [
         "# 离线评估报告",
@@ -463,7 +489,8 @@ def render_report(summary, quality, history, stats, cv) -> str:
         *[
             f"| {strategy_labels[name]} | {cv[name]['accuracy_mean']:.3f} "
             f"(±{cv[name]['accuracy_sd']:.3f}) |"
-            for name in ("explore", "personalize", "blend", "weighted")
+            for name in ("explore", "personalize", "blend", "weighted", "sugar")
+            if name in cv
         ],
         "",
         f"最好的策略：**{best_label}**",
@@ -551,8 +578,9 @@ def main(argv=None) -> int:
                  pools=len(make_pools(test, args.pool_size, args.seed)))
 
     profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
-    summary = evaluate(test, profile, args.seed, args.pool_size)
-    cv = cross_validate(rows, k=args.folds, seed=args.seed)
+    sugar = _sugar_model()
+    summary = evaluate(test, profile, args.seed, args.pool_size, sugar=sugar)
+    cv = cross_validate(rows, k=args.folds, seed=args.seed, sugar=sugar)
     quality = data_quality(rows)
     history = history_check(conn, profile)
 

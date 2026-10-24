@@ -6,11 +6,13 @@ import pytest
 from dailywallpaper.analysis.scoring import (
     CONTEXT_WEIGHT,
     FORMULAIC_PENALTY_CAP,
+    SUGAR_PENALTY_MAX,
     context_adjust,
     explore_score,
     final_score,
     hard_gate,
     rank,
+    sugar_penalty,
 )
 from dailywallpaper.analysis.vision import VisionScores
 from dailywallpaper.models import Decision
@@ -87,6 +89,27 @@ def test_the_formulaic_penalty_has_a_ceiling():
     # (correlation -0.80 / -0.90 with formulaic), so an unbounded penalty
     # counted one signal twice and could outweigh every other adjustment.
     assert original.final - extreme.final == pytest.approx(FORMULAIC_PENALTY_CAP)
+
+
+def test_sugar_penalty_only_docks_above_neutral():
+    assert sugar_penalty(None) == 0.0
+    assert sugar_penalty(50) == 0.0
+    assert sugar_penalty(30) == 0.0
+    assert sugar_penalty(100) == pytest.approx(SUGAR_PENALTY_MAX)
+
+
+def test_a_sugar_score_replaces_the_formulaic_penalty():
+    neutral_sugar = final_score(_scores(formulaic=100), "wallhaven",
+                                _Profile(n=10), [], 0, sugar=50)
+    sugary = final_score(_scores(formulaic=100), "wallhaven",
+                         _Profile(n=10), [], 0, sugar=100)
+
+    assert neutral_sugar.final - sugary.final == pytest.approx(SUGAR_PENALTY_MAX)
+    # With a model present the formulaic score must not also be applied:
+    # otherwise a picture would be charged twice for one thing.
+    plain_formulaic = final_score(_scores(formulaic=20), "wallhaven",
+                                  _Profile(n=10), [], 0, sugar=50)
+    assert plain_formulaic.final == pytest.approx(neutral_sugar.final)
 
 
 def test_personalize_reads_mood_as_well_as_style():

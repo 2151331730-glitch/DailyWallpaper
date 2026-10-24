@@ -36,6 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 class EvaluateMixin:
+    def _sugar_score(self, scores):
+        """The learned sugar-water score, or None when there is no model.
+
+        None is what tells ``final_score`` to fall back to the formulaic
+        nudge, so a machine without ``data/sugar_model.json`` behaves exactly
+        as before.
+        """
+        model = getattr(self, "sugar", None)
+        if model is None:
+            return None
+        return model.score(list(scores.style_tags) + list(scores.mood_tags))
+
     def _desktop_fit(self, path):
         """Measure a candidate once per process.
 
@@ -250,6 +262,7 @@ class EvaluateMixin:
                     record.scores, candidate.source, profile, recent, weather_code,
                     desktop_fit=None if fit is None else fit.score,
                     hour=hour,
+                    sugar=self._sugar_score(record.scores),
                 )
                 reason = record.scores.reason
                 if weather_text:
@@ -321,6 +334,7 @@ class EvaluateMixin:
                 record.scores, decision.source, profile, recent, weather_code,
                 desktop_fit=None if fit is None else fit.score,
                 hour=hour,
+                sugar=self._sugar_score(record.scores),
             )
             reviewed.append(
                 replace(
