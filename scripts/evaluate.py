@@ -12,9 +12,11 @@ Method (and why):
 - The ratings are split by score, 70/30. The profile is built from the 70%
   and the metrics are measured on the 30%: evaluating on the same ratings
   that taught the profile would just measure how well it memorised them.
-- NDCG@5 needs several queries, so the test split is dealt into pools of
-  about one day's candidate count. A single 150-item ranking would be one
-  noisy query; forty-item pools look like the decision the app really faces.
+- NDCG@5 needs several queries, so a test split is dealt into pools of about
+  one day's candidate count. Forty-item pools look like the decision the app
+  really faces. Every cross-validation fold deals its own pools, otherwise
+  the whole report would rest on one or two queries and its standard
+  deviation would be a constant zero.
 - Random is the floor. If a variant cannot beat it, it is not doing anything.
 """
 from __future__ import annotations
@@ -504,7 +506,11 @@ def render_report(summary, quality, history, stats, cv) -> str:
         f"| 有 {PROMPT_VERSION} 分析、可参与评估 | {stats['usable']} |",
         f"| 训练集（建画像） | {stats['train']} |",
         f"| 测试集（只评估） | {stats['test']} |",
-        f"| 伪候选池 | {stats['pools']} 个 × {stats['pool_size']} 张 |",
+        f"| 单次切分的伪候选池（仅用于 Spearman） "
+        f"| {stats['pools']} 个 × {stats['pool_size']} 张 |",
+        *([f"| 有评分但无法评估 | {stats['unevaluable']} 张"
+           f"（模型返回值不合约，分析不落库） |"]
+          if stats.get("unevaluable") else []),
         "",
         "## 数据质量",
         "",
@@ -599,6 +605,11 @@ def render_report(summary, quality, history, stats, cv) -> str:
                 "不代表 Steam 动态壁纸。" if composition else
                 "结论主要说明静态图的审美排序，不代表 Steam 动态壁纸。"),
         "- 离线回放测的是排序逻辑；它回答不了“换个来源能不能找到更好的图”。",
+        *([f"- 有 {stats['unevaluable']} 张评分没有分析：视觉模型连续返回不合约的字段"
+           "（重新编码后再试仍失败），这几张只能排除在指标之外。"]
+          if stats.get("unevaluable") else []),
+        "- 四维分数完全相同的组数很多，说明模型对相近的图给出的分辩不出差别；"
+        "排序里那部分名次由探索分和画像分决定，不是由画质分决定。",
         "- 训练/测试按评分分层切分，同一张图不会同时出现在两侧；但同一位作者的同系列作品",
         "  可能被分到两侧，会略微高估。",
         "",
@@ -630,6 +641,7 @@ def main(argv=None) -> int:
     for row in rows:
         by_source[row["source"]] = by_source.get(row["source"], 0) + 1
     stats = {"ratings": count_ratings(conn), "usable": len(rows),
+             "unevaluable": count_ratings(conn) - len(rows),
              "by_source": dict(sorted(by_source.items(),
                                       key=lambda item: -item[1]))}
     train, test = split_rows(rows, args.test_ratio, args.seed)
