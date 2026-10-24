@@ -2,7 +2,7 @@
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
 #define MyAppName "每日壁纸"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "郭欣哈"
 #define MyAppExeName "DailyWallpaper.exe"
 
@@ -58,14 +58,30 @@ function SendMessageTimeoutW(hWnd: HWND; Msg: UINT; wParam: Longint;
 procedure ApplyDarkTaskbar();
 var
   ignored: DWORD;
+  original: Cardinal;
 begin
-  RegWriteDWordValue(HKCU,
-    'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
-    'SystemUsesLightTheme', 0);
-  { The Search key is owned by SYSTEM on some machines; a refusal is fine. }
-  RegWriteDWordValue(HKCU,
-    'Software\Microsoft\Windows\CurrentVersion\Search',
-    'SearchboxTaskbarMode', 1);
+  { Remember the old value so uninstall can put the user's theme back.
+    A missing value means Windows' default (light); nothing to save. }
+  if RegQueryDWordValue(HKCU,
+       'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
+       'SystemUsesLightTheme', original) then
+    RegWriteDWordValue(HKCU, 'Software\DailyWallpaper',
+      'OrigSystemUsesLightTheme', original);
+  { Both writes can be refused (the Search key is owned by SYSTEM on some
+    machines). Inno raises on a refused RegWrite*, so each one is guarded:
+    an install must never stop with an error dialog because of a theme. }
+  try
+    RegWriteDWordValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
+      'SystemUsesLightTheme', 0);
+  except
+  end;
+  try
+    RegWriteDWordValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Search',
+      'SearchboxTaskbarMode', 1);
+  except
+  end;
   { Broadcast a settings change so the shell re-reads the theme. }
   SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0,
     SMTO_ABORTIFHUNG, 1000, ignored);
@@ -73,6 +89,7 @@ end;
 
 var
   SeedPage: TInputOptionWizardPage;
+  WePage: TInputOptionWizardPage;
 
 procedure InitializeWizard;
 var
@@ -97,12 +114,61 @@ begin
     Existing := Raw;
   if Pos('"use_seed": false', Existing) > 0 then
     SeedPage.Values[0] := False;
+
+  { Wallpaper Engine starts through an auto-start Windows service, before
+    Explorer is up, and puts its own live wallpaper back at every login: that
+    is the old image a new user sees for the first half minute. Turning it off
+    is the only way to make the boot show this app's wallpaper from the start.
+    The choice is remembered so an upgrade does not silently undo it. }
+  WePage := CreateInputOptionPage(SeedPage.ID,
+    'Wallpaper Engine 的开机自启动',
+    '要不要关闭 Wallpaper Engine 的开机自启动？',
+    'Wallpaper Engine 会在登录时（比桌面出现还早）恢复它自己的动态壁纸，' +
+    '所以开机会先看到一张旧壁纸，过一会儿才被本程序换掉。' +
+    '关闭它不会影响动态壁纸：需要动态壁纸时，本程序会自己把 WE 启动起来。' +
+    '关闭会结束正在运行的 Wallpaper Engine，并需要管理员权限（安装过程中弹一次 UAC）。' +
+    '卸载本程序时，这些开关会自动还原。',
+    True, False);
+  WePage.Add('关闭 Wallpaper Engine 的开机自启动（推荐）');
+  WePage.Add('保留，我不介意开机先看到旧壁纸');
+  WePage.Values[0] := True;
+  if Pos('"disable_we_autostart": false', Existing) > 0 then
+    WePage.Values[0] := False;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DirName: String;
+  ResultCode: Integer;
+  ignored: DWORD;
+  original: Cardinal;
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    { A tray process left running keeps the exe locked, so the uninstaller
+      cannot remove it cleanly. Stop it, then let the app delete the keys it
+      stored in the Windows credential manager. }
+    Exec(ExpandConstant('{sys}\taskkill.exe'),
+      '/F /IM DailyWallpaper.exe', '', SW_HIDE, ewWaitUntilTerminated,
+      ResultCode);
+    Exec(ExpandConstant('{app}\{#MyAppExeName}'), '--forget', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    { Put back the taskbar/theme choice the installer changed. }
+    if RegQueryDWordValue(HKCU, 'Software\DailyWallpaper',
+         'OrigSystemUsesLightTheme', original) then
+    begin
+      try
+        RegWriteDWordValue(HKCU,
+          'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
+          'SystemUsesLightTheme', original);
+      except
+      end;
+      RegDeleteValue(HKCU, 'Software\DailyWallpaper',
+        'OrigSystemUsesLightTheme');
+      SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0,
+        SMTO_ABORTIFHUNG, 1000, ignored);
+    end;
+  end;
   if CurUninstallStep = usPostUninstall then
   begin
     { The Run value is written by the app at first launch, not declared in
@@ -120,6 +186,61 @@ begin
   end;
 end;
 
+function WantDisableWe(): Boolean;
+begin
+  { A silent install has no page to agree on this: taking another program's
+    autostart away (and prompting for UAC) without being asked would be wrong,
+    so only an interactive install can turn it off. }
+  if WizardSilent then
+    Result := False
+  else
+    Result := WePage.Values[0];
+end;
+
+procedure DisableWeAutostart();
+var
+  ResultCode: Integer;
+begin
+  { The app owns this logic (it also knows where WE is installed and which of
+    the service / Run-key mechanisms that install uses), so Setup only calls
+    it. A declined UAC prompt comes back as a non-zero exit code. }
+  if not Exec(ExpandConstant('{app}\{#MyAppExeName}'), '--disable-we-autostart',
+              ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated,
+              ResultCode) then
+  begin
+    MsgBox('没能运行 {#MyAppExeName} 来关闭 Wallpaper Engine 的开机自启动。',
+           mbInformation, MB_OK);
+    Exit;
+  end;
+  if ResultCode <> 0 then
+    MsgBox('没能关闭 Wallpaper Engine 的开机自启动（可能拒绝了管理员权限请求）。'
+           + #13#10 +
+           '可以稍后在 Wallpaper Engine 的「设置 → 常规」里手动取消勾选'
+           + '「随 Windows 启动」。', mbInformation, MB_OK);
+end;
+
+function BoolWord(B: Boolean): String;
+begin
+  if B then
+    Result := 'true'
+  else
+    Result := 'false';
+end;
+
+procedure EnsurePref(var Json: String; Name, Value: String);
+begin
+  { An install over an existing data directory meets a prefs file the app
+    wrote years of choices into; it holds no key this page owns, so the
+    StringChangeEx above has nothing to replace and the choice would be
+    forgotten on the next upgrade. Insert the missing key instead. }
+  if Pos('"' + Name + '"', Json) > 0 then
+    Exit;
+  if Pos('{}', Json) > 0 then
+    StringChangeEx(Json, '{}', '{"' + Name + '": ' + Value + '}', False)
+  else
+    StringChangeEx(Json, '}', ', "' + Name + '": ' + Value + '}', False);
+end;
+
 procedure WriteInstallPrefs(DirName: String);
 var
   Path, Fresh, Existing: String;
@@ -131,9 +252,13 @@ begin
   else
     Fresh := '{"use_seed": false';
   if WizardIsTaskSelected('autostart') then
-    Fresh := Fresh + ', "autostart": true}'
+    Fresh := Fresh + ', "autostart": true'
   else
-    Fresh := Fresh + ', "autostart": false}';
+    Fresh := Fresh + ', "autostart": false';
+  if WantDisableWe() then
+    Fresh := Fresh + ', "disable_we_autostart": true}'
+  else
+    Fresh := Fresh + ', "disable_we_autostart": false}';
 
   Existing := '';
   if FileExists(Path) then
@@ -156,6 +281,16 @@ begin
         StringChangeEx(Existing, '"autostart": false', '"autostart": true', True)
       else
         StringChangeEx(Existing, '"autostart": true', '"autostart": false', True);
+      if WantDisableWe() then
+        StringChangeEx(Existing, '"disable_we_autostart": false',
+                       '"disable_we_autostart": true', True)
+      else
+        StringChangeEx(Existing, '"disable_we_autostart": true',
+                       '"disable_we_autostart": false', True);
+      EnsurePref(Existing, 'use_seed', BoolWord(SeedPage.Values[0]));
+      EnsurePref(Existing, 'autostart',
+                 BoolWord(WizardIsTaskSelected('autostart')));
+      EnsurePref(Existing, 'disable_we_autostart', BoolWord(WantDisableWe()));
     end;
     SaveStringToFile(Path, Existing, False);
   end
@@ -172,6 +307,8 @@ begin
     DirName := ExpandConstant('{localappdata}\DailyWallpaper');
     ForceDirectories(DirName);
     WriteInstallPrefs(DirName);
+    if WantDisableWe() then
+      DisableWeAutostart();
     if WizardIsTaskSelected('darktaskbar') then
       ApplyDarkTaskbar();
   end;

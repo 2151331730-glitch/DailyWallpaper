@@ -125,11 +125,13 @@ def _environment_report(cfg) -> str:
 
         if not proxy_alive(proxy):
             lines.append(
-                f"· 代理 {proxy} 没有监听：Wallhaven 不可用，只剩 Bing（一天一张）"
+                f"· 代理 {proxy} 没有监听：Wallhaven 不可用，只剩 Bing（一天一张）。"
+                "启动代理后到「设置 → 代理」点“测试代理”。"
             )
     else:
         lines.append(
-            "· 没有配置代理：Wallhaven 在国内需要代理，不开就只剩 Bing"
+            "· 没有配置代理：Wallhaven 在国内需要代理，不开就只剩 Bing。"
+            "在「设置 → 代理（可选）」里填 http://127.0.0.1:7892 即可。"
         )
     return "\n".join(lines)
 
@@ -150,6 +152,13 @@ def ensure_first_run(cfg) -> bool:
         if not ok or not key.strip():
             return False
         keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, key.strip())
+        QMessageBox.information(
+            None,
+            "每日壁纸 · 提示",
+            "key 已保存。若之后出现“没有候选通过筛选”，"
+            "多半是 key 无效或余额不足：到「设置 → 智谱 API key」"
+            "粘贴 key 后点“测试 key”就能确认。",
+        )
 
     if not install_prefs().get("first_run_done"):
         QMessageBox.information(

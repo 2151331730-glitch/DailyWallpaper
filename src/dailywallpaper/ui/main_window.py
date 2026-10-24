@@ -66,6 +66,7 @@ class MainWindow(QWidget):
         super().__init__(parent)
         self.service = service
         self.conn = conn
+        self.config = config
         self.review_model = review_model
         self.setWindowTitle("每日壁纸")
         icon_path = asset("icon.png")
@@ -182,7 +183,23 @@ class MainWindow(QWidget):
     def _open_rating_for(self, wallpaper_id: int) -> None:
         from dailywallpaper.ui.rating_dialog import RatingDialog
 
-        RatingDialog(self.rating_service, wallpaper_id, self).exec()
+        budget = None
+        if self.config is not None:
+            try:
+                from dailywallpaper.cost.budget import BudgetGuard
+                from dailywallpaper.state.machine import SystemClock
+
+                budget = BudgetGuard(
+                    self.conn,
+                    self.config.budget.monthly_cny,
+                    self.config.budget.warn_ratio,
+                    SystemClock(),
+                )
+            except Exception:
+                budget = None
+        RatingDialog(
+            self.rating_service, wallpaper_id, self, budget=budget
+        ).exec()
         self.history.refresh()
         self.refresh()
 

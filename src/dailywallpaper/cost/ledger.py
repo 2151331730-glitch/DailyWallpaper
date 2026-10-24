@@ -20,6 +20,14 @@ def estimate_cost(tokens_in: int, max_output_tokens: int, pricing) -> float:
     ) / 1_000_000
 
 
+def actual_cost(tokens_in: int, tokens_out: int, pricing) -> float:
+    """What a call really cost, from the usage the provider reported."""
+    return (
+        tokens_in * pricing.input_cny_per_million
+        + tokens_out * pricing.output_cny_per_million
+    ) / 1_000_000
+
+
 def record_usage(
     conn,
     provider: str,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -38,16 +39,21 @@ _WEATHER_TAG_RULES: tuple[tuple[tuple[int, int], frozenset[str]], ...] = (
 )
 
 
-def weather_tags(code: int) -> set[str]:
-    """Map a WMO weather code to its mood tags; unknown codes map to empty."""
+@lru_cache(maxsize=64)
+def weather_tags(code: int) -> frozenset[str]:
+    """Map a WMO weather code to its mood tags; unknown codes map to empty.
+
+    Frozen and cached: the mapping is called once per candidate during
+    ranking, and callers union it into their own set.
+    """
     try:
         value = int(code)
     except (TypeError, ValueError):
-        return set()
+        return frozenset()
     for (low, high), tags in _WEATHER_TAG_RULES:
         if low <= value <= high:
-            return set(tags)
-    return set()
+            return frozenset(tags)
+    return frozenset()
 
 
 def weather_fit(mood_tags: Iterable[str] | None, code: int) -> int:

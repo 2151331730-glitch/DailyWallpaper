@@ -192,7 +192,7 @@ def test_manual_change_bypasses_pause_with_the_real_machine(tmp_path):
     wid = _wallpaper(conn)
 
     class _Pipeline:
-        def prepare(self, now, force=False):
+        def prepare(self, now, force=False, dry_run=False):
             pass
 
         def pick(self, now, dry_run=False):

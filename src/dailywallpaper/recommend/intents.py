@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from dailywallpaper.db import now_iso
 
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 KINDS = ("local", "preference", "search", "action", "conditional")
 DEFAULT_MODEL = "glm-4.6v-flash"
+# The same upper bound the vision path uses; classification is a much smaller
+# call, but the budget guard needs a number before the call happens.
+CLASSIFY_ESTIMATE_CNY = 0.003
 
 CLASSIFY_PROMPT = """You turn one user note about a desktop wallpaper into JSON.
 Return JSON only, no prose:
@@ -51,15 +55,27 @@ Rules:
 
 
 def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
-                  client=None) -> dict | None:
+                  client=None, budget=None) -> dict | None:
     """Return a validated intent dict, or None when the model cannot decide.
 
     ``client`` is injectable so tests can exercise the parse path without a
-    network call.
+    network call. ``budget`` (a BudgetGuard) makes the call count against the
+    monthly cap like every other model request; without it a paid model could
+    be used here without the cap ever noticing.
     """
     text = (text or "").strip()
     if not text:
         return None
+    usage_id = None
+    if budget is not None:
+        try:
+            usage_id = budget.prewrite_estimate(
+                provider="zhipu", model=model, purpose="classify",
+                estimate=CLASSIFY_ESTIMATE_CNY,
+            )
+        except Exception:
+            usage_id = None
+    started = time.monotonic()
     if client is None:
         from openai import OpenAI
 
@@ -73,6 +89,7 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
             base_url="https://open.bigmodel.cn/api/paas/v4",
             max_retries=0,
             http_client=httpx.Client(trust_env=False, timeout=30.0),
+            timeout=30.0,  # the SDK default (600 s) would outlast the dialog
         )
     try:
         response = client.chat.completions.create(
@@ -88,7 +105,28 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
         payload = json.loads(response.choices[0].message.content or "{}")
     except Exception as exc:
         logger.warning(f"intent classification failed: {exc}")
+        if usage_id is not None:
+            try:
+                budget.settle_usage(
+                    usage_id, 0, 0, 0.0, 500,
+                    int((time.monotonic() - started) * 1000),
+                )
+            except Exception:
+                pass
         return None
+    if usage_id is not None:
+        try:
+            usage = getattr(response, "usage", None)
+            budget.settle_usage(
+                usage_id,
+                int(getattr(usage, "prompt_tokens", 0) or 0),
+                int(getattr(usage, "completion_tokens", 0) or 0),
+                CLASSIFY_ESTIMATE_CNY,
+                200,
+                int((time.monotonic() - started) * 1000),
+            )
+        except Exception:
+            pass
     return _validate(payload)
 
 

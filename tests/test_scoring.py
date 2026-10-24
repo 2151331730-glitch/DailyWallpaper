@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from dailywallpaper.analysis.scoring import explore_score, final_score, hard_gate, rank
+from dailywallpaper.analysis.scoring import (
+    CONTEXT_WEIGHT,
+    context_adjust,
+    explore_score,
+    final_score,
+    hard_gate,
+    rank,
+)
 from dailywallpaper.analysis.vision import VisionScores
 from dailywallpaper.models import Decision
 
@@ -197,3 +204,36 @@ def test_the_boost_is_capped():
     )
 
     assert stacked.final == pytest.approx(plain.final + 18)
+
+
+def test_a_moody_picture_gets_a_bonus_on_a_rainy_night():
+    dark = _scores(mood_tags=["moody", "rain"], palette=["#0b0d12"])
+    bright = _scores(mood_tags=["bright", "sunny"], palette=["#f2f4f6"])
+
+    # WMO 61 = rain, 23:00.
+    assert context_adjust(dark, 61, 23) > 0
+    assert context_adjust(dark, 61, 23) > context_adjust(bright, 61, 23)
+
+
+def test_a_bright_picture_gets_a_bonus_at_clear_noon():
+    bright = _scores(mood_tags=["bright", "blue"], palette=["#eef3f7"])
+    dark = _scores(mood_tags=["dark", "night"], palette=["#0b0d12"])
+
+    assert context_adjust(bright, 0, 12) > 0
+    assert context_adjust(bright, 0, 12) > context_adjust(dark, 0, 12)
+
+
+def test_context_never_punishes_and_never_exceeds_its_weight():
+    worst = _scores(mood_tags=["night"], palette=["#ffffff"])
+
+    assert context_adjust(worst, 0, 12) >= 0
+    for code, hour in ((0, 12), (61, 23), (71, 8), (95, 18), (3, 14)):
+        assert context_adjust(_scores(), code, hour) <= CONTEXT_WEIGHT
+
+
+def test_context_is_zero_when_nothing_is_known():
+    # No palette, no matching mood: the old ranking must be untouched.
+    bare = _scores(palette=[], mood_tags=["plain"])
+
+    assert context_adjust(bare, 0, None) == 0
+    assert context_adjust(bare, 61, 12) == 0

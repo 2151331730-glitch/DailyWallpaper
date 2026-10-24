@@ -2,6 +2,7 @@
 """Apply a chosen wallpaper and keep an undo record in change_log."""
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -31,6 +32,26 @@ def _spawn_daemon(target):
     return thread
 
 
+# The tick thread changes the wallpaper while the guard thread re-checks it
+# every ten seconds, and the tray's undo/sound actions run on the UI thread.
+# Each owns a different ApplyService, so the lock has to be process-wide:
+# without it a guard pass that started a moment earlier can put the old
+# wallpaper back over a fresh one and leave the desktop disagreeing with
+# change_log.
+_APPLY_LOCK = threading.RLock()
+
+
+def _serialised(method):
+    """Run a desktop-changing entry point under the shared apply lock."""
+
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        with _APPLY_LOCK:
+            return method(*args, **kwargs)
+
+    return wrapper
+
+
 def _norm(path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
@@ -46,11 +67,14 @@ class ApplyService:
 
     def __init__(self, conn, applier, we=None, clock=None, dynamic_applier=None,
                  recheck_delays=(), sleep=None, spawn=None, style="fill",
-                 min_resolution=None, we_rendering=None):
+                 min_resolution=None, we_rendering=None, monitor=0):
         self.conn = conn
         self.applier = applier
         self.dynamic_applier = dynamic_applier
         self.we = we
+        # Which display WE opens on; 0 was hard-coded before, so the config
+        # setting had no effect on a multi-monitor machine.
+        self.monitor = int(monitor or 0)
         self.clock = clock
         # Spec 9.1: at login WE may restore its own wallpaper and overwrite a
         # static apply, so re-check a few seconds later and put it back.
@@ -109,7 +133,7 @@ class ApplyService:
 
     def _we_open(self, path: Path) -> bool:
         try:
-            return bool(self.we and self.we.open(path))
+            return bool(self.we and self.we.open(path, monitor=self.monitor))
         except Exception as exc:
             logger.warning(f"WE open failed: {exc}")
             return False
@@ -136,6 +160,7 @@ class ApplyService:
         ).fetchone()
         return row is not None and str(row[0]) != "0"
 
+    @_serialised
     def set_sound(self, enabled: bool) -> bool:
         """Turn live-wallpaper audio on or off (the tray switch)."""
         self.conn.execute(
@@ -344,6 +369,7 @@ class ApplyService:
             return self.dynamic_applier, "we"
         return self.applier, "static"
 
+    @_serialised
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         self.last_error = ""
         if not self._inspection_passes(Path(image_path)):
@@ -382,8 +408,10 @@ class ApplyService:
         self.conn.execute(
             """
             INSERT INTO change_log(change_date,wallpaper_id,previous_wallpaper,
-                                   previous_we_config_json,method,applied_at,success)
-            VALUES(?,?,?,?,?,?,1)
+                                   previous_we_config_json,method,applied_at,success,
+                                   previous_style,previous_tile,
+                                   previous_background_type)
+            VALUES(?,?,?,?,?,?,1,?,?,?)
             """,
             (
                 self._change_date(),
@@ -392,6 +420,9 @@ class ApplyService:
                 json.dumps({"file": we_before}, ensure_ascii=False),
                 "manual" if trigger == "manual" else method,
                 now_iso(),
+                getattr(state, "style", "") or "",
+                getattr(state, "tile", "") or "",
+                getattr(state, "background_type", None),
             ),
         )
         # The startup re-apply must use the file that was actually applied,
@@ -594,6 +625,7 @@ class ApplyService:
             logger.info(f"keep_visible: reopened WE project {target_folder.name}")
         return opened
 
+    @_serialised
     def preflight(self, image_path) -> bool:
         """Warm the next pick: inspect it and pre-encode the applied copy."""
         path = Path(image_path)
@@ -607,6 +639,7 @@ class ApplyService:
                 logger.warning(f"preflight conversion failed: {exc}")
         return ok
 
+    @_serialised
     def keep_visible(self) -> bool:
         """Undo a takeover of the desktop while the app runs.
 
@@ -659,6 +692,7 @@ class ApplyService:
             logger.warning(f"keep_visible: re-apply failed: {result.error}")
         return bool(result.ok)
 
+    @_serialised
     def ensure_visible(self) -> bool:
         """Re-assert the last successful wallpaper after a login (spec 9.1).
 
@@ -691,6 +725,7 @@ class ApplyService:
             logger.warning(f"startup re-apply failed: {exc}")
             return False
 
+    @_serialised
     def undo_last(self) -> bool:
         self._bump_epoch()  # a pending recheck must not restore what we undo
         row = self.conn.execute(
@@ -715,13 +750,21 @@ class ApplyService:
             return False
 
         current = self.applier.snapshot()
+        # Put the user's own style/tile back when the row recorded them; an
+        # old row has '' and keeps whatever the app set.
         self.applier.restore(
             WallpaperState(
                 wallpaper=row["previous_wallpaper"],
-                style=current.style,
-                tile=current.tile,
+                style=row["previous_style"] or current.style,
+                tile=row["previous_tile"] or current.tile,
             )
         )
+        # Undo means "as it was": a slideshow/Spotlight user gets the mode
+        # back, which setting the picture above just switched off.
+        previous_mode = row["previous_background_type"]
+        background = getattr(self.applier, "background_type", None)
+        if previous_mode not in (None, 0) and background is not None:
+            background.set(int(previous_mode))
         self._mark_undo()
         return True
 

@@ -105,6 +105,10 @@ class WallpaperState:
     wallpaper: str
     style: str
     tile: str
+    # BackgroundType before we switched the desktop to picture mode (2 =
+    # slideshow, 3 = Spotlight, 1 = solid colour). Restoring it on undo is
+    # what keeps a slideshow user from losing their rotation.
+    background_type: int | None = None
 
 @dataclass(frozen=True)
 class ApplyResult:
@@ -124,7 +128,20 @@ def convert_to_jpeg(src: Path, dest: Path) -> Path:
     except OSError:
         pass
     with Image.open(src) as im:
-        im.convert("RGB").save(dest, "JPEG", quality=95)
+        # A JPEG that is already RGB needs no transcode at all: copying keeps
+        # its colour profile and every bit of detail. Re-encoding dropped the
+        # ICC profile of a wide-gamut wallpaper and made it look grey.
+        if im.format == "JPEG" and im.mode in ("RGB", "L"):
+            im.close()
+            import shutil
+
+            shutil.copy2(src, dest)
+            return dest
+        icc = im.info.get("icc_profile")
+        options = {"quality": 95}
+        if icc:
+            options["icc_profile"] = icc
+        im.convert("RGB").save(dest, "JPEG", **options)
     return dest
 
 class WindowsStaticApplier:
@@ -159,6 +176,9 @@ class WindowsStaticApplier:
             wallpaper=self.registry.get("WallPaper"),
             style=self.registry.get("WallpaperStyle"),
             tile=self.registry.get("TileWallpaper"),
+            background_type=(
+                self.background_type.get() if self.background_type else None
+            ),
         )
 
     def current_wallpaper(self) -> str:
@@ -171,11 +191,14 @@ class WindowsStaticApplier:
         # desktop black. Always hand it an absolute path.
         image = Path(image).resolve()
         # Remember the mode so a failed apply can undo the mode switch too.
+        # The snapshot is taken before the switch: after it, BackgroundType
+        # already reads 0 and the user's slideshow/Spotlight choice is lost
+        # to the undo record as well as to the console.
         previous_mode = self.background_type.get() if self.background_type else None
+        state = self.snapshot()
         refusal = self._leave_slideshow_mode()
         if refusal:
             return ApplyResult(ok=False, error=refusal)
-        state = self.snapshot()
         try:
             jpeg = convert_to_jpeg(image, image.with_suffix(".apply.jpg"))
             self.registry.set("WallpaperStyle", STYLE_MAP[style])

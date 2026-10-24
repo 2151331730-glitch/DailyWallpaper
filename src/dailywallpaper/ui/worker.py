@@ -80,7 +80,22 @@ class Worker:
 
     def _loop(self) -> None:
         # The connection is created here, in the thread that will use it.
-        self._machine = self.machine_factory()
+        # Building the app touches the keyring and the database, both of
+        # which can be busy at login; a failure here used to kill the tick
+        # thread for the whole session, leaving a tray that looked healthy
+        # and never changed the wallpaper again.
+        self._machine = None
+        while not self._stop.is_set():
+            try:
+                self._machine = self.machine_factory()
+                break
+            except Exception as exc:
+                logger.warning(f"tick thread cannot start yet: {exc}; retrying")
+                self.last_result = ("start_failed", str(exc), False)
+                self.result_seq += 1
+                self._stop.wait(30)
+        if self._machine is None:
+            return
         pipeline = getattr(self._machine, "pipeline", None)
         if pipeline is not None:
             pipeline.should_stop = lambda: (
@@ -90,7 +105,10 @@ class Worker:
         self._ensure_visible()
         self._working.set()
         try:
-            self._tick_once()
+            # The launch tick may apply a wallpaper that was pre-picked and
+            # downloaded during the previous session, which is what makes a
+            # boot show a new image immediately.
+            self._tick_once(startup=True)
             self._warm_shortlist()
         finally:
             self._working.clear()
@@ -101,6 +119,10 @@ class Worker:
             self._working.set()
             try:
                 self._tick_once(manual=manual)
+                if self.last_action == "applied":
+                    # A fresh change makes the pool move on: warm it and lock
+                    # in the next pick while nobody is waiting.
+                    self._warm_shortlist()
             finally:
                 self._working.clear()
                 with self._lock:
@@ -164,12 +186,16 @@ class Worker:
             logger.warning(f"startup wallpaper check failed: {exc}")
 
     def _warm_shortlist(self) -> None:
-        """Build today's candidate pool before anyone asks for it.
+        """Build today's candidate pool and pre-decide the next wallpaper.
 
         A tick that finds the day already changed returns without preparing,
         so the next "换一张" had to pay the whole fetch + ffmpeg + vision cost
         on the click. Warming here (prepare is once-per-day in memory) makes
         that click pick from a ready shortlist.
+
+        The same pass chooses and downloads the next wallpaper into ``state``,
+        so the following boot applies that finished file in under a second
+        instead of running the whole pipeline first.
         """
         pipeline = getattr(self._machine, "pipeline", None)
         clock = getattr(self._machine, "clock", None)
@@ -178,6 +204,17 @@ class Worker:
         _set_thread_priority(True)
         try:
             pipeline.prepare(clock.now())
+            # The shortlist lives in memory while the day stays marked as
+            # prepared in the database, so a restart left it empty and the
+            # next wallpaper could not be pre-picked at all. The pipeline
+            # decides whether that is the case: a prepare that just ran and
+            # found nothing must keep its backoff instead of refetching.
+            rehydrate = getattr(pipeline, "rehydrate", None)
+            if rehydrate is not None and not getattr(pipeline, "shortlist", None):
+                rehydrate(clock.now())
+            prepare_next = getattr(pipeline, "prepare_next", None)
+            if prepare_next is not None:
+                prepare_next(clock.now())
         except Exception as exc:  # warming must never kill the tick thread
             logger.warning(f"shortlist warm-up failed: {exc}")
         finally:
@@ -286,7 +323,7 @@ class Worker:
                 pipeline.shortlist = []
                 pipeline._prepared_on = None
 
-    def _tick_once(self, manual: bool = False) -> None:
+    def _tick_once(self, manual: bool = False, startup: bool = False) -> None:
         # The tick can spend minutes screening pictures; let the desktop stay
         # responsive by running it below normal priority.
         _set_thread_priority(True)
@@ -298,7 +335,7 @@ class Worker:
             except Exception as exc:
                 logger.warning(f"pending config not applied: {exc}")
             try:
-                result = self._machine.tick(manual=manual)
+                result = self._machine.tick(manual=manual, startup=startup)
             except Exception as exc:  # one bad tick must not end the thread
                 logger.warning(f"tick failed: {exc}")
                 self.last_action = "tick_failed"

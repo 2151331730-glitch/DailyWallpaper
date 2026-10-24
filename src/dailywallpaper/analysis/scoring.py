@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 
 from dailywallpaper.models import Decision
-from dailywallpaper.recommend.weather import weather_fit
+from dailywallpaper.recommend.weather import weather_fit, weather_tags
 
 from .vision import VisionScores
 
@@ -39,6 +39,98 @@ BOOST_CAP = 18
 # one that works on a desk, but only by a few points.
 DESKTOP_FIT_CENTER = 60.0
 DESKTOP_FIT_WEIGHT = 0.15
+# "Right now" fit (weather + hour) is a bonus of at most this many points.
+# It reorders near-ties; it never overturns the 55/45 taste ranking.
+CONTEXT_WEIGHT = 5.0
+# How "dark" each weather group makes the moment feel, and how much the
+# hour does; the picture's palette is compared against the mix.
+_WEATHER_DARKNESS = (
+    (0, 1, 0.0), (2, 3, 0.25), (45, 48, 0.4), (51, 67, 0.75),
+    (71, 77, 0.3), (80, 82, 0.75), (85, 86, 0.3), (95, 99, 0.9),
+)
+
+
+def _weather_darkness(code) -> float:
+    try:
+        value = int(code)
+    except (TypeError, ValueError):
+        return 0.3
+    for low, high, darkness in _WEATHER_DARKNESS:
+        if low <= value <= high:
+            return darkness
+    return 0.3
+
+
+def _hour_darkness(hour) -> float:
+    if hour is None:
+        return 0.0
+    if hour >= 22 or hour <= 5:
+        return 1.0
+    if 18 <= hour <= 21:
+        return 0.5
+    if 6 <= hour <= 7:
+        return 0.2
+    return 0.0
+
+
+def _palette_luminance(palette) -> float | None:
+    """Mean perceived brightness of the model's palette, 0 (black) to 1."""
+    values = []
+    for text in palette or ():
+        if not isinstance(text, str):
+            continue
+        digits = text.strip().lstrip("#")
+        if len(digits) != 6:
+            continue
+        try:
+            red = int(digits[0:2], 16)
+            green = int(digits[2:4], 16)
+            blue = int(digits[4:6], 16)
+        except ValueError:
+            continue
+        values.append((0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255)
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def context_adjust(scores: VisionScores, weather_code: int,
+                   hour: int | None = None) -> float:
+    """0..CONTEXT_WEIGHT for a picture that suits the weather and the hour.
+
+    Bonus-only on purpose: a rainy night should make a moody picture win a
+    tie, not rule out the bright one the user keeps rating 9. Without a
+    palette or a matching mood the adjustment is exactly zero, so the
+    ranking of existing candidates is unchanged when nothing is known.
+    """
+    darkness = min(
+        1.0,
+        max(0.0, 0.65 * _weather_darkness(weather_code) + 0.35 * _hour_darkness(hour)),
+    )
+    expected = weather_tags(weather_code)
+    if hour is not None:
+        if hour >= 22 or hour <= 5:
+            expected |= {"dark", "night", "moody"}
+        elif 18 <= hour <= 21:
+            expected |= {"warm", "cozy", "moody"}
+        elif 6 <= hour <= 9:
+            expected |= {"bright", "fresh", "warm"}
+    bonus = 0.0
+    luminance = _palette_luminance(getattr(scores, "palette", ()))
+    if luminance is not None:
+        target = 1.0 - darkness
+        closeness = 1.0 - abs(luminance - target)
+        # A clear fit earns credit; a mismatch simply earns none.
+        if closeness > 0.6:
+            bonus += 0.6 * min(1.0, (closeness - 0.6) / 0.4)
+    moods = {
+        tag.strip().lower()
+        for tag in (getattr(scores, "mood_tags", ()) or ())
+        if isinstance(tag, str)
+    }
+    if expected and moods & expected:
+        bonus += 0.4
+    return CONTEXT_WEIGHT * min(1.0, bonus)
 
 
 def hard_gate(scores: VisionScores) -> list[str]:
@@ -141,7 +233,7 @@ def boost_score(scores: VisionScores, boost_tags) -> float:
 
 def final_score(
     scores: VisionScores, source: str, profile, recent, weather_code: int,
-    desktop_fit: float | None = None,
+    desktop_fit: float | None = None, hour: int | None = None,
 ) -> DecisionScores:
     explore = explore_score(scores, source, recent)
     raw_personalize = personalize_score(scores, profile, source, weather_code)
@@ -168,7 +260,8 @@ def final_score(
         final=EXPLORE_WEIGHT * explore + PERSONALIZE_WEIGHT * personalize
         - penalty
         + boost
-        + adjust,
+        + adjust
+        + context_adjust(scores, weather_code, hour),
     )
 
 

@@ -36,6 +36,27 @@ logger = logging.getLogger(__name__)
 
 
 class EvaluateMixin:
+    def _desktop_fit(self, path):
+        """Measure a candidate once per process.
+
+        The review pass re-scores the same few files the screen pass just
+        measured; a 320x180 analysis is cheap, but doing it twice for every
+        top candidate is pure waste.
+        """
+        key = str(path)
+        cache = getattr(self, "_fit_cache", None)
+        if cache is None:
+            cache = self._fit_cache = {}
+        if key in cache:
+            return cache[key]
+        fit = None
+        try:
+            fit = measure_desktop_fit(path)
+        except Exception as exc:
+            logger.warning(f"desktop fit for {path} failed: {exc}")
+        cache[key] = fit
+        return fit
+
     def _recent_styles(self):
         rows = self.conn.execute(
             """
@@ -114,7 +135,7 @@ class EvaluateMixin:
         return profile
 
     def _evaluate(self, candidates, data_dir, profile, recent, weather_code,
-                  weather_text, recent_hashes, counters) -> None:
+                  weather_text, recent_hashes, counters, hour=None) -> None:
         """Screen and score one group of candidates into ``self.shortlist``."""
         for candidate in candidates:
             if counters["downloads"] >= self.cfg.app.max_downloads_per_day:
@@ -136,6 +157,10 @@ class EvaluateMixin:
                 )
                 if wallpaper_id in self._banned:
                     # Rated 1-2: the user never wants to see it again.
+                    continue
+                if self._rejected_recently(wallpaper_id):
+                    # Its full-size file failed inspection lately; scoring the
+                    # preview again would only queue another doomed download.
                     continue
                 if not candidate.preview_url:
                     continue
@@ -220,16 +245,11 @@ class EvaluateMixin:
                             record = stale
                 if hard_gate(record.scores):
                     continue
-                fit = None
-                try:
-                    fit = measure_desktop_fit(canonical)
-                except Exception as exc:
-                    logger.warning(
-                        f"desktop fit for {wallpaper_id} failed: {exc}"
-                    )
+                fit = self._desktop_fit(canonical)
                 scores = final_score(
                     record.scores, candidate.source, profile, recent, weather_code,
                     desktop_fit=None if fit is None else fit.score,
+                    hour=hour,
                 )
                 reason = record.scores.reason
                 if weather_text:
@@ -269,7 +289,7 @@ class EvaluateMixin:
                     break
                 continue
 
-    def _review_top(self, profile, recent, weather_code) -> None:
+    def _review_top(self, profile, recent, weather_code, hour=None) -> None:
         """Re-score the strongest candidates with the paid model.
 
         A failure or an exhausted budget stops the loop and keeps whatever
@@ -296,16 +316,11 @@ class EvaluateMixin:
             if hard_gate(record.scores):
                 rejected.add(decision.wallpaper_id)
                 continue
-            fit = None
-            try:
-                fit = measure_desktop_fit(decision.image_path)
-            except Exception as exc:
-                logger.warning(
-                    f"desktop fit for {decision.wallpaper_id} failed: {exc}"
-                )
+            fit = self._desktop_fit(decision.image_path)
             scores = final_score(
                 record.scores, decision.source, profile, recent, weather_code,
                 desktop_fit=None if fit is None else fit.score,
+                hour=hour,
             )
             reviewed.append(
                 replace(

@@ -79,7 +79,9 @@ def source_is_down(conn, name: str, day: str) -> bool:
     try:
         return time.time() - float(row[0]) < SOURCE_RETRY_SECONDS
     except (TypeError, ValueError):
-        return True
+        # A legacy flag ('1') carries no timestamp: treat it as "not down"
+        # rather than silencing a source for good.
+        return False
 
 
 def mark_source_down(conn, name: str, day: str) -> None:

@@ -15,8 +15,20 @@ from dailywallpaper.steam_env import apply_to_config
 INSTANCE_NAME = "DailyWallpaper"
 
 
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("dailywallpaper")
+    except Exception:  # a frozen build may not ship the metadata
+        return "unknown"
+
+
 def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
     parser = argparse.ArgumentParser(prog="dailywallpaper")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {_version()}"
+    )
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -34,7 +46,49 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         metavar="N",
         help="open the curation wall: rate N candidates and build a seed",
     )
+    parser.add_argument(
+        "--forget",
+        action="store_true",
+        help=argparse.SUPPRESS,  # the uninstaller uses it
+    )
+    parser.add_argument(
+        "--disable-we-autostart",
+        action="store_true",
+        help="关闭 Wallpaper Engine 的开机自启动后退出（安装程序会调用它）",
+    )
     args = parser.parse_args(argv)
+    if args.forget:
+        # Uninstall must not leave the Zhipu/Steam keys in the Windows
+        # credential manager, where a reinstall would silently reuse them.
+        import keyring
+
+        from dailywallpaper.analysis.vision import (
+            KEYRING_ACCOUNT,
+            KEYRING_SERVICE,
+        )
+
+        for account in (KEYRING_ACCOUNT, "steam_api_key"):
+            try:
+                keyring.delete_password(KEYRING_SERVICE, account)
+            except Exception:  # missing entry, or a locked credential store
+                pass
+        # Windows must not keep trying to start what is gone: the installer
+        # removes the Run key itself, the logon task is ours to remove. And
+        # giving Wallpaper Engine its own switches back is the other half of
+        # "this uninstalls cleanly" -- the installer took them away.
+        try:
+            from dailywallpaper.app_autostart import remove_logon_task
+
+            remove_logon_task()
+        except Exception:
+            pass
+        try:
+            from dailywallpaper.we_autostart import restore
+
+            restore(load_config(default_config_path()))
+        except Exception:
+            pass
+        return 0
     if args.dry_run:
         # A dry run that is silently ignored (GUI) or that loops real applies
         # (--headless) is worse than useless; make it exactly one safe tick.
@@ -62,6 +116,17 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         max_mb=cfg.retention.log_mb,
         backups=cfg.retention.log_backups,
     )
+
+    if args.disable_we_autostart:
+        # Before the single-instance lock: this runs as its own short-lived
+        # process (the installer calls it) and may re-launch itself elevated,
+        # which would otherwise be refused as a second instance.
+        from dailywallpaper.we_autostart import disable_with_elevation
+
+        rerun = ["--disable-we-autostart"]
+        if args.config:
+            rerun += ["--config", str(args.config)]
+        return disable_with_elevation(cfg, rerun)
 
     if app_factory is None:
         # The composition root lands in Task 1.11; tests inject a fake factory.

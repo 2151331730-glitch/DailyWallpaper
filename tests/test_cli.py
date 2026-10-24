@@ -104,7 +104,7 @@ def test_application_run_once_delegates_to_the_machine():
         def __init__(self):
             self.calls = []
 
-        def tick(self, dry_run=False):
+        def tick(self, dry_run=False, startup=False):
             self.calls.append(dry_run)
             return TickResult("dry_run" if dry_run else "applied")
 
@@ -120,7 +120,7 @@ def test_run_forever_survives_a_failing_tick():
         def __init__(self):
             self.calls = 0
 
-        def tick(self, dry_run=False):
+        def tick(self, dry_run=False, startup=False):
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("boom")
@@ -213,3 +213,20 @@ def test_gui_mode_does_not_build_an_unused_application(tmp_path):
 
     assert code == 0
     assert built == []
+
+
+def test_forget_removes_the_logon_task_and_hands_we_back(monkeypatch):
+    """The uninstaller calls --forget; nothing it created may be left behind."""
+    called = []
+    monkeypatch.setattr(
+        "dailywallpaper.app_autostart.remove_logon_task",
+        lambda *a, **k: called.append("task"),
+    )
+    monkeypatch.setattr(
+        "dailywallpaper.we_autostart.restore",
+        lambda *a, **k: called.append("we"),
+    )
+    monkeypatch.setattr("keyring.delete_password", lambda *a, **k: None)
+
+    assert main(["--forget"]) == 0
+    assert called == ["task", "we"]

@@ -935,7 +935,9 @@ def test_a_dry_run_does_not_consume_the_day(tmp_path):
 
 
 def test_a_lost_shortlist_can_be_rebuilt_the_same_day(tmp_path):
-    # The background pass marked the day, then the process restarted.
+    # A complete prepare is persisted, so a restart does not re-pay for the
+    # pool; if that marker is missing (an older run, a partial pass) the day
+    # can still be rebuilt.
     clock = Clock(datetime(2026, 10, 18, 7, 0))
     session = ImageSession()
     provider = Provider([_scores(90, 10)])
@@ -944,8 +946,10 @@ def test_a_lost_shortlist_can_be_rebuilt_the_same_day(tmp_path):
     pipeline.prepare(clock.now())
     assert conn.execute(
         "select 1 from state where key='prepared_2026-10-18'"
-    ).fetchone() is None  # nothing persisted just from preparing
+    ).fetchone() is not None
 
+    conn.execute("delete from state where key='prepared_2026-10-18'")
+    conn.commit()
     fresh = RealPipeline(cfg, conn, session, [Source(_candidates())],
                          VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing),
                          budget)
@@ -1428,3 +1432,80 @@ def test_a_one_star_rating_drops_an_already_prepared_pick(tmp_path):
 
     assert picked is not None
     assert picked.wallpaper_id != top
+
+
+class _BrokenSource:
+    """A source that raises the way a blocked host does at login."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def fetch(self, limit=None):
+        self.calls += 1
+        raise RuntimeError("proxy not listening yet")
+
+
+def test_a_source_failure_schedules_a_retry_instead_of_locking_the_day(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    session = ImageSession()
+    provider = Provider([_scores(90, 10)])
+    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
+    broken = _BrokenSource()
+    pipeline.sources = [Source(_candidates()), broken]
+
+    pipeline.prepare(clock.now())
+
+    assert pipeline.shortlist  # the working source still filled the pool
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is None
+    assert conn.execute(
+        "select 1 from state where key='prepare_retry_at_2026-10-18'"
+    ).fetchone() is not None
+
+    # Once the retry moment passes, the next prepare runs again and, with
+    # every source healthy, marks the day complete.
+    conn.execute(
+        "update state set value='0' where key='prepare_retry_at_2026-10-18'"
+    )
+    pipeline.sources = [Source(_candidates())]
+    conn.execute("delete from state where key='source_down_Source_2026-10-18'")
+    conn.commit()
+    pipeline.prepare(clock.now())
+
+    assert conn.execute(
+        "select 1 from state where key='prepared_2026-10-18'"
+    ).fetchone() is not None
+
+
+def test_a_source_down_marker_without_a_timestamp_is_ignored(tmp_path):
+    from dailywallpaper.sources.repository import source_is_down
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into state(key,value) values('source_down_WorkshopSource_2026-10-18','1')"
+    )
+    conn.commit()
+
+    assert source_is_down(conn, "WorkshopSource", "2026-10-18") is False
+
+
+def test_a_rejected_file_is_remembered_and_not_downloaded_again(tmp_path):
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    cfg, conn, pipeline, budget = _pipeline(
+        tmp_path, ImageSession(), Provider([_scores(90, 10)]), clock
+    )
+    wid = _candidates()[0]
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wallpaper_id = conn.execute("select id from wallpapers").fetchone()[0]
+
+    assert pipeline._rejected_recently(wallpaper_id) is False
+    pipeline._record_rejection(wallpaper_id, ("blurry",))
+    assert pipeline._rejected_recently(wallpaper_id) is True
+
+    # An old verdict lapses so a fixed threshold can be retried.
+    conn.execute("update rejections set created_at='2020-01-01T00:00:00'")
+    conn.commit()
+    assert pipeline._rejected_recently(wallpaper_id) is False

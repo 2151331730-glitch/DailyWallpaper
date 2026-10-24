@@ -44,6 +44,21 @@ class SettingsPage(QWidget):
         self.latest_time_edit = QLineEdit(config.app.latest_change_time)
         self.city_edit = QLineEdit(config.weather.city)
         self.budget_edit = QLineEdit(str(config.budget.monthly_cny))
+        # The two settings a new user in China cannot live without: a proxy
+        # for Wallhaven and a working Zhipu key. Both were file-only before.
+        self.proxy_edit = QLineEdit(str(config.sources.proxy or ""))
+        self.proxy_edit.setPlaceholderText("http://127.0.0.1:7892（留空则直连）")
+        self.proxy_test_button = QPushButton("测试代理")
+        self.proxy_test_button.clicked.connect(self.test_proxy)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit.setPlaceholderText(
+            "已保存的 key 不会显示；留空表示不修改"
+            if self._has_api_key()
+            else "粘贴智谱 API key（open.bigmodel.cn）"
+        )
+        self.api_key_test_button = QPushButton("测试 key")
+        self.api_key_test_button.clicked.connect(self.test_api_key)
         self.wallhaven_check = QCheckBox("启用 Wallhaven")
         self.wallhaven_check.setChecked(config.sources.wallhaven_enabled)
         self.bing_check = QCheckBox("启用 Bing 每日壁纸")
@@ -68,6 +83,10 @@ class SettingsPage(QWidget):
         form.addRow("最晚更换时间", self.latest_time_edit)
         form.addRow("天气城市", self.city_edit)
         form.addRow("月度预算 (¥)", self.budget_edit)
+        form.addRow("代理（可选）", self.proxy_edit)
+        form.addRow("", self.proxy_test_button)
+        form.addRow("智谱 API key", self.api_key_edit)
+        form.addRow("", self.api_key_test_button)
         form.addRow(self.wallhaven_check)
         form.addRow(self.bing_check)
         form.addRow(self.manual_counts_check)
@@ -145,6 +164,54 @@ class SettingsPage(QWidget):
         else:
             self.steam_status.setText(prefix + "商店和社区都能打开。")
 
+    def _has_api_key(self) -> bool:
+        try:
+            import keyring
+
+            from dailywallpaper.analysis.vision import (
+                KEYRING_ACCOUNT,
+                KEYRING_SERVICE,
+            )
+
+            return bool(keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT))
+        except Exception:
+            return False
+
+    def test_proxy(self) -> None:
+        from dailywallpaper.net import proxy_alive
+
+        proxy = self.proxy_edit.text().strip()
+        if not proxy:
+            self.status.setText("没有填写代理；将使用直连")
+            return
+        self.status.setText(
+            "代理端口可以连接" if proxy_alive(proxy, timeout=1.5)
+            else "连不上这个代理端口：检查客户端是否在运行、端口是否正确"
+        )
+
+    def test_api_key(self) -> None:
+        """Send one tiny request: a wrong or expired key must say so now."""
+        key = self.api_key_edit.text().strip()
+        if not key:
+            self.status.setText(
+                "已保存过 key（输入新 key 可替换）；测试请先粘贴一个 key"
+                if self._has_api_key()
+                else "还没有 key：去 open.bigmodel.cn 申请后粘贴到这里"
+            )
+            return
+        from dailywallpaper.recommend.intents import classify_note
+
+        self.status.setText("正在测试 key…")
+        try:
+            result = classify_note("test", key)
+        except Exception as exc:
+            self.status.setText(f"key 测试失败：{exc}")
+            return
+        if result is None:
+            self.status.setText("key 请求失败：请看日志，确认 key 有效、余额足够")
+            return
+        self.status.setText("key 可用，点“保存”写入")
+
     def collect(self):
         """Return a new Config, or None when a field is invalid."""
         if not _valid_time(self.daily_time_edit.text()):
@@ -178,6 +245,7 @@ class SettingsPage(QWidget):
                 self.config.sources,
                 wallhaven_enabled=self.wallhaven_check.isChecked(),
                 bing_enabled=self.bing_check.isChecked(),
+                proxy=self.proxy_edit.text().strip(),
             ),
             weather=replace(self.config.weather, city=self.city_edit.text().strip()),
             budget=replace(self.config.budget, monthly_cny=budget),
@@ -192,6 +260,26 @@ class SettingsPage(QWidget):
         except Exception as exc:  # a locked registry must not lose the config
             logger.warning(f"autostart toggle failed: {exc}")
 
+    def _store_api_key(self) -> None:
+        """Write a newly typed key to the credential manager."""
+        key = self.api_key_edit.text().strip()
+        if not key:
+            return
+        try:
+            import keyring
+
+            from dailywallpaper.analysis.vision import (
+                KEYRING_ACCOUNT,
+                KEYRING_SERVICE,
+            )
+
+            keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, key)
+            self.api_key_edit.clear()
+            self.api_key_edit.setPlaceholderText("已保存的 key 不会显示；留空表示不修改")
+        except Exception as exc:
+            logger.warning(f"api key save failed: {exc}")
+            self.status.setText("key 写入凭据管理器失败")
+
     def save(self) -> bool:
         updated = self.collect()
         if updated is None:
@@ -202,6 +290,7 @@ class SettingsPage(QWidget):
             logger.warning(f"config save failed: {exc}")
             self.status.setText("保存失败：无法写入 config.toml")
             return False
+        self._store_api_key()
         self._apply_autostart(updated.app.start_with_windows)
         self.config = updated
         self.status.setText("已保存")

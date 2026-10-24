@@ -1,4 +1,5 @@
 # tests/test_state.py
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,7 +8,7 @@ from dailywallpaper.analysis.vision import VisionScores
 from dailywallpaper.config import AppSection
 from dailywallpaper.db import connect, migrate
 from dailywallpaper.models import Decision
-from dailywallpaper.state.machine import DailyStateMachine
+from dailywallpaper.state.machine import PREPARED_KEY, DailyStateMachine
 
 
 class FakeClock:
@@ -26,7 +27,7 @@ class FakePipeline:
         self.decision = decision
         self.prepared = 0
 
-    def prepare(self, now, force=False, mark=True):
+    def prepare(self, now, force=False, mark=True, dry_run=False):
         self.prepared += 1
 
     def pick(self, now, dry_run=False):
@@ -209,7 +210,7 @@ def _exhausted_pipeline(decision, forces):
         def __init__(self):
             self.calls = 0
 
-        def prepare(self, now, force=False, mark=True):
+        def prepare(self, now, force=False, mark=True, dry_run=False):
             forces.append(force)
 
         def pick(self, now, dry_run=False):
@@ -271,3 +272,186 @@ def test_automatic_change_refills_without_forcing(tmp_path):
 
     assert result.action == "applied"
     assert forces == [False]
+
+
+# -- pre-generated wallpaper ---------------------------------------------
+def _park_prepared(conn, tmp_path, wid, decision_id=None, media_kind="image"):
+    image = tmp_path / f"{wid}.jpg"
+    image.write_bytes(b"jpeg")
+    payload = {
+        "wallpaper_id": wid,
+        "apply_path": str(image),
+        "image_path": str(image),
+        "decision_id": decision_id,
+        "media_kind": media_kind,
+        "reason": "parked pick",
+        "created_at": "2026-10-17T22:00:00",
+    }
+    conn.execute(
+        "insert or replace into state(key,value) values(?,?)",
+        (PREPARED_KEY, json.dumps(payload)),
+    )
+    conn.commit()
+    return image
+
+
+def test_startup_applies_the_prepared_wallpaper_before_daily_time(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    conn.execute(
+        "insert into decisions(decision_date,wallpaper_id,explore_score,"
+        "personalize_score,final_score,reason,status,created_at)"
+        " values('2026-10-17',?,'x',1,1,1,'shortlisted','x')",
+        (wid,),
+    )
+    conn.commit()
+    decision_id = conn.execute("select max(id) from decisions").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid, decision_id)
+
+    result = machine.tick(startup=True)
+
+    assert result.action == "applied"
+    assert svc.calls == [(wid, "auto")]
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is None
+    assert conn.execute(
+        "select status from decisions where id=?", (decision_id,)
+    ).fetchone()[0] == "applied"
+    # The slow pipeline never ran: the parked file was already inspected.
+    assert pipeline.prepared == 0
+
+
+def test_prepared_wallpaper_waits_outside_the_daily_window(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid)
+
+    result = machine.tick()
+
+    assert result.action == "background"
+    assert svc.calls == []
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is not None
+
+
+def test_startup_does_not_apply_twice_in_one_day(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid)
+    conn.execute(
+        "insert into change_log(change_date,wallpaper_id,method,applied_at,success)"
+        " values('2026-10-18',1,'static','x',1)"
+    )
+    conn.commit()
+
+    assert machine.tick(startup=True).action == "already_changed"
+    assert svc.calls == []
+
+
+def test_missing_prepared_file_falls_back_to_the_pipeline(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    image = tmp_path / "gone.jpg"
+    conn.execute(
+        "insert or replace into state(key,value) values(?,?)",
+        (
+            PREPARED_KEY,
+            json.dumps({"wallpaper_id": wid, "apply_path": str(image)}),
+        ),
+    )
+    conn.commit()
+
+    result = machine.tick(startup=True)
+
+    assert result.action == "applied"
+    assert [call[0] for call in svc.calls] == [wid]
+
+
+def test_prepared_wallpaper_rated_one_is_dropped(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid)
+    conn.execute(
+        "insert into ratings(wallpaper_id,rating,created_at) values(?,1,'x')", (wid,)
+    )
+    conn.commit()
+
+    result = machine.tick(startup=True)
+
+    # 07:00 without a usable parked pick is the old background warm-up.
+    assert result.action == "background"
+    assert svc.calls == []
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is None
+
+
+def test_parked_wallpaper_survives_days_without_booting(tmp_path):
+    # "整天没开机" must not throw the pick away: the machine may skip a day,
+    # so the parked file is used whenever the next boot finally happens.
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid)
+
+    clock.advance(days=3)
+
+    result = machine.tick(startup=True)
+
+    assert result.action == "applied"
+    assert [call[0] for call in svc.calls] == [wid]
+
+
+def test_dry_run_never_consumes_the_parked_wallpaper(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 9, 0))
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid)
+
+    result = machine.tick(dry_run=True)
+
+    assert result.action == "dry_run"
+    assert svc.calls == []
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is not None
+
+
+class _Power:
+    def __init__(self, on_battery):
+        self._on_battery = on_battery
+
+    def on_battery(self):
+        return self._on_battery
+
+
+def test_parked_live_wallpaper_is_dropped_on_battery(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    machine.config = SimpleNamespace(
+        app=AppSection(), wallpaper=SimpleNamespace(dynamic_requires_ac=True)
+    )
+    machine.power = _Power(on_battery=True)
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid, media_kind="scene")
+
+    result = machine.tick(startup=True)
+
+    # 07:00 with nothing usable is the ordinary background warm-up.
+    assert result.action == "background"
+    assert svc.calls == []
+    assert conn.execute(
+        "select 1 from state where key=?", (PREPARED_KEY,)
+    ).fetchone() is None
+
+
+def test_parked_live_wallpaper_survives_on_ac(tmp_path):
+    conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 7, 0))
+    machine.config = SimpleNamespace(
+        app=AppSection(), wallpaper=SimpleNamespace(dynamic_requires_ac=True)
+    )
+    machine.power = _Power(on_battery=False)
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    _park_prepared(conn, tmp_path, wid, media_kind="scene")
+
+    assert machine.tick(startup=True).action == "applied"
+    assert svc.calls == [(wid, "auto")]

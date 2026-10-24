@@ -1002,3 +1002,49 @@ def test_a_live_wallpaper_is_muted_after_apply_when_the_switch_is_off(tmp_path):
     assert service.apply(wid, tmp_path / "clip.mp4") is True
 
     assert we.sound_calls == ["mute"]
+
+
+class _ModeAwareApplier(_FakeApplier):
+    """Remembers the desktop mode, like the real Win32 applier."""
+
+    class _Mode:
+        def __init__(self, value):
+            self.value = value
+            self.set_calls = []
+
+        def get(self):
+            return self.value
+
+        def set(self, mode):
+            self.set_calls.append(mode)
+            self.value = mode
+            return True
+
+    def __init__(self):
+        super().__init__()
+        self.background_type = self._Mode(2)  # user had a slideshow running
+
+
+def test_undo_restores_the_previous_mode_and_style(tmp_path):
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    old = tmp_path / "old.jpg"
+    old.write_bytes(b"x")
+    applier = _ModeAwareApplier()
+    applier.current = WallpaperState(
+        wallpaper=str(old), style="10", tile="1", background_type=2
+    )
+    service = ApplyService(conn, applier)
+    wid = _wallpaper(conn)
+
+    service.apply(wid, tmp_path / "new.jpg")
+    row = conn.execute("select * from change_log").fetchone()
+    assert row["previous_style"] == "10"
+    assert row["previous_tile"] == "1"
+    assert row["previous_background_type"] == 2
+
+    assert service.undo_last() is True
+
+    assert applier.restored[-1].style == "10"
+    assert applier.restored[-1].tile == "1"
+    assert applier.background_type.set_calls == [2]

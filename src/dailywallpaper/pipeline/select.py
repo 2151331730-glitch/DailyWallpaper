@@ -2,6 +2,7 @@
 """Choosing which candidate goes on screen, plus the decision bookkeeping."""
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from dailywallpaper.constants import BANNED_MAX_RATING
 from dailywallpaper.db import now_iso
 from dailywallpaper.models import Decision
+from dailywallpaper.state.machine import PREPARED_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,94 @@ class SelectMixin:
         )
         self.conn.commit()
         return replace(decision, decision_id=cursor.lastrowid)
+
+    # -- pre-generating the next wallpaper -------------------------------
+    def prepare_next(self, now) -> bool:
+        """Pick and download the next wallpaper while nobody is waiting.
+
+        Choosing is the slow half of a change: the fetch, the vision scoring
+        and the full-size download take minutes, while the apply itself is
+        instant. Making the pick during the warm-up and parking the finished
+        file in ``state`` lets the next boot change the desktop in under a
+        second instead of after a two-minute pipeline run.
+        """
+        payload = self._prepared_payload()
+        if payload is not None:
+            path = payload.get("apply_path") or payload.get("image_path")
+            if path and Path(str(path)).is_file():
+                # A manual change this afternoon does not invalidate it: the
+                # pre-picked decision was already popped off the shortlist.
+                return True
+        self.prepare(now)
+        decision = self.pick(now)
+        if decision is None:
+            return False
+        if decision.apply_path is None:
+            decision = self._materialize_one(decision)
+        if decision is None or decision.apply_path is None:
+            if decision is not None and decision.decision_id is not None:
+                self._expire_decision(decision.decision_id)
+            return False
+        row = self.conn.execute(
+            "select media_type from wallpapers where id=?", (decision.wallpaper_id,)
+        ).fetchone()
+        media_kind = row[0] if row and row[0] else "image"
+        self._supersede_prepared()
+        self.conn.execute(
+            "insert or replace into state(key,value) values(?,?)",
+            (
+                PREPARED_KEY,
+                json.dumps(
+                    {
+                        "wallpaper_id": decision.wallpaper_id,
+                        "apply_path": str(decision.apply_path),
+                        "image_path": str(decision.image_path),
+                        "decision_id": decision.decision_id,
+                        "media_kind": media_kind,
+                        "reason": decision.reason,
+                        "created_at": now_iso(),
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        self.conn.commit()
+        logger.info(
+            f"prepared next wallpaper: {decision.wallpaper_id}"
+            f" — {decision.reason[:60]}"
+        )
+        return True
+
+    def _prepared_payload(self):
+        row = self.conn.execute(
+            "select value from state where key=?", (PREPARED_KEY,)
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            payload = json.loads(row[0])
+        except (TypeError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _supersede_prepared(self) -> None:
+        payload = self._prepared_payload()
+        if payload is None:
+            return
+        decision_id = payload.get("decision_id")
+        if decision_id is not None:
+            self.conn.execute(
+                "update decisions set status='superseded'"
+                " where id=? and status='shortlisted'",
+                (decision_id,),
+            )
+
+    def _expire_decision(self, decision_id) -> None:
+        self.conn.execute(
+            "update decisions set status='expired' where id=? and status='shortlisted'",
+            (decision_id,),
+        )
+        self.conn.commit()
 
     def mark_applied(self, decision) -> None:
         if decision.decision_id is None:

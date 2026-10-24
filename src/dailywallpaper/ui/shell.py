@@ -63,11 +63,32 @@ class UiShell:
         if wallpaper_id is None:
             return
         RatingDialog(
-            RatingsService(self.service.conn), wallpaper_id, self.window
+            RatingsService(self.service.conn),
+            wallpaper_id,
+            self.window,
+            budget=self._classify_budget(),
         ).exec()
         self.window.refresh()
         if self.window.tabs.currentWidget() is self.window.history:
             self.window.history.refresh()
+
+    def _classify_budget(self):
+        """A BudgetGuard so rating comments count against the monthly cap."""
+        config = getattr(self.service, "config", None)
+        if config is None:
+            return None
+        try:
+            from dailywallpaper.cost.budget import BudgetGuard
+            from dailywallpaper.state.machine import SystemClock
+
+            return BudgetGuard(
+                self.service.conn,
+                config.budget.monthly_cny,
+                config.budget.warn_ratio,
+                SystemClock(),
+            )
+        except Exception:
+            return None
 
     def _settings_saved(self, cfg) -> None:
         """Hand a saved config to the worker; it applies at the next tick."""
@@ -175,15 +196,36 @@ def _sync_autostart(cfg, config_path) -> None:
             logging.getLogger(__name__).warning(
                 f"autostart config update failed: {exc}"
             )
+    command = default_command(config_path)
     try:
-        AutostartService(command=default_command(config_path)).sync(wanted)
+        AutostartService(command=command).sync(wanted)
     except Exception as exc:  # a locked registry must not block the shell
         logging.getLogger(__name__).warning(f"autostart sync failed: {exc}")
+    # The Run key waits behind Explorer's login queue, which was ~30 s on this
+    # machine; the logon task is what gets the wallpaper up at the same moment
+    # the desktop appears.
+    from dailywallpaper.app_autostart import ensure_logon_task, remove_logon_task
+
+    try:
+        if wanted:
+            ensure_logon_task(command)
+        else:
+            remove_logon_task()
+    except Exception as exc:  # Task Scheduler unavailable: the Run key stands
+        logging.getLogger(__name__).warning(f"logon task sync failed: {exc}")
 
 
 def build_gui(cfg, config_path=None) -> int:
     """Composition root for the desktop shell."""
     import sys
+
+    # Before Qt and before the pipeline: at login the desktop is on screen
+    # long before this window is, and the parked wallpaper is a finished file
+    # on disk. Everything below this line takes seconds; the apply takes
+    # milliseconds and is the only part of a boot the user actually sees.
+    from dailywallpaper.startup import apply_parked
+
+    apply_parked(cfg)
 
     from PySide6.QtWidgets import QApplication
 
@@ -208,7 +250,6 @@ def build_gui(cfg, config_path=None) -> int:
     from dailywallpaper.config import default_config_path
 
     resolved_path = config_path or default_config_path()
-    _sync_autostart(cfg, resolved_path)
     service = CommandService(
         machine.conn,
         cfg.app,
@@ -231,4 +272,8 @@ def build_gui(cfg, config_path=None) -> int:
         budget_cny=cfg.budget.monthly_cny,
     )
     shell.start()
+    # After the tray, not before: the first launch of a new command runs
+    # PowerShell and can take a second, and nothing about the autostart check
+    # is worth delaying the icon the user is looking for.
+    _sync_autostart(cfg, resolved_path)
     return app.exec()

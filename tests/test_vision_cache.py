@@ -8,7 +8,7 @@ from dailywallpaper.analysis.vision import (
     VisionScores,
 )
 from dailywallpaper.config import VisionPricing
-from dailywallpaper.cost.ledger import estimate_cost
+from dailywallpaper.cost.ledger import actual_cost, estimate_cost
 from dailywallpaper.db import connect, migrate
 
 
@@ -119,7 +119,7 @@ def test_success_records_usage_and_cost(tmp_path):
     assert row["tokens_in"] == 100
     assert row["tokens_out"] == 50
     assert row["status_code"] == 200
-    assert row["cost_cny"] == pytest.approx(estimate_cost(100, 500, _pricing()["m"]))
+    assert row["cost_cny"] == pytest.approx(actual_cost(100, 50, _pricing()["m"]))
 
 
 class _Clock:

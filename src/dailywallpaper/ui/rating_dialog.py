@@ -29,15 +29,18 @@ class _IntentWorker(QObject):
 
     done = Signal(object)
 
-    def __init__(self, text: str, api_key: str):
+    def __init__(self, text: str, api_key: str, budget=None):
         super().__init__()
         self.text = text
         self.api_key = api_key
+        self.budget = budget
 
     def run(self) -> None:
         from dailywallpaper.recommend.intents import classify_note
 
-        self.done.emit(classify_note(self.text, self.api_key))
+        self.done.emit(
+            classify_note(self.text, self.api_key, budget=self.budget)
+        )
 
 
 def _describe(intent: dict) -> str:
@@ -62,9 +65,12 @@ class RatingDialog(QDialog):
     click made that impossible.
     """
 
-    def __init__(self, service, wallpaper_id, parent=None):
+    def __init__(self, service, wallpaper_id, parent=None, budget=None):
         super().__init__(parent)
         self.service = service
+        # The comment classifier is a paid model call; it must count against
+        # the monthly cap like every other one.
+        self.budget = budget
         self.wallpaper_id = wallpaper_id
         self.chosen = None
         self._placed = False
@@ -218,7 +224,7 @@ class RatingDialog(QDialog):
             # Do not mark it classified: a key added later should still work.
             return
         self._last_classified = text
-        worker = _IntentWorker(text, api_key)
+        worker = _IntentWorker(text, api_key, budget=self.budget)
         worker.done.connect(self._on_intent)
         # Keep a reference: a worker that goes out of scope cancels nothing,
         # but the signal must still have a live receiver.

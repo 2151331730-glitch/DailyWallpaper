@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import subprocess
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
@@ -165,28 +166,38 @@ class WeControl:
         except (OSError, ValueError, WeConfigError) as exc:
             raise WeConfigError(f"cannot read WE config: {exc}") from exc
         target = _norm(file)
-        changed = False
-        for entry in config.selected.values():
-            if not isinstance(entry, dict):
-                continue
-            if _norm(entry.get("file", "")) != target:
+        # Only the monitor this app drives. Rewriting every selected entry
+        # made a second display lose whatever the user chose for it.
+        entry = config.selected.get(config.monitor_key)
+        if not isinstance(entry, dict) or _norm(entry.get("file", "")) == target:
+            return False
+        entry["file"] = str(file)
+        self._write_config(config)
+        # WE rewrites config.json while it shuts down and can undo the write
+        # we just made. Read it back once and rewrite if it reverted, rather
+        # than entering a silent close/write/overwrite loop.
+        time.sleep(0.2)
+        try:
+            after = WeConfig.from_file(self.config_path)
+            entry = after.selected.get(after.monitor_key)
+            if isinstance(entry, dict) and _norm(entry.get("file", "")) != target:
                 entry["file"] = str(file)
-                changed = True
-        if changed:
-            text = json.dumps(config.raw, ensure_ascii=False, indent="\t")
-            # A crash halfway through a direct write would leave WE without a
-            # readable config. Keep the old file, write a temp one, swap it in.
-            backup = self.config_path.with_name(
-                self.config_path.name + ".bak"
+                self._write_config(after)
+        except (OSError, ValueError, WeConfigError) as exc:
+            logger.warning(f"WE config read-back failed: {exc}")
+        return True
+
+    def _write_config(self, config: "WeConfig") -> None:
+        text = json.dumps(config.raw, ensure_ascii=False, indent="\t")
+        # A crash halfway through a direct write would leave WE without a
+        # readable config. Keep the old file, write a temp one, swap it in.
+        backup = self.config_path.with_name(self.config_path.name + ".bak")
+        try:
+            backup.write_text(
+                self.config_path.read_text(encoding="utf-8"), encoding="utf-8"
             )
-            try:
-                backup.write_text(
-                    self.config_path.read_text(encoding="utf-8"),
-                    encoding="utf-8",
-                )
-            except OSError:  # a missing/unreadable old file is not fatal
-                pass
-            tmp = self.config_path.with_name(self.config_path.name + ".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            os.replace(tmp, self.config_path)
-        return changed
+        except OSError:  # a missing/unreadable old file is not fatal
+            pass
+        tmp = self.config_path.with_name(self.config_path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, self.config_path)

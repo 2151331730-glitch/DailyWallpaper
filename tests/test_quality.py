@@ -2,7 +2,11 @@
 import numpy as np
 from PIL import Image
 
-from dailywallpaper.analysis.quality import inspect_image, required_resolution
+from dailywallpaper.analysis.quality import (
+    SHARPNESS_FLOOR,
+    inspect_image,
+    required_resolution,
+)
 
 
 def _sharp(width, height):
@@ -52,3 +56,33 @@ def test_an_unreadable_file_is_reported_not_raised(tmp_path):
 
     assert report.ok is False
     assert any(reason.startswith("unreadable") for reason in report.reasons)
+
+
+def test_a_flat_centre_does_not_make_a_sharp_image_blurry(tmp_path):
+    # Real case: a 4K image whose centre is a plain backdrop but whose
+    # corners carry detail. The old centre-only crop scored it 0.
+    from PIL import Image, ImageDraw
+
+    path = tmp_path / "flat-centre.png"
+    image = Image.new("RGB", (1200, 800), (30, 30, 30))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, 1200, 4):
+        draw.line((x, 0, x, 60), fill=(255, 255, 255), width=2)
+    image.save(path)
+
+    report = inspect_image(path)
+
+    assert report.ok, report.reasons
+    assert report.sharpness > SHARPNESS_FLOOR
+
+
+def test_a_uniform_image_is_still_blurry(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "flat.png"
+    Image.new("RGB", (1200, 800), (30, 30, 30)).save(path)
+
+    report = inspect_image(path)
+
+    assert not report.ok
+    assert "blurry" in report.reasons

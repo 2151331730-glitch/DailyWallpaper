@@ -82,6 +82,33 @@ def workshop_root(install_dir) -> Path | None:
     return None
 
 
+def refresh_session_proxy(session, cfg) -> None:
+    """Re-probe the configured proxy and point the session at it, or not.
+
+    Probing once at launch is not enough: the app starts at login, often
+    before Pigeon/Clash has opened its port, and a proxy that comes up (or
+    goes down) later must be picked up without a restart. The probe is a
+    single localhost connect, so calling it before every prepare is cheap.
+    """
+    proxies = getattr(session, "proxies", None)
+    if proxies is None:  # a test double with no proxy table
+        return
+    session.trust_env = False
+    proxy = str(getattr(cfg.sources, "proxy", "") or "").strip()
+    proxies.clear()
+    if not proxy:
+        return
+    from dailywallpaper.net import proxy_alive
+
+    if proxy_alive(proxy):
+        # A live proxy is used for every source, domestic ones included.
+        session.proxies.update({"http": proxy, "https": proxy})
+    else:
+        logger.warning(
+            f"configured proxy {proxy} is not listening; using direct connections"
+        )
+
+
 def configure_session(cfg, session=None) -> requests.Session:
     """A session whose proxy is the one in the config, and nothing else.
 
@@ -90,16 +117,5 @@ def configure_session(cfg, session=None) -> requests.Session:
     Bing fail even though the app had already decided to go direct.
     """
     session = session or requests.Session()
-    session.trust_env = False
-    proxy = str(getattr(cfg.sources, "proxy", "") or "").strip()
-    if proxy:
-        from dailywallpaper.net import proxy_alive
-
-        if proxy_alive(proxy):
-            # A live proxy is used for every source, domestic ones included.
-            session.proxies.update({"http": proxy, "https": proxy})
-        else:
-            logger.warning(
-                f"configured proxy {proxy} is not listening; using direct connections"
-            )
+    refresh_session_proxy(session, cfg)
     return session

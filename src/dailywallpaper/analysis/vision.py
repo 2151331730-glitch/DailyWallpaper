@@ -5,7 +5,11 @@ import re
 import time
 from pathlib import Path
 
-from dailywallpaper.cost.ledger import AnalysisRecord, estimate_cost, record_usage
+from dailywallpaper.cost.ledger import (
+    AnalysisRecord,
+    actual_cost,
+    record_usage,
+)
 from dailywallpaper.db import now_iso
 
 from .prompts import PROMPT_VERSION, SYSTEM_PROMPT
@@ -29,7 +33,20 @@ def load_key() -> str | None:
     return keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
 
 
-class VisionError(RuntimeError): ...
+class VisionError(RuntimeError):
+    """A failed model call that may still have been billed.
+
+    A 200 response that fails validation is charged by the provider, so the
+    token counts travel with the error and the caller settles the ledger
+    instead of recording a free call.
+    """
+
+    def __init__(self, message: str, tokens_in: int = 0, tokens_out: int = 0,
+                 latency_ms: int = 0):
+        super().__init__(message)
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+        self.latency_ms = latency_ms
 
 @dataclass(frozen=True)
 class VisionScores:
@@ -147,7 +164,16 @@ def validate_scores(payload: dict) -> VisionScores:
 
 class ZhipuVision:
     BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-    def __init__(self, api_key: str):
+    # Class-level defaults keep hand-built instances (tests use __new__)
+    # working; __init__ overrides them from the config.
+    temperature = 0.2
+    max_output_tokens = 500
+    def __init__(self, api_key: str, max_output_tokens: int = 500,
+                 temperature: float = 0.2):
+        # The config owns these; hard-coding them made the settings page's
+        # values silently unused.
+        self.max_output_tokens = int(max_output_tokens)
+        self.temperature = float(temperature)
         # openai 3.x ships with httpx2 (the vendored successor of httpx).
         try:
             import httpx2 as httpx
@@ -168,6 +194,10 @@ class ZhipuVision:
             base_url=self.BASE_URL,
             max_retries=0,
             http_client=http_client,
+            # The SDK's own default is 600 s and it wins over the http_client
+            # timeout; one stalled upload then blocked the whole tick thread
+            # for ten minutes. Fail fast and let the candidate be skipped.
+            timeout=60.0,
         )
 
     def analyze(
@@ -181,8 +211,8 @@ class ZhipuVision:
         started = time.monotonic()
         resp = self.client.chat.completions.create(
             model=model,
-            temperature=0.2,
-            max_tokens=500,
+            temperature=self.temperature,
+            max_tokens=self.max_output_tokens,
             response_format={"type": "json_object"},
             # glm-4.6v-flash spends the whole output budget on reasoning by
             # default (finish_reason=length, empty content). Disabling it
@@ -196,10 +226,8 @@ class ZhipuVision:
                 ]},
             ],
         )
-        try:
-            payload = json.loads(resp.choices[0].message.content)
-        except (ValueError, TypeError, AttributeError, IndexError, KeyError) as exc:
-            raise VisionError("provider returned malformed response") from exc
+        # Usage is read before the payload: a 200 that fails validation was
+        # still billed, and the caller needs the counts to record it.
         try:
             tokens_in = int(resp.usage.prompt_tokens or 0)
             tokens_out = int(resp.usage.completion_tokens or 0)
@@ -207,11 +235,23 @@ class ZhipuVision:
             reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0)
         except (AttributeError, KeyError, TypeError, ValueError):
             tokens_in = tokens_out = reasoning_tokens = 0
+        latency_ms = int((time.monotonic() - started) * 1000)
+        try:
+            payload = json.loads(resp.choices[0].message.content)
+        except (ValueError, TypeError, AttributeError, IndexError, KeyError) as exc:
+            raise VisionError(
+                "provider returned malformed response",
+                tokens_in, tokens_out, latency_ms,
+            ) from exc
+        try:
+            scores = validate_scores(payload)
+        except VisionError as exc:
+            raise VisionError(str(exc), tokens_in, tokens_out, latency_ms) from exc
         return VisionCallResult(
-            scores=validate_scores(payload),
+            scores=scores,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
-            latency_ms=int((time.monotonic() - started) * 1000),
+            latency_ms=latency_ms,
             reasoning_tokens=reasoning_tokens,
         )
 
@@ -234,6 +274,46 @@ class VisionClient:
         self.pricing = pricing
         self.budget = budget
         self.max_output_tokens = max_output_tokens
+
+    def _prewrite(self, model: str):
+        if not self.budget:
+            return None
+        return self.budget.prewrite_estimate(
+            provider="zhipu",
+            model=model,
+            purpose=CACHE_HIT_PURPOSE,
+            estimate=ESTIMATE_CNY,
+        )
+
+    def _settle_failure(self, usage_id, model: str, exc: Exception) -> None:
+        """Record a failed call with the tokens it actually spent.
+
+        A validation failure comes back from a 200 response, so it is paid
+        for; a network failure has no usage and is recorded as such.
+        """
+        tokens_in = int(getattr(exc, "tokens_in", 0) or 0)
+        tokens_out = int(getattr(exc, "tokens_out", 0) or 0)
+        latency_ms = int(getattr(exc, "latency_ms", 0) or 0)
+        cost = actual_cost(tokens_in, tokens_out, self.pricing[model])
+        status = 200 if tokens_in else 500
+        if self.budget and usage_id is not None:
+            self.budget.settle_usage(
+                usage_id, tokens_in, tokens_out, cost, status, latency_ms
+            )
+        else:
+            record_usage(
+                self.conn,
+                provider="zhipu",
+                model=model,
+                purpose=CACHE_HIT_PURPOSE,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_cny=cost,
+                estimated=0,
+                cache_hit=0,
+                status_code=status,
+                latency_ms=latency_ms,
+            )
 
     def latest_for(self, wallpaper_id: int, model: str) -> AnalysisRecord | None:
         """What we already know about a wallpaper, without calling anyone.
@@ -285,24 +365,23 @@ class VisionClient:
         if row:
             return self._cached(row, wallpaper_id, model)
 
-        usage_id = None
-        if self.budget:
-            usage_id = self.budget.prewrite_estimate(
-                provider="zhipu", model=model, purpose=CACHE_HIT_PURPOSE, estimate=ESTIMATE_CNY
-            )
+        usage_id = self._prewrite(model)
         try:
             try:
                 result = self.provider.analyze(image_path, model)
-            except VisionError:
+            except VisionError as first:
+                # A 200 that failed validation was still billed. Settle that
+                # attempt before paying for the retry.
+                self._settle_failure(usage_id, model, first)
+                usage_id = self._prewrite(model)
                 result = self.provider.analyze(
                     image_path, model, extra_instruction=RETRY_INSTRUCTION
                 )
-        except Exception:
-            if self.budget and usage_id is not None:
-                self.budget.settle_usage(usage_id, 0, 0, 0.0, 500, 0)
+        except Exception as exc:
+            self._settle_failure(usage_id, model, exc)
             raise
 
-        cost = estimate_cost(result.tokens_in, self.max_output_tokens, self.pricing[model])
+        cost = actual_cost(result.tokens_in, result.tokens_out, self.pricing[model])
         scores = result.scores
         cursor = self.conn.execute(
             """

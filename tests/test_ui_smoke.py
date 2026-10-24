@@ -259,7 +259,7 @@ def test_worker_ticks_once_on_start_with_its_own_machine():
     seen = threading.Event()
 
     class _M:
-        def tick(self, dry_run=False, manual=False):
+        def tick(self, dry_run=False, manual=False, startup=False):
             seen.set()
 
     worker = Worker(lambda: _M(), interval=60)
@@ -279,7 +279,7 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
     warmed = threading.Event()
 
     class _Pipeline:
-        def prepare(self, now, force=False):
+        def prepare(self, now, force=False, dry_run=False):
             warmed.set()
 
     class _Clock:
@@ -290,7 +290,7 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
         pipeline = _Pipeline()
         clock = _Clock()
 
-        def tick(self, dry_run=False, manual=False):
+        def tick(self, dry_run=False, manual=False, startup=False):
             pass
 
     worker = Worker(lambda: _M(), interval=60)
@@ -299,6 +299,56 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
         assert warmed.wait(2) is True
     finally:
         worker.stop()
+
+
+def test_worker_refills_an_empty_shortlist_before_parking():
+    """A restart empties the in-memory shortlist while the day stays prepared.
+
+    Without the forced pass the next wallpaper was never parked again, so the
+    boot after that had to run the whole pipeline before showing anything.
+    """
+    import threading
+    from datetime import datetime
+
+    from dailywallpaper.ui.worker import Worker
+
+    parked = threading.Event()
+    calls = []
+
+    class _Pipeline:
+        def __init__(self):
+            self.shortlist = []
+
+        def prepare(self, now, force=False, dry_run=False):
+            calls.append(("prepare", force))
+
+        def rehydrate(self, now):
+            calls.append(("rehydrate", None))
+            self.shortlist = ["candidate"]
+
+        def prepare_next(self, now):
+            parked.set()
+            return True
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 19, 12, 0)
+
+    class _M:
+        pipeline = _Pipeline()
+        clock = _Clock()
+
+        def tick(self, dry_run=False, manual=False, startup=False):
+            pass
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker.start()
+    try:
+        assert parked.wait(2) is True
+    finally:
+        worker.stop()
+
+    assert calls == [("prepare", False), ("rehydrate", None)]
 
 
 def test_worker_reports_busy_while_a_tick_runs():
@@ -313,7 +363,7 @@ def test_worker_reports_busy_while_a_tick_runs():
         pipeline = None
         clock = None
 
-        def tick(self, dry_run=False, manual=False):
+        def tick(self, dry_run=False, manual=False, startup=False):
             started.set()
             release.wait(5)
 
@@ -799,7 +849,7 @@ def test_worker_runs_a_manual_request_without_waiting_for_the_interval():
     calls = []
 
     class _M:
-        def tick(self, dry_run=False, manual=False):
+        def tick(self, dry_run=False, manual=False, startup=False):
             calls.append(manual)
 
     worker = Worker(lambda: _M(), interval=60)
@@ -937,3 +987,27 @@ def test_revoking_an_intent_calls_the_service(qapp, tmp_path):
     row.findChildren(QPushButton)[0].click()
 
     assert calls == [intent_id]
+
+
+def test_settings_page_saves_the_proxy(qapp, tmp_path):
+    from dailywallpaper.config import load_config
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
+    page.proxy_edit.setText("http://127.0.0.1:7892")
+
+    assert page.save() is True
+    assert load_config(path).sources.proxy == "http://127.0.0.1:7892"
+
+
+def test_settings_proxy_test_reports_a_dead_port(qapp, tmp_path):
+    from dailywallpaper.ui.settings_page import SettingsPage
+
+    cfg, path = _config_file(tmp_path)
+    page = SettingsPage(cfg, path, autostart=_RecordingAutostart())
+    page.proxy_edit.setText("http://127.0.0.1:9")
+
+    page.test_proxy()
+
+    assert "连不上" in page.status.text()

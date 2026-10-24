@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
+from datetime import datetime, timedelta
+
 from dailywallpaper.analysis.images import download
 from dailywallpaper.analysis.quality import inspect_image, required_resolution
 from dailywallpaper.apply.windows_static import convert_to_jpeg
@@ -15,8 +17,37 @@ from dailywallpaper.constants import MATERIALIZE_TOP_N
 
 logger = logging.getLogger(__name__)
 
+# An inspection failure is remembered, not permanent: a later release may
+# judge the same file differently, and a wrong verdict should not hide a
+# wallpaper forever.
+REJECTION_DAYS = 30
+
 
 class MaterializeMixin:
+    def _rejected_recently(self, wallpaper_id: int) -> bool:
+        row = self.conn.execute(
+            "select created_at from rejections where wallpaper_id=?",
+            (wallpaper_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            when = datetime.fromisoformat(row[0])
+        except (TypeError, ValueError):
+            return False
+        return datetime.now() - when.replace(tzinfo=None) < timedelta(
+            days=REJECTION_DAYS
+        )
+
+    def _record_rejection(self, wallpaper_id: int, reasons) -> None:
+        from dailywallpaper.db import now_iso
+
+        self.conn.execute(
+            "insert or replace into rejections(wallpaper_id,reason,created_at)"
+            " values(?,?,?)",
+            (wallpaper_id, ", ".join(reasons), now_iso()),
+        )
+        self.conn.commit()
     def _materialize(self, data_dir: Path, counters: dict) -> None:
         """Download the full image for the candidates that could be applied.
 
@@ -36,6 +67,9 @@ class MaterializeMixin:
             # full-size file: pick() downloads it only if a click gets there.
             if made >= MATERIALIZE_TOP_N:
                 kept.append(decision)
+                continue
+            if self._rejected_recently(decision.wallpaper_id):
+                # Already known bad: do not pay 40 MB to learn it again.
                 continue
             row = self.conn.execute(
                 "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
@@ -61,6 +95,9 @@ class MaterializeMixin:
                 report = inspect_image(dest, required_resolution())
                 if not report.ok:
                     dest.unlink(missing_ok=True)
+                    self._record_rejection(
+                        decision.wallpaper_id, report.reasons
+                    )
                     logger.warning(
                         f"full image for {decision.wallpaper_id} rejected by"
                         f" inspection: {report.width}x{report.height}"
@@ -86,6 +123,8 @@ class MaterializeMixin:
         """
         if decision.apply_path is not None:
             return decision
+        if self._rejected_recently(decision.wallpaper_id):
+            return None
         row = self.conn.execute(
             "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
         ).fetchone()
@@ -110,6 +149,7 @@ class MaterializeMixin:
             report = inspect_image(dest, required_resolution())
             if not report.ok:
                 dest.unlink(missing_ok=True)
+                self._record_rejection(decision.wallpaper_id, report.reasons)
                 logger.warning(
                     f"full image for {decision.wallpaper_id} rejected by"
                     f" inspection: {report.width}x{report.height}"

@@ -57,21 +57,8 @@ def required_resolution(
     return int(width * scale), int(height * scale)
 
 
-def sharpness(path: Path, size: int = SHARPNESS_CROP) -> float:
-    """Variance of the Laplacian on a native-resolution centre crop.
-
-    Everything is measured at the same 512px scale; shrinking a 4K file first
-    would smooth it and make a sharp photo look soft.
-    """
-    with Image.open(path) as image:
-        grey = image.convert("L")
-        width, height = grey.size
-        if width >= size and height >= size:
-            left, top = (width - size) // 2, (height - size) // 2
-            grey = grey.crop((left, top, left + size, top + size))
-        else:
-            grey = grey.resize((size, size), Image.Resampling.LANCZOS)
-        pixels = np.asarray(grey, dtype=np.float32)
+def _laplacian_variance(grey) -> float:
+    pixels = np.asarray(grey, dtype=np.float32)
     if pixels.shape[0] < 3 or pixels.shape[1] < 3:
         return 0.0
     laplacian = (
@@ -82,6 +69,33 @@ def sharpness(path: Path, size: int = SHARPNESS_CROP) -> float:
         + pixels[1:-1, 2:]
     )
     return float(laplacian.var())
+
+
+def sharpness(path: Path, size: int = SHARPNESS_CROP) -> float:
+    """Sharpest of five native-resolution samples.
+
+    One centre crop was wrong twice: a legitimate 4K image with a plain
+    centre (sky, a solid backdrop) scored 0 and was rejected as "blurry",
+    and a subject sitting off-centre was never measured at all. Five samples
+    cover the frame; the maximum answers the real question, because a truly
+    soft image is soft everywhere, while a sharp one is sharp somewhere.
+    """
+    with Image.open(path) as image:
+        grey = image.convert("L")
+        width, height = grey.size
+        if width < size or height < size:
+            return _laplacian_variance(
+                grey.resize((size, size), Image.Resampling.LANCZOS)
+            )
+        left, top = (width - size) // 2, (height - size) // 2
+        boxes = (
+            (left, top, left + size, top + size),
+            (0, 0, size, size),
+            (width - size, 0, width, size),
+            (0, height - size, size, height),
+            (width - size, height - size, width, height),
+        )
+        return max(_laplacian_variance(grey.crop(box)) for box in boxes)
 
 
 def inspect_image(

@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Spec 6.1, verbatim.
 SCHEMA_SQL = """
@@ -80,7 +80,21 @@ CREATE TABLE IF NOT EXISTS change_log (
   previous_we_config_json  TEXT NOT NULL DEFAULT '{}',
   method                   TEXT NOT NULL,     -- static | we | manual
   applied_at               TEXT NOT NULL,
-  success                  INTEGER NOT NULL DEFAULT 0
+  success                  INTEGER NOT NULL DEFAULT 0,
+  -- What the desktop looked like before us, so undo can put the mode and
+  -- style back too, not just the image.
+  previous_style           TEXT NOT NULL DEFAULT '',
+  previous_tile            TEXT NOT NULL DEFAULT '',
+  previous_background_type INTEGER
+);
+
+-- Files that failed the post-download inspection (blurry, too small). A row
+-- here stops every later run from re-downloading the same 40 MB file just to
+-- reject it again; the entry lapses so a fixed threshold can retry.
+CREATE TABLE IF NOT EXISTS rejections (
+  wallpaper_id INTEGER PRIMARY KEY REFERENCES wallpapers(id) ON DELETE CASCADE,
+  reason       TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -152,6 +166,20 @@ def migrate(conn) -> None:
     if version >= SCHEMA_VERSION:
         return
     conn.executescript(SCHEMA_SQL)
+    if version < 4:
+        # Older databases predate the desktop-mode snapshot. ALTER with
+        # defaults keeps every existing undo row usable (an empty style means
+        # "unknown: leave the current one alone").
+        existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(change_log)")
+        }
+        for name, ddl in (
+            ("previous_style", "TEXT NOT NULL DEFAULT ''"),
+            ("previous_tile", "TEXT NOT NULL DEFAULT ''"),
+            ("previous_background_type", "INTEGER"),
+        ):
+            if name not in existing:
+                conn.execute(f"ALTER TABLE change_log ADD COLUMN {name} {ddl}")
     if version < 2:
         # v1 stored -1 / 0 / 1; the ten-point scale arrived in v2.
         conn.execute(

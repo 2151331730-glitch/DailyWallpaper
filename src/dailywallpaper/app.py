@@ -18,7 +18,7 @@ from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
 from dailywallpaper.analysis.prefilter import prefilter
 from dailywallpaper.analysis.prompts import PROMPT_VERSION
 from dailywallpaper.analysis.desktop_fit import measure as measure_desktop_fit
-from dailywallpaper.analysis.quality import inspect_image, required_resolution
+from dailywallpaper.analysis.quality import inspect_image
 from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
@@ -37,14 +37,11 @@ from dailywallpaper.app_support import (
     interleave,
     merge_tags,
     rate_limited,
+    refresh_session_proxy,
     workshop_root,
 )
-from dailywallpaper.apply.service import ApplyService
-from dailywallpaper.apply.windows_static import (
-    Win32BackgroundType,
-    WindowsStaticApplier,
-    convert_to_jpeg,
-)
+from dailywallpaper.apply.factory import build_apply_service
+from dailywallpaper.apply.windows_static import convert_to_jpeg
 from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate, now_iso
 from dailywallpaper.models import Decision
@@ -92,6 +89,10 @@ STEAM_KEY_ACCOUNT = "steam_api_key"
 # proxy is down and only Bing answers) and downloaded wallpapers stand in.
 OFFLINE_POOL_MIN = 5
 OFFLINE_POOL_LIMIT = 60
+# A source can fail because the proxy or Wi-Fi was not up yet at login. The
+# pool is then rebuilt a couple of times instead of being fixed for the day.
+MAX_PREPARE_RETRIES = 2
+PREPARE_RETRY_SECONDS = 1800
 
 logger = logging.getLogger(__name__)
 
@@ -170,13 +171,33 @@ class Application:
                 start_prefetcher(config)
             except Exception as exc:
                 logger.warning(f"prefetcher not started: {exc}")
+        first = True
         while True:
+            action = ""
             try:
-                self.machine.tick()
+                # The first tick may apply a wallpaper parked by the previous
+                # session, which is what makes a boot change instantly.
+                result = self.machine.tick(startup=first)
+                action = getattr(result, "action", "")
             except Exception as exc:
                 # A resident scheduler must outlive one bad tick.
                 logger.warning(f"tick failed: {exc}")
+            if first or action == "applied":
+                self._park_next()
+            first = False
             self.sleep(self.interval_seconds)
+
+    def _park_next(self) -> None:
+        """Pre-pick and download the next wallpaper before anyone waits."""
+        pipeline = getattr(self.machine, "pipeline", None)
+        clock = getattr(self.machine, "clock", None)
+        prepare_next = getattr(pipeline, "prepare_next", None)
+        if prepare_next is None or clock is None:
+            return
+        try:
+            prepare_next(clock.now())
+        except Exception as exc:  # housekeeping must never end the run
+            logger.warning(f"next wallpaper not prepared: {exc}")
 
 
 class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
@@ -212,6 +233,29 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # the old catch-all "no candidate passed".
         self.last_pick_reason = ""
 
+    def rehydrate(self, now) -> bool:
+        """Rebuild an empty shortlist for a day that is already prepared.
+
+        A restart keeps ``prepared_{day}`` in the database while the shortlist
+        it refers to lived in memory only. Without this the next wallpaper
+        could not be pre-picked at all, so the boot after the restart fell
+        back to the whole fetch-and-score run.
+
+        Only that case is served: when the prepare this launch just ran found
+        nothing (no proxy yet, every source down), its cross-process backoff
+        has to stand, or each launch would refetch a dead network.
+        """
+        if self.shortlist:
+            return False
+        day = now.date().isoformat()
+        row = self.conn.execute(
+            "select 1 from state where key=?", (f"prepared_{day}",)
+        ).fetchone()
+        if row is None:
+            return False
+        self.prepare(now, force=True)
+        return bool(self.shortlist)
+
     def apply_config(self, cfg) -> None:
         """Pick up settings saved while the app is running.
 
@@ -240,13 +284,46 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             and time.time() - failed_at < HOST_COOLDOWN_SECONDS
         )
 
-    def prepare(self, now, force: bool = False) -> None:
+    def _state_number(self, key: str) -> float | None:
+        row = self.conn.execute(
+            "select value from state where key=?", (key,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return float(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _state_set(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "insert or replace into state(key,value) values(?,?)", (key, value)
+        )
+
+    def _state_clear(self, key: str) -> None:
+        self.conn.execute("delete from state where key=?", (key,))
+
+    def prepare(self, now, force: bool = False, dry_run: bool = False) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
-        prepared_key = f"prepared_{now.date().isoformat()}"
+        day = now.date().isoformat()
+        prepared_key = f"prepared_{day}"
+        retry_at_key = f"prepare_retry_at_{day}"
         if self._prepared_on == prepared_key and not force:
             # One pass per day: the resident loop ticks every 60 s.
             return
+        if not force:
+            # The pool can already be complete after a restart: rebuilding it
+            # would re-pay for new candidates and only duplicates work.
+            row = self.conn.execute(
+                "select 1 from state where key=?", (prepared_key,)
+            ).fetchone()
+            if row is not None:
+                self._prepared_on = prepared_key
+                return
+            retry_at = self._state_number(retry_at_key)
+            if retry_at is not None and time.time() < retry_at:
+                return
         if force:
             day = now.date().isoformat()
             if self._forced_on != day:
@@ -265,6 +342,9 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             except (TypeError, ValueError):
                 pass
 
+        # The proxy may have come up (or gone down) since the last pass.
+        refresh_session_proxy(self.session, self.cfg)
+        failed_sources: list[str] = []
         self._rate_limited_streak = 0
         # A refill must be quick: re-scoring 41 candidates against a new
         # prompt version took minutes and looked like a dead click. Spend a
@@ -296,9 +376,10 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             try:
                 raw.extend(source.fetch(self.cfg.app.max_analyses_per_day))
             except Exception as exc:
-                # Remember it for the day: no proxy, no repeated waits.
-                logger.warning(f"source {name} unavailable today: {exc}")
+                # Remember it for a while: no proxy, no repeated waits.
+                logger.warning(f"source {name} unavailable: {exc}")
                 mark_source_down(self.conn, name, today)
+                failed_sources.append(name)
                 continue
 
         on_battery = False
@@ -380,7 +461,7 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         counters = {"downloads": 0, "analyses": 0}
         self._evaluate(
             primary, data_dir, profile, recent, weather_code, weather_text,
-            recent_hashes, counters,
+            recent_hashes, counters, hour=now.hour,
         )
         # A remote Steam item that has not been downloaded yet must not be
         # picked: applying it would either use the preview thumbnail or block
@@ -397,7 +478,7 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             logger.info(f"no {kind} candidate qualified; falling back")
             self._evaluate(
                 fallback, data_dir, profile, recent, weather_code, weather_text,
-                recent_hashes, counters,
+                recent_hashes, counters, hour=now.hour,
             )
             self._keep_ready()
 
@@ -405,21 +486,56 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # A refill is a click the user is waiting on: the review pass costs
         # five more model calls and only re-ranks the head, which is not
         # worth a minute of "换一张" looking broken.
-        if not force and self.cfg.vision.review_top_n > 0 and self.shortlist:
-            self._review_top(profile, recent, weather_code)
+        # The review pass only adds information when it uses a different
+        # model: with the same one every call is a cache hit on the screening
+        # verdict, so the "second opinion" was the first opinion re-read.
+        if (
+            not force
+            and self.cfg.vision.review_top_n > 0
+            and self.shortlist
+            and self.cfg.vision.review_model != self.cfg.vision.screen_model
+        ):
+            self._review_top(profile, recent, weather_code, hour=now.hour)
             self.shortlist = rank(self.shortlist, now.date().isoformat())
         self._materialize(data_dir, counters)
-        if raw:
-            self.conn.execute("delete from state where key='empty_prepare_at'")
+        if dry_run:
+            # A dry run reports what it would pick; it must not mark the day
+            # or leave a retry throttle behind for the real run.
             self.conn.commit()
-            self._prepared_on = prepared_key
+            return
+        if self.shortlist:
+            self._state_clear("empty_prepare_at")
+            retries = int(self._state_number(f"prepare_retry_count_{day}") or 0)
+            if failed_sources and retries < MAX_PREPARE_RETRIES:
+                # The pool is missing at least one source (probably the proxy
+                # was not up yet). Keep this pass but rebuild later instead of
+                # fixing the whole day on a snapshot taken before Wi-Fi.
+                self._state_set(
+                    retry_at_key, str(time.time() + PREPARE_RETRY_SECONDS)
+                )
+                self._state_set(f"prepare_retry_count_{day}", str(retries + 1))
+                logger.info(
+                    "pool incomplete ("
+                    + ", ".join(failed_sources)
+                    + f"); retrying in {PREPARE_RETRY_SECONDS // 60} min"
+                )
+            else:
+                self._state_set(prepared_key, "1")
+                self._state_clear(retry_at_key)
+                self._state_clear(f"prepare_retry_count_{day}")
+                self._prepared_on = prepared_key
+            self.conn.commit()
         else:
-            # No source returned anything: probably a transient network
-            # failure at login. Retry in half an hour rather than skip the day.
-            self.conn.execute(
-                "insert or replace into state(key,value) values('empty_prepare_at',?)",
-                (str(time.time()),),
-            )
+            # Nothing qualified. The day is not marked as prepared in the DB:
+            # a fresh process (or a later retry) may still find a usable
+            # candidate, e.g. once a Steam item has finished downloading.
+            # Only an entirely empty fetch needs the cross-process backoff.
+            self._state_clear(retry_at_key)
+            if not raw:
+                # No source returned anything: probably a transient network
+                # failure at login. Retry in half an hour rather than skip.
+                self._state_set("empty_prepare_at", str(time.time()))
+            self._prepared_on = prepared_key
             self.conn.commit()
 
 def build_pipeline(cfg, conn):
@@ -467,10 +583,15 @@ def build_pipeline(cfg, conn):
         conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, SystemClock()
     )
     vision = VisionClient(
-        provider=ZhipuVision(api_key),
+        provider=ZhipuVision(
+            api_key,
+            max_output_tokens=cfg.vision.max_output_tokens,
+            temperature=cfg.vision.temperature,
+        ),
         conn=conn,
         pricing=cfg.vision.pricing,
         budget=budget,
+        max_output_tokens=cfg.vision.max_output_tokens,
     )
     return RealPipeline(cfg, conn, session, sources, vision, budget)
 
@@ -480,34 +601,21 @@ def build_application(cfg):
     migrate(conn)
     # Live wallpapers start silent on every launch; the tray switch turns the
     # audio on for this session only, so a reboot never surprises the user.
+    # Only the first construction of the session should default the sound
+    # switch: worker and guard build their own Application, and a retry must
+    # not revert a switch the user just flipped in the tray.
     conn.execute(
-        "insert or replace into state(key,value) values('sound_enabled','0')"
+        "insert or ignore into state(key,value) values('sound_enabled','0')"
     )
     conn.commit()
     pipeline = build_pipeline(cfg, conn)
-    dynamic_applier = None
-    we_control = None
-    if cfg.wallpaper_engine.install_dir:
-        from dailywallpaper.apply.we_applier import WeApplier
-        from dailywallpaper.apply.we_control import WeControl
-
-        install = Path(cfg.wallpaper_engine.install_dir)
-        config_path = Path(cfg.wallpaper_engine.config_path or install / "config.json")
-        we_control = WeControl(install, config_path)
-        dynamic_applier = WeApplier(we_control)
+    # The service is assembled in its own module so the boot-time pass in
+    # ``dailywallpaper.startup`` can build it without importing this file.
     machine = DailyStateMachine(
         conn=conn,
         config=cfg,
         clock=SystemClock(),
         pipeline=pipeline,
-        apply_service=ApplyService(
-            conn,
-            WindowsStaticApplier(background_type=Win32BackgroundType()),
-            we=we_control,
-            dynamic_applier=dynamic_applier,
-            recheck_delays=(5, 30),
-            style=cfg.wallpaper.style,
-            min_resolution=required_resolution(),
-        ),
+        apply_service=build_apply_service(cfg, conn),
     )
     return Application(machine)

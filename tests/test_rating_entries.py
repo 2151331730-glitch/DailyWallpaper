@@ -278,7 +278,7 @@ def test_shell_rating_entry_opens_the_dialog_for_the_latest(qapp, tmp_path, monk
     opened = []
 
     class _Dialog:
-        def __init__(self, service, wallpaper_id, parent=None):
+        def __init__(self, service, wallpaper_id, parent=None, budget=None):
             opened.append(wallpaper_id)
 
         def exec(self):

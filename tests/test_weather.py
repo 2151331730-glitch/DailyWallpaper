@@ -55,10 +55,12 @@ def test_weather_tags_mapping(code, expected):
 def test_weather_tags_unknown_code_is_empty():
     assert weather_tags(123) == set()
 
-def test_weather_tags_returns_independent_sets():
+def test_weather_tags_are_immutable_and_cached():
     tags = weather_tags(0)
-    tags.add("mutated")
-    assert "mutated" not in weather_tags(0)
+    assert isinstance(tags, frozenset)
+    with pytest.raises(AttributeError):
+        tags.add("mutated")
+    assert weather_tags(0) == tags
 
 def test_weather_fit_intersection_returns_100():
     assert weather_fit(["moody", "minimal"], 61) == 100
