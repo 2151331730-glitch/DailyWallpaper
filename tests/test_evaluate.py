@@ -101,3 +101,85 @@ def test_relevance_matches_the_human_rating_of_the_ranked_items():
     ev = _module()
     ranked = [{"rating": 2}, {"rating": 9}]
     assert ev.relevance(ranked) == [2, 9]
+
+
+# ------------------------------------------------------- pairwise metric ---
+
+def test_pairwise_accuracy_is_one_for_a_perfect_ranker():
+    ev = _module()
+    ratings = [1, 4, 7, 10]
+    scores = [10.0, 20.0, 30.0, 40.0]
+    accuracy, pairs = ev.pairwise_accuracy(scores, ratings)
+    assert accuracy == 1.0
+    assert pairs == 6
+
+
+def test_pairwise_accuracy_is_zero_for_a_reversed_ranker():
+    ev = _module()
+    ratings = [1, 4, 7, 10]
+    scores = [40.0, 30.0, 20.0, 10.0]
+    accuracy, _ = ev.pairwise_accuracy(scores, ratings)
+    assert accuracy == 0.0
+
+
+def test_pairwise_ties_count_as_half():
+    ev = _module()
+    ratings = [1, 10]
+    scores = [5.0, 5.0]
+    accuracy, pairs = ev.pairwise_accuracy(scores, ratings)
+    assert pairs == 1
+    assert accuracy == pytest.approx(0.5)
+
+
+def test_pairwise_ignores_pairs_closer_than_the_gap():
+    ev = _module()
+    ratings = [5, 6, 10]
+    scores = [1.0, 2.0, 3.0]
+    # With a gap of 2 only the two (5,10) and (6,10) pairs count.
+    _, pairs = ev.pairwise_accuracy(scores, ratings, min_gap=2)
+    assert pairs == 2
+
+
+def test_pairwise_returns_no_pairs_when_nothing_differs():
+    ev = _module()
+    accuracy, pairs = ev.pairwise_accuracy([1.0, 2.0], [5, 5])
+    assert pairs == 0
+    assert accuracy == 0.0
+
+
+# ------------------------------------------------------- cross validation ---
+
+def _rows(count=50):
+    return [
+        {"rating": index % 10 + 1, "id": index, "created_at": "2000-01-01T00:00:00"}
+        for index in range(count)
+    ]
+
+
+def test_kfold_puts_every_row_in_exactly_one_test_fold():
+    ev = _module()
+    rows = _rows(50)
+    folds = ev.kfold_split(rows, k=5, seed=7)
+
+    assert len(folds) == 5
+    tested = [row["id"] for _, test in folds for row in test]
+    assert len(tested) == len(rows)
+    assert set(tested) == {row["id"] for row in rows}
+    for train, test in folds:
+        assert {row["id"] for row in train} & {row["id"] for row in test} == set()
+
+
+def test_kfold_keeps_the_rating_mix_in_every_fold():
+    ev = _module()
+    rows = _rows(50)
+    for _, test in ev.kfold_split(rows, k=5, seed=7):
+        assert {row["rating"] for row in test} == set(range(1, 11))
+
+
+def test_kfold_is_deterministic_for_a_seed():
+    ev = _module()
+    first = ev.kfold_split(_rows(50), k=5, seed=7)
+    second = ev.kfold_split(_rows(50), k=5, seed=7)
+    assert [row["id"] for _, test in first for row in test] == [
+        row["id"] for _, test in second for row in test
+    ]

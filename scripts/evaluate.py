@@ -149,6 +149,85 @@ def relevance(rows) -> list[int]:
     return [int(row["rating"]) for row in rows]
 
 
+def pairwise_accuracy(scores, ratings, min_gap: int = 1):
+    """How often the higher-scored picture is also the better-loved one.
+
+    Every pair whose ratings differ by at least ``min_gap`` is one question.
+    NDCG@5 over a single pool answers one question per run; this answers
+    hundreds, which is what makes a spread meaningful. 0.5 is a coin.
+    """
+    scores, ratings = list(scores), list(ratings)
+    correct = ties = pairs = 0
+    for left in range(len(ratings)):
+        for right in range(left + 1, len(ratings)):
+            if abs(ratings[left] - ratings[right]) < min_gap:
+                continue
+            pairs += 1
+            if scores[left] == scores[right]:
+                ties += 1
+                continue
+            better = left if ratings[left] > ratings[right] else right
+            if (scores[left] > scores[right]) == (better == left):
+                correct += 1
+    if not pairs:
+        return 0.0, 0
+    return (correct + 0.5 * ties) / pairs, pairs
+
+
+def kfold_split(rows, k: int = 5, seed: int = SEED):
+    """Stratified k folds: every rating keeps its share in every fold."""
+    by_rating = defaultdict(list)
+    for row in rows:
+        by_rating[row["rating"]].append(row)
+    rng = random.Random(seed)
+    folds: list[list] = [[] for _ in range(k)]
+    for rating in sorted(by_rating):
+        group = list(by_rating[rating])
+        rng.shuffle(group)
+        offset = rng.randrange(k)
+        for index, row in enumerate(group):
+            folds[(offset + index) % k].append(row)
+    return [
+        ([row for other, fold in enumerate(folds) if other != index for row in fold],
+         folds[index])
+        for index in range(k)
+    ]
+
+
+def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1) -> dict:
+    """Pairwise accuracy per strategy, averaged over the folds.
+
+    The profile is rebuilt from the training folds every time, so a picture
+    that taught the profile never appears in the folds that judge it.
+    """
+    names = ("explore", "personalize", "blend", "weighted")
+    per_fold = {name: [] for name in names}
+    pairs_total = 0
+    for train, test in kfold_split(rows, k, seed):
+        profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
+        scored = [
+            (score_variants(_scores_from_row(row), row["source"], profile), row["rating"])
+            for row in test
+        ]
+        for name in names:
+            accuracy, pairs = pairwise_accuracy(
+                [scores[name] for scores, _ in scored],
+                [rating for _, rating in scored], min_gap)
+            per_fold[name].append(accuracy)
+            if name == "weighted":
+                pairs_total += pairs
+    summary = {
+        name: {
+            "accuracy_mean": statistics.fmean(values),
+            "accuracy_sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
+        }
+        for name, values in per_fold.items()
+    }
+    summary["pairs"] = pairs_total
+    summary["folds"] = k
+    return summary
+
+
 # --------------------------------------------------------------- scoring ---
 
 def _scores_from_row(row) -> VisionScores:
@@ -335,7 +414,16 @@ def _fmt(value: float) -> str:
     return f"{value:.3f}"
 
 
-def render_report(summary, quality, history, stats) -> str:
+def render_report(summary, quality, history, stats, cv) -> str:
+    strategy_labels = {
+        "explore": "纯探索",
+        "personalize": "纯个性化",
+        "blend": "55/45 纯混合",
+        "weighted": "55/45 + 惩罚（现状）",
+    }
+    best_label = strategy_labels[
+        max(strategy_labels, key=lambda name: cv[name]["accuracy_mean"])
+    ]
     lines = [
         "# 离线评估报告",
         "",
@@ -361,10 +449,30 @@ def render_report(summary, quality, history, stats) -> str:
         "- 这项越大，模型分的信息量越少（不同图片拿到同一组分数，排序只能靠掷骰子）。",
         f"- 评分分布：{quality['rating_histogram']}",
         "",
-        "## 结果",
+        "## 成对比较（主结论）",
+        "",
+        f"{cv['folds']} 折交叉验证：每折 80% 建画像、20% 只评估；"
+        "每折里所有评分差 ≥1 的两两配对各问一次，"
+        f"共 {cv['pairs']} 个问题。",
+        "",
+        "准确率 = 「分数更高的那张，确实是你打分更高的那张」的比例。0.5 等于抛硬币。",
+        "标准差是折与折之间的波动，不是抽样误差。",
+        "",
+        "| 排序策略 | 成对准确率 | 折间标准差 |",
+        "|---|---|---|",
+        *[
+            f"| {strategy_labels[name]} | {cv[name]['accuracy_mean']:.3f} "
+            f"(±{cv[name]['accuracy_sd']:.3f}) |"
+            for name in ("explore", "personalize", "blend", "weighted")
+        ],
+        "",
+        f"最好的策略：**{best_label}**",
+        "",
+        "## NDCG@5（单次切分，仅参考）",
         "",
         f"NDCG@{TOP_K} 按伪候选池计算后取平均，括号内为标准差；"
-        "Spearman 在整个测试集上计算。",
+        "Spearman 在整个测试集上计算。测试集只有几十张时只会切出一个池，"
+        "标准差因此恒为 0——这正是改用成对比较的原因。",
         "",
         "| 排序策略 | NDCG@5 | Spearman |",
         "|---|---|---|",
@@ -423,6 +531,7 @@ def main(argv=None) -> int:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--pool-size", type=int, default=POOL_SIZE)
     parser.add_argument("--test-ratio", type=float, default=TEST_RATIO)
+    parser.add_argument("--folds", type=int, default=5)
     args = parser.parse_args(argv)
 
     if not args.db.exists():
@@ -443,10 +552,11 @@ def main(argv=None) -> int:
 
     profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
     summary = evaluate(test, profile, args.seed, args.pool_size)
+    cv = cross_validate(rows, k=args.folds, seed=args.seed)
     quality = data_quality(rows)
     history = history_check(conn, profile)
 
-    report = render_report(summary, quality, history, stats)
+    report = render_report(summary, quality, history, stats, cv)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(report, encoding="utf-8")
 
