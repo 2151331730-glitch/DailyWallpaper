@@ -208,13 +208,21 @@ def kfold_split(rows, k: int = 5, seed: int = SEED):
 
 
 def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1,
-                   sugar=None) -> dict:
-    """Pairwise accuracy per strategy, averaged over the folds.
+                   sugar=None, pool_size: int = POOL_SIZE,
+                   top_k: int = TOP_K, min_pool: int | None = None) -> dict:
+    """Pairwise accuracy and pool-level NDCG@5, both averaged over the folds.
 
     The profile is rebuilt from the training folds every time, so a picture
     that taught the profile never appears in the folds that judge it.
+
+    NDCG@5 needs pools, and a single 80/20 split only yields one or two of
+    them -- a mean with no spread, which cannot tell a real gap from luck.
+    Dealing each fold's test split into its own pools gives every fold a
+    couple of independent queries, so the reported standard deviation is the
+    pool-to-pool swing the metric is meant to survive.
     """
     per_fold: dict[str, list[float]] = {}
+    per_pool: dict[str, list[float]] = {}
     pairs_total = 0
     for train, test in kfold_split(rows, k, seed):
         profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
@@ -225,7 +233,8 @@ def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1,
         ]
         if not scored:
             continue
-        for name in scored[0][0]:
+        names = tuple(scored[0][0])
+        for name in names:
             per_fold.setdefault(name, [])
             accuracy, pairs = pairwise_accuracy(
                 [scores[name] for scores, _ in scored],
@@ -233,15 +242,44 @@ def cross_validate(rows, k: int = 5, seed: int = SEED, min_gap: int = 1,
             per_fold[name].append(accuracy)
             if name == "weighted":
                 pairs_total += pairs
-    summary = {
-        name: {
+
+        floor = max(2, int(pool_size * 0.75)) if min_pool is None else min_pool
+        for pool in make_pools(scored, pool_size, seed, min_size=floor):
+            ideal = sorted((rating for _, rating in pool), reverse=True)
+            for name in names:
+                order = sorted(pool, key=lambda item: -item[0][name])
+                per_pool.setdefault(name, []).append(
+                    ndcg_at_k([rating for _, rating in order], ideal, top_k))
+            rng = random.Random(seed)
+            trials = []
+            for _ in range(RANDOM_TRIALS):
+                order = list(pool)
+                rng.shuffle(order)
+                trials.append(
+                    ndcg_at_k([rating for _, rating in order], ideal, top_k))
+            per_pool.setdefault("random", []).append(statistics.fmean(trials))
+
+    summary = {}
+    for name in per_fold:
+        values = per_fold[name]
+        pools = per_pool.get(name, [])
+        summary[name] = {
             "accuracy_mean": statistics.fmean(values),
             "accuracy_sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
+            "ndcg_mean": statistics.fmean(pools) if pools else 0.0,
+            "ndcg_sd": statistics.pstdev(pools) if len(pools) > 1 else 0.0,
         }
-        for name, values in per_fold.items()
-    }
+    if per_pool.get("random"):
+        values = per_pool["random"]
+        summary["random"] = {
+            "ndcg_mean": statistics.fmean(values),
+            "ndcg_sd": statistics.pstdev(values) if len(values) > 1 else 0.0,
+            "pools": len(values),
+        }
     summary["pairs"] = pairs_total
     summary["folds"] = k
+    summary["pools"] = len(per_pool.get("weighted", []))
+    summary["pool_size"] = pool_size
     return summary
 
 
@@ -495,14 +533,15 @@ def render_report(summary, quality, history, stats, cv) -> str:
         "",
         f"最好的策略：**{best_label}**",
         "",
-        "## NDCG@5（单次切分，仅参考）",
+        f"## NDCG@{TOP_K}（{cv['folds']} 折 × 每折 1–2 个候选池）",
         "",
-        f"NDCG@{TOP_K} 按伪候选池计算后取平均，括号内为标准差；"
-        "Spearman 在整个测试集上计算。测试集只有几十张时只会切出一个池，"
-        "标准差因此恒为 0——这正是改用成对比较的原因。",
+        f"NDCG@{TOP_K} 按伪候选池（每池约 {cv['pool_size']} 张，模拟一天的候选量）"
+        f"计算后取平均，共 **{cv['pools']} 个池**；括号内是池与池之间的标准差。"
+        "池子由折内的测试集重新发牌得到，所以每折都有自己的排名题，"
+        "离散程度是真实的、不是恒为 0 的占位值。",
         "",
-        "| 排序策略 | NDCG@5 | Spearman |",
-        "|---|---|---|",
+        "| 排序策略 | NDCG@5 | 池间标准差 | 单次切分 Spearman |",
+        "|---|---|---|---|",
     ]
     labels = {
         "random": "随机（下限）",
@@ -510,19 +549,28 @@ def render_report(summary, quality, history, stats, cv) -> str:
         "personalize": "纯个性化",
         "blend": "55/45 纯混合",
         "weighted": "55/45 + 惩罚（现状）",
+        "sugar": "55/45 + 糖水判别式",
     }
-    order = ("random", "explore", "personalize", "blend", "weighted")
+    order = ("random", "explore", "personalize", "blend", "weighted", "sugar")
     for name in order:
-        row = summary[name]
+        if name not in cv:
+            continue
+        row = cv[name]
+        spearman = summary[name]["spearman"] if name in summary else None
         lines.append(
             f"| {labels[name]} | {_fmt(row['ndcg_mean'])} "
-            f"(±{_fmt(row['ndcg_sd'])}) | {_fmt(row['spearman'])} |"
+            f"(±{_fmt(row['ndcg_sd'])}) | "
+            f"{'—' if spearman is None else _fmt(spearman)} |"
         )
-    scored_names = ("explore", "personalize", "blend", "weighted")
-    best = max(scored_names, key=lambda name: summary[name]["ndcg_mean"])
+    scored_names = [name for name in ("explore", "personalize", "blend",
+                                      "weighted", "sugar") if name in cv]
+    best = max(scored_names, key=lambda name: cv[name]["ndcg_mean"])
     lines += [
         "",
         f"最好的策略：**{labels[best]}**",
+        "",
+        "Spearman 来自单次 70/30 切分（整个测试集一条排名），只作方向参考；"
+        "两种指标不一致时以成对比较为准。",
         "",
     ]
     if history:
@@ -580,7 +628,8 @@ def main(argv=None) -> int:
     profile = PreferenceProfile.from_ratings(train, datetime.now().astimezone())
     sugar = _sugar_model()
     summary = evaluate(test, profile, args.seed, args.pool_size, sugar=sugar)
-    cv = cross_validate(rows, k=args.folds, seed=args.seed, sugar=sugar)
+    cv = cross_validate(rows, k=args.folds, seed=args.seed, sugar=sugar,
+                        pool_size=args.pool_size, top_k=TOP_K)
     quality = data_quality(rows)
     history = history_check(conn, profile)
 

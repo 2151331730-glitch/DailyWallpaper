@@ -183,3 +183,40 @@ def test_kfold_is_deterministic_for_a_seed():
     assert [row["id"] for _, test in first for row in test] == [
         row["id"] for _, test in second for row in test
     ]
+
+
+def _eval_rows(count=200):
+    """Rows shaped like load_rows(): a clear, learnable link to the rating."""
+    rows = []
+    for index in range(count):
+        rating = index % 10 + 1
+        rows.append({
+            "wallpaper_id": index, "rating": rating, "source": "wallhaven",
+            "created_at": "2000-01-01T00:00:00", "nsfw": 0,
+            "quality": 40 + rating * 4, "creativity": 30 + rating * 5,
+            "novelty": 20 + rating * 4, "formulaic": max(0, 60 - rating * 4),
+            "scores_json": "{}",
+            "style_tags_json": '["dark", "abstract"]',
+            "mood_tags_json": '["calm"]', "palette_json": "[]",
+        })
+    return rows
+
+
+def test_cross_validate_scores_ndcg_over_several_pools():
+    # The old single split could only produce one pool, so its standard
+    # deviation was always zero. Every fold now deals its own pools.
+    ev = _module()
+    cv = ev.cross_validate(_eval_rows(), k=5, seed=7, pool_size=20)
+
+    assert cv["pools"] >= 5
+    assert cv["folds"] == 5
+    for name in ("explore", "personalize", "blend", "weighted", "random"):
+        assert 0.0 <= cv[name]["ndcg_mean"] <= 1.0
+    assert cv["random"]["ndcg_sd"] >= 0.0
+
+
+def test_cross_validate_ndcg_follows_the_rating_it_was_built_from():
+    # Quality rises with the rating, so a working ranker must beat the coin.
+    ev = _module()
+    cv = ev.cross_validate(_eval_rows(), k=5, seed=7, pool_size=20)
+    assert cv["weighted"]["ndcg_mean"] > cv["random"]["ndcg_mean"]
