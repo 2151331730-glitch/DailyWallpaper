@@ -2,7 +2,7 @@
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
 #define MyAppName "每日壁纸"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "郭欣哈"
 #define MyAppExeName "DailyWallpaper.exe"
 
@@ -33,6 +33,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："
 Name: "autostart"; Description: "开机自动启动"; GroupDescription: "启动选项："
 Name: "darktaskbar"; Description: "将任务栏和搜索框改成深色（适配深色壁纸）"; GroupDescription: "外观选项："
+
+[InstallDelete]
+; An upgrade copies over same-named files and leaves everything else alone, so
+; a payload dropped in an older release (an old `dailywallpaper-0.1.0.dist-info`,
+; a Qt plugin no longer shipped) stayed in `_internal` forever. The bundled
+; metadata is what `--version` and the about box read, and with two of them the
+; old one won: an upgrade from 0.1.x to 1.0.1 still reported 0.1.0. The whole
+; payload is rebuilt from source on every release, so clear it before copying.
+; User data lives in {localappdata}\DailyWallpaper and is untouched.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "dist\DailyWallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
