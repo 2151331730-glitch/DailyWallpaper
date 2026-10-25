@@ -24,5 +24,9 @@ MAX_SEARCH_INTENTS = 3
 ESTIMATE_CNY = 0.003
 # Video files that can be used directly from disk.
 VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+# What Windows itself accepts as a desktop background, plus the two formats
+# Wallhaven serves. Used to tell "the user set a picture" from "Wallpaper
+# Engine put its live wallpaper back".
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 # Sponsor page (爱发电). Empty hides the tray entry and the README line.
 DONATE_URL = "https://afdian.com/a/guoxinha"

@@ -664,7 +664,8 @@ def test_startup_reapplies_the_last_static_wallpaper_over_we(tmp_path):
     image.write_bytes(b"x")
     _logged_wallpaper(conn, image)
     we = _FakeWe()
-    service = ApplyService(conn, _FakeApplier(), we=we)
+    # At login the desktop is not showing a picture the user picked by hand.
+    service = ApplyService(conn, _FakeApplier(wallpaper=""), we=we)
 
     assert service.ensure_visible() is True
     assert we.closed == 1
@@ -682,6 +683,22 @@ def test_startup_leaves_a_dynamic_wallpaper_alone(tmp_path):
 
     assert service.ensure_visible() is False
     assert we.closed == 0
+    assert service.applier.applied == []
+
+
+def test_startup_leaves_a_picture_the_user_picked_by_hand(tmp_path):
+    """A reboot must not undo a wallpaper the user set themselves."""
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = tmp_path / "wall.jpg"
+    image.write_bytes(b"x")
+    _logged_wallpaper(conn, image)
+    chosen = tmp_path / "mine.png"
+    _big_image(chosen)
+    service = ApplyService(conn, _FakeApplier(wallpaper=str(chosen)))
+
+    assert service.ensure_visible() is False
+
     assert service.applier.applied == []
 
 
@@ -787,7 +804,9 @@ def test_startup_applies_even_when_we_cannot_be_closed(tmp_path):
     image = tmp_path / "wall.jpg"
     image.write_bytes(b"x")
     _logged_wallpaper(conn, image)
-    service = ApplyService(conn, _FakeApplier(), we=_FakeWe(close_ok=False))
+    service = ApplyService(
+        conn, _FakeApplier(wallpaper=""), we=_FakeWe(close_ok=False)
+    )
 
     assert service.ensure_visible() is True
     assert service.applier.applied[-1] == image
@@ -816,7 +835,7 @@ def test_startup_prefers_the_recorded_applied_path(tmp_path):
         (str(full),),
     )
     conn.commit()
-    service = ApplyService(conn, _FakeApplier())
+    service = ApplyService(conn, _FakeApplier(wallpaper=""))
 
     assert service.ensure_visible() is True
     assert service.applier.applied[-1] == full
@@ -1005,7 +1024,13 @@ def test_keep_visible_does_nothing_when_nothing_took_over(tmp_path):
     assert applier.applied == []
 
 
-def test_keep_visible_restores_a_desktop_something_else_changed(tmp_path):
+def test_keep_visible_leaves_a_picture_the_user_picked_by_hand(tmp_path):
+    """Picking a wallpaper from the folder in the tray must stick.
+
+    This used to snap back within ten seconds: the guard saw "the desktop is
+    not our image" and re-applied yesterday's pick. A path outside the app's
+    data directory is the user speaking, not Wallpaper Engine.
+    """
     conn = connect(tmp_path / "app.db")
     migrate(conn)
     image = _big_image(tmp_path / "wall.jpg")
@@ -1015,8 +1040,35 @@ def test_keep_visible_restores_a_desktop_something_else_changed(tmp_path):
         (str(image),),
     )
     conn.commit()
-    applier = _FakeApplier(wallpaper="C:/somewhere/else.jpg")
+    chosen = tmp_path / "picked-by-hand.png"
+    _big_image(chosen)
+    applier = _FakeApplier(wallpaper=str(chosen))
     service = ApplyService(conn, applier)
+
+    assert service.keep_visible() is False
+
+    assert applier.applied == []
+
+
+def test_keep_visible_still_takes_back_a_non_image_takeover(tmp_path):
+    """Wallpaper Engine puts up something that is not one of our pictures.
+
+    WE's own desktop window reports a path that is not an image file the user
+    set, so the guard must still act on it.
+    """
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    image = _big_image(tmp_path / "wall.jpg")
+    _logged_wallpaper(conn, image)
+    conn.execute(
+        "insert or replace into state(key,value) values('last_applied_path',?)",
+        (str(image),),
+    )
+    conn.commit()
+    we = _FakeWe(current="")
+    # Not an image and not under data/: WE drawing over our static picture.
+    applier = _FakeApplier(wallpaper="")
+    service = ApplyService(conn, applier, we=we)
 
     assert service.keep_visible() is True
 

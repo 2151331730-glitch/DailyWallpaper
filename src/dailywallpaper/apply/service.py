@@ -26,6 +26,7 @@ BLACKOUT_RENDER_WAIT_SECONDS = 5.0
 BLACKOUT_POLL_SECONDS = 0.25
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
+    IMAGE_SUFFIXES,
     SOUND_KEY,
     SOUND_REASSERT_SECONDS,
 )
@@ -836,13 +837,25 @@ class ApplyService:
 
     @_serialised
     def keep_visible(self) -> bool:
-        """Undo a takeover of the desktop while the app runs.
+        """Undo a Wallpaper Engine takeover of the desktop while the app runs.
 
         Wallpaper Engine restores its own live wallpaper whenever it likes
         (service restart, monitor wake); the recheck after an apply only
         watches 30 seconds, which is how a wallpaper the user rated 1 came
         back minutes later. The worker's guard thread calls this every few
         seconds, including while a long prepare is running.
+
+        It defends against *Wallpaper Engine*, not against the user. Someone
+        who opens the wallpaper folder from the tray and picks a picture by
+        hand is expressing a preference, and this guard used to overwrite it
+        within ten seconds -- the desktop snapped back to yesterday's pick
+        with no explanation. A desktop that now shows a different ordinary
+        image is therefore left alone; only these are undone:
+
+        - a live wallpaper WE restored over our still image, and
+        - a picture this app itself rated 1-2 (``forget_banned_selection``
+          points WE away from it, and the guard pulls it back off the
+          desktop).
         """
         self.forget_banned_selection()
         row = self._last_change()
@@ -865,6 +878,12 @@ class ApplyService:
         ours = bool(current) and _norm(current) == _norm(
             target.with_suffix(".apply.jpg")
         )
+        if not ours and current and self._user_picked(current):
+            logger.info(
+                f"keep_visible: leaving {Path(current).name} alone"
+                " (chosen outside the app)"
+            )
+            return False
         # Only a visible desktop window means WE is drawing again; its saved
         # selection survives a close and would otherwise trigger a control
         # command every ten seconds.
@@ -887,6 +906,23 @@ class ApplyService:
             logger.warning(f"keep_visible: re-apply failed: {result.error}")
         return bool(result.ok)
 
+    def _user_picked(self, current: str) -> bool:
+        """True when the desktop is showing a picture the user chose themselves.
+
+        A hand-picked wallpaper is an ordinary image file. Wallpaper Engine's
+        takeover is not: its desktop window reports its own rendering path, a
+        scene/video asset, or nothing at all. So the shape of the path is the
+        signal -- deliberately not "is it inside our data folder", because a
+        user may well pick a picture out of ``data/wallpapers`` by hand after
+        opening that folder from the tray, and that is still their choice.
+        """
+        path = Path(current)
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            return False
+        # The half-size JPEG this app derives for Windows is ours to manage.
+        return not path.stem.endswith((".apply", "_apply"))
+
+
     @_serialised
     def ensure_visible(self) -> bool:
         """Re-assert the last successful wallpaper after a login (spec 9.1).
@@ -894,12 +930,30 @@ class ApplyService:
         WE starts with Windows and may restore its own live wallpaper over a
         static one. Re-applying the recorded image is not a new change: it
         writes no change_log row and does not touch the daily limit.
+
+        A picture the user chose by hand is left alone, for the same reason
+        ``keep_visible`` leaves it alone: rebooting must not undo a decision
+        the user made in Explorer.
         """
         path = self._static_target()
         if path is None:
             return False
         if not self._inspection_passes(path):
             logger.warning("startup: recorded wallpaper failed inspection; skipping")
+            return False
+        try:
+            getter = getattr(self.applier, "current_wallpaper", None)
+            if getter is not None:
+                current = getter() or ""
+            else:
+                current = getattr(self.applier.snapshot(), "wallpaper", "") or ""
+        except Exception:  # an unreadable desktop is not a reason to give up
+            current = ""
+        if current and self._user_picked(current):
+            logger.info(
+                f"startup: leaving {Path(current).name} alone"
+                " (chosen outside the app)"
+            )
             return False
         try:
             if self.we is not None and self.we_rendering():
