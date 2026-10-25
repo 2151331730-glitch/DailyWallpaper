@@ -30,7 +30,7 @@ def build_apply_service(cfg, conn):
             cfg.wallpaper_engine.config_path or install / "config.json"
         )
         we_control = WeControl(install, config_path)
-        dynamic_applier = WeApplier(we_control)
+        dynamic_applier = WeApplier(we_control, monitor=cfg.wallpaper.monitor)
     return ApplyService(
         conn,
         WindowsStaticApplier(background_type=Win32BackgroundType()),

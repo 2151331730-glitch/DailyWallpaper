@@ -10,9 +10,14 @@ class FakeControl:
         self.resolves = resolves
         self.current_value = "D:/we/old/scene.pkg"
         self.opened = []
+        self.replaced = []
 
     def current(self):
         return self.current_value
+
+    def replace_selection(self, file, monitor=0):
+        self.replaced.append(Path(file))
+        return True
 
     def open(self, file, monitor=0):
         self.opened.append(Path(file))
@@ -171,3 +176,43 @@ def test_an_engine_that_was_already_running_still_rolls_back(tmp_path):
 
     assert result.ok is False
     assert control.opened[-1] == Path("D:/we/old/scene.pkg")
+
+
+def test_the_saved_selection_is_aimed_at_the_target_before_the_switch(tmp_path):
+    # WE renders whatever config.json names until the new project finishes
+    # loading, which looked like the previous wallpaper flashing back.
+    project = _project(tmp_path)
+    control = FakeControl()
+
+    result = _applier(control).apply(project)
+
+    assert result.ok is True
+    assert control.replaced == [project]
+
+
+def test_a_scene_project_is_recorded_as_its_packed_file(tmp_path):
+    # WE's own config names scene.pkg, never project.json; writing the manifest
+    # path there would hand it a record it cannot resolve.
+    folder = tmp_path / "scene"
+    folder.mkdir()
+    project = folder / "project.json"
+    project.write_text('{"type": "Scene", "file": "scene.json"}', encoding="utf-8")
+    (folder / "scene.pkg").write_bytes(b"pkg")
+    control = FakeControl()
+
+    _applier(control).apply(project)
+
+    assert control.replaced == [folder / "scene.pkg"]
+
+
+def test_a_web_project_is_recorded_as_its_declared_entry(tmp_path):
+    folder = tmp_path / "web"
+    folder.mkdir()
+    project = folder / "project.json"
+    project.write_text('{"type": "Web", "file": "index.html"}', encoding="utf-8")
+    (folder / "index.html").write_text("<html></html>", encoding="utf-8")
+    control = FakeControl()
+
+    _applier(control).apply(project)
+
+    assert control.replaced == [folder / "index.html"]

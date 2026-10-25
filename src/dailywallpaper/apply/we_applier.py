@@ -2,6 +2,7 @@
 """Dynamic wallpapers, wrapped in the same shape as the static applier."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -29,6 +30,36 @@ class WeState:
     file: str
 
 
+def entry_file(target: Path) -> Path:
+    """The file WE stores for a project: its real resource, not project.json.
+
+    ``selectedwallpapers`` holds ``scene.pkg`` for a scene and ``index.html``
+    for a web wallpaper. Writing the manifest path there instead was never
+    exercised, and a record WE cannot resolve would leave the desktop empty.
+    Falls back to the target itself when nothing better can be read.
+    """
+    folder = Path(target).parent
+    if Path(target).name != "project.json":
+        return Path(target)
+    try:
+        manifest = json.loads(Path(target).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return Path(target)
+    if not isinstance(manifest, dict):
+        return Path(target)
+    kind = str(manifest.get("type", ""))
+    declared = str(manifest.get("file") or "")
+    if kind == "Scene":
+        packed = folder / "scene.pkg"
+        if packed.is_file():
+            return packed
+    if declared:
+        candidate = folder / declared
+        if candidate.is_file():
+            return candidate
+    return Path(target)
+
+
 class WeApplier:
     """Switch the Wallpaper Engine project and verify it actually changed.
 
@@ -39,10 +70,12 @@ class WeApplier:
     def __init__(self, control, sleep=time.sleep, attempts: int | None = None,
                  interval: float = VERIFY_INTERVAL,
                  boot_seconds: float = BOOT_SECONDS,
-                 settle_seconds: float | None = SETTLE_SECONDS):
+                 settle_seconds: float | None = SETTLE_SECONDS,
+                 monitor: int = 0):
         self.control = control
         self.sleep = sleep
         self.interval = interval
+        self.monitor = int(monitor or 0)
         self.attempts = attempts if attempts is not None else VERIFY_ATTEMPTS
         # An explicit attempt budget wins over the default settle window, so a
         # caller (or a test) can still say "give up after N x interval".
@@ -59,6 +92,10 @@ class WeApplier:
         state = self.snapshot()
         target = Path(image_path)
         was_running = self._engine_running()
+        # Aim WE's saved selection at the target *before* it can render the old
+        # project -- on a cold start that must happen before the engine boots,
+        # because it restores that record the moment it comes up.
+        self._prepoint(target)
         if not was_running and not self._boot_engine():
             return ApplyResult(
                 ok=False,
@@ -90,9 +127,28 @@ class WeApplier:
 
     def restore(self, state: WeState) -> None:
         if state.file:
+            # The saved selection has to follow, or the next boot restores the
+            # project this rollback just backed away from.
+            self._prepoint(Path(state.file))
             self.control.open(Path(state.file))
 
     # -- internals -----------------------------------------------------
+    def _prepoint(self, target: Path) -> None:
+        """Aim WE's saved selection at the target before it switches.
+
+        WE restores ``selectedwallpapers`` from config.json the moment it gets
+        a live wallpaper again, so the old project shows for as long as the new
+        one takes to load. Best effort: a control without the method (test
+        fakes, older builds) just skips it.
+        """
+        repoint = getattr(self.control, "replace_selection", None)
+        if repoint is None:
+            return
+        try:
+            repoint(entry_file(target), self.monitor)
+        except Exception as exc:  # the switch itself can still succeed
+            logger.warning(f"could not pre-point wallpaper engine: {exc}")
+
     def _boot_engine(self) -> bool:
         """Start a stopped engine and wait for it to answer, once."""
         starter = getattr(self.control, "start", None)
