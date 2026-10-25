@@ -95,21 +95,27 @@ git status --short                       # 有哪些未提交改动（别把别�
 - 视觉调用一律走 `VisionClient`（缓存 + 预算 + 校验），不要直接调 `ZhipuVision` 绕过预算守卫。
 - 测试不许触网、不许动真实 `data\app.db`（测试用 tmp 路径注入）；集成测试里电池状态要注入，不要读真实电源。
 
-## 当前阶段（2026-10-24）
+## 当前阶段（2026-10-25）
 
-0. **静态/动态自适应**：已完成（`docs/PLAN-media-selection.md` 阶段 4）。`mixed` 不再按日期轮换，
-   两个池子都打分后比较（动态严格更高才换），联系表分数校准 +5.8/+3.1/−2.1，
-   连续 2 天 / 10 天 5 天的动态配额。决策日志：`media decision: dynamic X vs static Y -> kind`。
-   下一步是重启托盘观察一周（阶段 5）。
-1. **离线评估**：✅ 已封版。`scripts/evaluate.py` 读 `data/app.db` 只读回放，输出 `docs/EVALUATION.md`。
+0. **一个池子一条分数线**（2026-10-25 用户要求，取代原"静态/动态自适应"）：所有候选
+   （图片 / scene / video）一起打分排序，分数 ≥ `min_score`（默认 45）就够格上桌面。
+   两池比最高分、动态日/静态日、连续天数配额、`state.media.recent_types` 全部删除；
+   `media_strategy` / `selection_margin` / `dynamic_max_streak` 等配置项保留解析但无人读取。
+   电池是唯一还看媒体类型的地方（没插电跳过动态）。日志：`media plan: N candidate(s) at or above X`。
+1. **动态壁纸切换**：冷启动先分离启动引擎再等就绪（`WeApplier._boot_engine`），切换前改写
+   WE 的 `selectedwallpapers`，动态↔动态之间用**黑场**过渡（桌面壁纸先换纯黑图、停当前壁纸，
+   WE 真正画出新图后再等 2 秒恢复原图）。冷启动**不**发 `closeWallpaper`（会把引擎拉起来）。
+   静态应用则是先设图再关 WE。这几条都有回归测试，改动前先看 `tests/test_apply.py`。
+2. **离线评估**：✅ 已封版。`scripts/evaluate.py` 读 `data/app.db` 只读回放，输出 `docs/EVALUATION.md`。
    - 数据：361 条评分里 **360 张可评估**（`scripts/backfill_analyses.py` 补齐了 211 张；
      1 张模型连续返回不合约的调色板，排除）。成对比较 11392 个问题，NDCG 是 5 折 × 每折发牌的 10 个池。
    - 结论：排序确实好过随机（成对 0.672 / NDCG 0.783 vs 随机 0.525），
      但**纯个性化（0.581）跑不赢纯探索（0.643）**——真正在起作用的是探索分；
      糖水判别式是单点最好，优势在折间波动之内。详见 `docs/EVALUATION.md` 与 `docs/ROADMAP.md`。
-2. **静态/动态观察**：阶段 5，从 2026-10-25 00:00 第一次日常 prepare 起观察一周，
-   日志里每次决策一行 `media decision: dynamic X vs static Y -> kind`。
 
-**封版状态（v1.0.0，2026-10-24）**：功能闭环、634 测试全绿、评估指标可查。之后只修 bug。
+**性能现状（2026-10-25 实测）**：换一张 1–3 秒；启动/重启后的池子恢复约 45–55 秒，主要成本是
+网络抓取和预览图下载，不是评分（`--budget 2` 后评分只占十几秒）。抓取、评分、材料化三个阶段
+都检查 `should_stop`，点击能打断它们。候选量是真正的瓶颈：一天约 22 个候选、过 45 线的 5–8 个，
+根因是 `atleast=2560x1440 & ratios=16x9` 的检索条件太严。
 
 明确不做：再加壁纸来源、再改界面。云端服务化是封版之后另起的新项目，不在这条线里。
