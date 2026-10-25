@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 from dailywallpaper.apply.we_control import WeConfig, WeControl, same_project
 
@@ -161,3 +162,32 @@ def test_replace_selection_falls_back_when_the_monitor_key_is_absent(tmp_path):
     saved = json.loads(cfg.read_text(encoding="utf-8"))["win11"]["general"][
         "wallpaperconfig"]["selectedwallpapers"]
     assert saved["Monitor0"]["file"] == str(Path("D:/good/1212.apply.jpg"))
+
+
+class TimeoutRunner:
+    def __call__(self, args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs.get("timeout", 15))
+
+
+def test_a_control_command_that_times_out_is_not_reported_as_a_refusal():
+    # `-control` on a stopped engine boots the whole app, so the child can
+    # outlive the timeout while the switch is still about to land. Treating
+    # that as a refusal made the applier roll back into a second WE window.
+    ctl = WeControl(Path("C:/WE"), FIXTURE, runner=TimeoutRunner())
+
+    assert ctl.open(Path("D:/x/project.json")) is True
+
+
+def test_running_asks_the_injected_probe():
+    assert WeControl(Path("C:/WE"), FIXTURE, runner=FakeRunner(),
+                     processes=lambda: True).running() is True
+    assert WeControl(Path("C:/WE"), FIXTURE, runner=FakeRunner(),
+                     processes=lambda: False).running() is False
+
+
+def test_running_defaults_to_false_when_the_probe_explodes():
+    def boom():
+        raise OSError("tasklist missing")
+
+    assert WeControl(Path("C:/WE"), FIXTURE, runner=FakeRunner(),
+                     processes=boom).running() is False

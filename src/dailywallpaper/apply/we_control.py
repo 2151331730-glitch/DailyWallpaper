@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import os
 import subprocess
 import time
@@ -9,6 +10,8 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 def _norm(path) -> str:
@@ -118,24 +121,72 @@ class WeControl:
         install_dir: Path,
         config_path: Path,
         runner: Callable[..., Any] = subprocess.run,
+        processes: Callable[[], bool] | None = None,
     ):
         self.exe = install_dir / "wallpaper64.exe"
         self.config_path = config_path
         self.runner = runner
+        self.processes = processes
 
     def current(self) -> str:
         return WeConfig.from_file(self.config_path).current_file()
 
+    def running(self) -> bool:
+        """True when a Wallpaper Engine process is up.
+
+        ``-control`` only talks to a live instance; on a stopped engine the
+        same command boots the whole app instead, which takes tens of seconds
+        and owns a visible window. Callers need to tell the two apart.
+        """
+        probe = self.processes
+        if probe is None:
+            from dailywallpaper.we_autostart import we_processes_running
+
+            probe = we_processes_running
+        try:
+            return bool(probe())
+        except Exception as exc:  # a missing tasklist is "cannot tell"
+            logger.warning(f"wallpaper engine process probe failed: {exc}")
+            return False
+
+    def start(self) -> bool:
+        """Boot the engine detached, without a control command.
+
+        ``-control`` against a stopped engine boots it too, but that child *is*
+        the app: the command's own timeout kills it halfway through start-up.
+        Starting it detached lets the caller wait for it and then talk to a
+        live instance.
+        """
+        try:
+            subprocess.Popen(
+                [str(self.exe)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return True
+        except OSError as exc:
+            logger.warning(f"wallpaper engine could not be started: {exc}")
+            return False
+
     def _run(self, *args: str) -> bool:
-        result = self.runner(
-            [str(self.exe), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            creationflags=getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0),
-        )
+        try:
+            result = self.runner(
+                [str(self.exe), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                creationflags=getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0),
+            )
+        except subprocess.TimeoutExpired as exc:
+            # A control command can still outlive its timeout; the switch may
+            # be about to land, so let the caller verify instead of treating it
+            # as a refusal (which rolled back into a second WE window).
+            logger.info(f"wallpaper engine control did not return in time: {exc}")
+            return True
         return getattr(result, "returncode", 1) == 0
 
     def open(self, file: Path, monitor: int = 0) -> bool:

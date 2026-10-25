@@ -25,6 +25,21 @@ from dailywallpaper.db import now_iso, parse_ts, today_iso
 
 logger = logging.getLogger(__name__)
 
+# The tray shows ``last_error`` next to the failed change, and the applier's
+# own wording is English -- the user reads Chinese.
+_APPLY_ERROR_HINTS = (
+    ("did not start", "Wallpaper Engine 没有启动起来，动态壁纸没换成"),
+    ("did not switch", "Wallpaper Engine 没能在时限内切过去，动态壁纸没换成"),
+    ("refused the switch", "Wallpaper Engine 拒绝了这次切换"),
+)
+
+
+def _apply_error_hint(error: str) -> str:
+    for needle, hint in _APPLY_ERROR_HINTS:
+        if needle in (error or ""):
+            return hint
+    return error or ""
+
 
 def _spawn_daemon(target):
     thread = threading.Thread(target=target, daemon=True)
@@ -385,6 +400,7 @@ class ApplyService:
             self.we and method == "static" and self.we_rendering()
         )
         if close_we and not self._we_close():
+            logger.warning(f"apply {wallpaper_id}: Wallpaper Engine did not close")
             return False
 
         try:
@@ -392,12 +408,20 @@ class ApplyService:
                 result = chosen.apply(image_path, style=self.style)
             else:
                 result = chosen.apply(image_path)
-        except Exception:
+        except Exception as exc:
             # An applier that raises is a failed apply; do not leave WE closed.
+            logger.warning(f"apply {wallpaper_id} [{method}] raised: {exc}")
+            self.last_error = _apply_error_hint(str(exc))
             if close_we:
                 self._we_open(Path(we_before))
             return False
         if not result.ok:
+            # A failed apply used to be silent in the log, so "换一张 did
+            # nothing" left no trace to debug from.
+            logger.warning(
+                f"apply {wallpaper_id} [{method}] failed: {result.error}"
+            )
+            self.last_error = _apply_error_hint(getattr(result, "error", "")) or self.last_error
             if close_we:
                 self._we_open(Path(we_before))
             return False
