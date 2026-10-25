@@ -19,6 +19,11 @@ DYNAMIC_RETRY_SECONDS = 60.0
 # put back. WE is drawing over it by then, so this is only about not flashing
 # the still picture at the moment the new wallpaper appears.
 BLACKOUT_RESTORE_SECONDS = 2.0
+# Switching config.json is not the same as having pixels on screen: a live
+# project can take seconds to load, so the blackout waits for WE's desktop
+# window before it counts down. Restoring before that shows the still picture.
+BLACKOUT_RENDER_WAIT_SECONDS = 5.0
+BLACKOUT_POLL_SECONDS = 0.25
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
     SOUND_KEY,
@@ -512,7 +517,12 @@ class ApplyService:
             logger.warning(f"blackout failed: {exc}")
             return None
         if not getattr(result, "ok", False):
+            logger.warning(
+                "blackout: the desktop refused the black picture: "
+                f"{getattr(result, 'error', '')}"
+            )
             return None
+        logger.info("blackout: desktop painted black")
         return state
 
     def _finish_blackout(self, state, ok: bool) -> None:
@@ -529,6 +539,21 @@ class ApplyService:
             return
 
         def restore():
+            # Wait for the new wallpaper to actually paint, not just for
+            # config.json to change; restoring earlier flashes the old still.
+            waited = 0.0
+            while waited < BLACKOUT_RENDER_WAIT_SECONDS:
+                try:
+                    if self.we_rendering():
+                        break
+                except Exception:
+                    break
+                self.sleep(BLACKOUT_POLL_SECONDS)
+                waited += BLACKOUT_POLL_SECONDS
+            else:
+                logger.info(
+                    "blackout: WE never painted; restoring the desktop anyway"
+                )
             self.sleep(BLACKOUT_RESTORE_SECONDS)
             try:
                 self.applier.restore(state)
