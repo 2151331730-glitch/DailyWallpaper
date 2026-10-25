@@ -230,9 +230,11 @@ def test_rehydrate_only_serves_a_day_that_is_already_prepared(tmp_path):
     pipeline.conn = conn
     pipeline.shortlist = []
     forced = []
+    budgets = []
 
-    def prepare(now, force=False, dry_run=False):
+    def prepare(now, force=False, dry_run=False, budget=None):
         forced.append(force)
+        budgets.append(budget)
         pipeline.shortlist = ["candidate"]
 
     pipeline.prepare = prepare
@@ -249,6 +251,9 @@ def test_rehydrate_only_serves_a_day_that_is_already_prepared(tmp_path):
 
     assert pipeline.rehydrate(now) is True
     assert forced == [True]
+    # Only the pool is wanted back, not eight fresh opinions: a restart must
+    # not spend a full refill before it can answer a click.
+    assert budgets == [2]
 
 
 def test_rehydrate_leaves_a_working_shortlist_alone(tmp_path):

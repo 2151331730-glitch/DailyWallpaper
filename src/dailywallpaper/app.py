@@ -257,7 +257,11 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         ).fetchone()
         if row is None:
             return False
-        self.prepare(now, force=True)
+        # Two fresh analyses, not the eight a refill spends: this pass only
+        # needs the pool back after a restart, and every candidate it keeps
+        # was already scored. With the full budget a boot waited ~50 s before
+        # it could serve a click.
+        self.prepare(now, force=True, budget=2)
         return bool(self.shortlist)
 
     def apply_config(self, cfg) -> None:
@@ -324,7 +328,8 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
                 seen.add(key)
         logger.info(f"online sources thin; {len(pool)} candidate(s) after local cache")
 
-    def prepare(self, now, force: bool = False, dry_run: bool = False) -> None:
+    def prepare(self, now, force: bool = False, dry_run: bool = False,
+                budget: int | None = None) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
         day = now.date().isoformat()
@@ -376,8 +381,11 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # prompt version took minutes and looked like a dead click. Spend a
         # bounded number of fresh analyses, then reuse what is cached. Eight
         # is the speed/freshness compromise: enough to keep the refilled head
-        # honestly scored, still well under a minute.
-        self._reanalyze_budget = 8 if force else None
+        # honestly scored, still well under a minute. ``budget`` overrides it
+        # for callers that only need the pool back, not a fresh opinion.
+        self._reanalyze_budget = (
+            budget if budget is not None else (8 if force else None)
+        )
         self._failed_hosts.clear()
         self._banned = {
             int(row[0])
