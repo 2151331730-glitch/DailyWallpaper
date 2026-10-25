@@ -21,6 +21,9 @@ TICK_SECONDS = 60
 KEEP_ALIVE_SECONDS = 10
 # A tick longer than this is worth a log line even when nobody clicked.
 SLOW_TICK_SECONDS = 5.0
+# Below this many candidates left, rebuilding the pool is worth the wait it
+# puts in front of the next click. Above it, the queue can serve the click now.
+REFILL_BELOW = 2
 
 
 def _set_thread_priority(below_normal: bool) -> None:
@@ -122,9 +125,17 @@ class Worker:
             try:
                 self._tick_once(manual=manual)
                 if self.last_action == "applied":
-                    # A fresh change makes the pool move on: warm it and lock
-                    # in the next pick while nobody is waiting.
-                    self._warm_shortlist()
+                    # A fresh change makes the pool move on, but rebuilding it
+                    # takes 30-60 s and the next click waits behind it. Only
+                    # refill when the queue is about to run dry.
+                    pipeline = getattr(self._machine, "pipeline", None)
+                    remaining = len(getattr(pipeline, "shortlist", None) or [])
+                    if remaining < REFILL_BELOW:
+                        self._warm_shortlist()
+                    else:
+                        logger.info(
+                            f"shortlist still holds {remaining}; not rebuilding"
+                        )
             finally:
                 self._working.clear()
                 with self._lock:

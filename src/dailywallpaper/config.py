@@ -87,8 +87,10 @@ class WallpaperSection:
     monitor: int = 0
     # Every candidate competes in one pool; anything at or above this score is
     # good enough to go on the desktop. 0 keeps everything that passed
-    # screening (the old behaviour).
-    min_score: float = 55.0
+    # screening. 45 was picked from the real score spread (22 candidates on a
+    # typical day: median 62, tenth percentile 39) -- 55 left so few that a
+    # second click had to wait for a full refetch.
+    min_score: float = 45.0
     # Battery is the only thing that still looks at the media type: a scene or
     # video drains a laptop, so it is skipped while unplugged.
     dynamic_requires_ac: bool = True
