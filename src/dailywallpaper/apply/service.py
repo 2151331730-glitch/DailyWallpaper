@@ -436,6 +436,11 @@ class ApplyService:
         close_we = bool(
             self.we and method == "static" and self._we_engine_running()
         )
+        if method == "static":
+            # A blackout from an earlier live change may still be waiting to
+            # put the old desktop picture back; that restore would overwrite
+            # the picture this apply is about to set. Retire it first.
+            self._blackout_seq += 1
 
         # Between two live wallpapers WE unloads one before the other is ready,
         # so the desktop shows through for a moment. Painting the desktop black

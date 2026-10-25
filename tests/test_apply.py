@@ -539,6 +539,55 @@ def test_back_to_back_swaps_keep_the_first_picture_and_drop_stale_restores(tmp_p
     assert applier.restored[0].wallpaper.endswith("original.jpg")
 
 
+def test_a_pending_blackout_restore_cannot_overwrite_a_still_picture(tmp_path):
+    # live change, then a still one: the blackout's delayed restore would put
+    # the old desktop picture back on top of the still picture just set.
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','666','scene','x')"
+    )
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('bing','777','image','x')"
+    )
+    conn.commit()
+    ids = [row[0] for row in conn.execute("select id from wallpapers order by id")]
+    live_id, still_id = ids[0], ids[1]
+    control = _FakeWe(current="D:/we/old/scene.pkg")
+
+    def open_and_resolve(file, monitor=0):
+        control._current = str(Path(file).parent / "scene.pkg")
+        return True
+
+    control.open = open_and_resolve
+    applier = _FakeApplier(wallpaper=str(tmp_path / "original.jpg"))
+    pending = []
+    service = ApplyService(
+        conn,
+        applier,
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None),
+        sleep=lambda s: None,
+        spawn=pending.append,
+    )
+    live = tmp_path / "live" / "project.json"
+    live.parent.mkdir()
+    live.write_bytes(b"x")
+
+    assert service.apply(live_id, live, trigger="manual") is True
+    assert service.apply(still_id, tmp_path / "new.jpg", trigger="manual") is True
+
+    for job in pending:
+        job()
+
+    # The blackout's restore must have been retired by the still change.
+    assert applier.restored == []
+
+
 def test_a_failing_recheck_is_swallowed(tmp_path):
     class Flaky(_FakeApplier):
         def __init__(self, fail_from=1):
