@@ -402,6 +402,14 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # the rest instead of padding with duplicates.
         raw.extend(self._fetch_search_candidates(now, today))
         for source in self.sources:
+            # A click that arrives mid-fetch must not wait out every source:
+            # the fetch takes tens of seconds and the user is staring at an
+            # unchanged desktop. The tick that answers the click rebuilds with
+            # whatever arrived (prepare is skipped once the day is done, so
+            # this aborted pass costs nothing).
+            if self.should_stop():
+                logger.info("prepare stopped early: a manual change is waiting")
+                break
             name = type(source).__name__
             # A manual refill is the user asking us to try again: yesterday's
             # or this morning's "source down" marker must not silence it.
