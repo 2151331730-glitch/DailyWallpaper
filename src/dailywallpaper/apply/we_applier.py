@@ -92,6 +92,12 @@ class WeApplier:
         state = self.snapshot()
         target = Path(image_path)
         was_running = self._engine_running()
+        # A running engine cross-fades from the wallpaper it is drawing, and
+        # that outgoing frame is what flashes back before the new one shows.
+        # Release it first so the swap starts from an empty desktop. Only when
+        # the engine is already up: `-control` on a stopped one would boot it.
+        if was_running:
+            self._release(state.file, target)
         # Aim WE's saved selection at the target *before* it can render the old
         # project -- on a cold start that must happen before the engine boots,
         # because it restores that record the moment it comes up.
@@ -133,6 +139,18 @@ class WeApplier:
             self.control.open(Path(state.file))
 
     # -- internals -----------------------------------------------------
+    def _release(self, current_file: str, target: Path) -> None:
+        """Stop the wallpaper that is on screen, unless it is already ours."""
+        close = getattr(self.control, "close", None)
+        if close is None or not current_file:
+            return
+        try:
+            if same_project(current_file, target):
+                return
+            close()
+        except Exception as exc:  # the switch below can still land
+            logger.warning(f"could not release the current wallpaper: {exc}")
+
     def _prepoint(self, target: Path) -> None:
         """Aim WE's saved selection at the target before it switches.
 

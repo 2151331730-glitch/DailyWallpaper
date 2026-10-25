@@ -11,16 +11,23 @@ class FakeControl:
         self.current_value = "D:/we/old/scene.pkg"
         self.opened = []
         self.replaced = []
+        self.order = []
 
     def current(self):
         return self.current_value
 
+    def close(self):
+        self.order.append("close")
+        return True
+
     def replace_selection(self, file, monitor=0):
         self.replaced.append(Path(file))
+        self.order.append("replace")
         return True
 
     def open(self, file, monitor=0):
         self.opened.append(Path(file))
+        self.order.append("open")
         if self.ok and self.resolves:
             self.current_value = str(Path(file).parent / "scene.pkg")
         return self.ok
@@ -95,11 +102,16 @@ class ColdStartControl:
         self.resolves = resolves
         self.running_calls = 0
         self.start_calls = 0
+        self.closed = 0
         self.current_value = "D:/we/old/scene.pkg"
         self.opened = []
 
     def start(self):
         self.start_calls += 1
+        return True
+
+    def close(self):
+        self.closed += 1
         return True
 
     def running(self):
@@ -216,3 +228,26 @@ def test_a_web_project_is_recorded_as_its_declared_entry(tmp_path):
     _applier(control).apply(project)
 
     assert control.replaced == [folder / "index.html"]
+
+
+def test_the_on_screen_project_is_released_before_the_new_one_loads(tmp_path):
+    # WE cross-fades from what it is drawing; the outgoing frame is the old
+    # wallpaper the user sees flash back. Release it, then aim, then open.
+    project = _project(tmp_path)
+    control = FakeControl()
+
+    _applier(control).apply(project)
+
+    assert control.order == ["close", "replace", "open"]
+
+
+def test_a_cold_engine_is_never_sent_a_close_command(tmp_path):
+    # `-control closeWallpaper` on a stopped engine boots it, which is exactly
+    # the second window the cold-start path exists to avoid.
+    project = _project(tmp_path)
+    control = ColdStartControl(boot_calls=1, resolves=True)
+
+    _applier(control).apply(project)
+
+    assert control.closed == 0
+    assert control.opened == [project]
