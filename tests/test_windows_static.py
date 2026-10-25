@@ -1,9 +1,8 @@
 import os
 from pathlib import Path
 from PIL import Image
-import pytest
 from dailywallpaper.apply.windows_static import (
-    WallpaperState, WindowsStaticApplier, convert_to_jpeg,
+    WindowsStaticApplier, convert_to_jpeg,
 )
 
 class FakeRegistry:

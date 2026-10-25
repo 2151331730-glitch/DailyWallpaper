@@ -76,7 +76,7 @@ def roc_auc(scores, labels) -> float:
     0.5 is a coin. Ties count half. Rank-based (Mann-Whitney) so no
     statistics library is needed.
     """
-    pairs = [(float(score), label) for score, label in zip(scores, labels)
+    pairs = [(float(score), label) for score, label in zip(scores, labels, strict=False)
              if label in (0, 1)]
     positives = [score for score, label in pairs if label == 1]
     negatives = [score for score, label in pairs if label == 0]
@@ -185,8 +185,10 @@ def fit(rows, min_support: int = MIN_SUPPORT, l2: float = L2,
     for _ in range(iterations):
         gradient = [0.0] * len(vocabulary)
         bias_gradient = 0.0
-        for vector, target in zip(samples, labels):
-            total = bias + sum(weight * value for weight, value in zip(weights, vector))
+        for vector, target in zip(samples, labels, strict=False):
+            total = bias + sum(
+                weight * value for weight, value in zip(weights, vector, strict=False)
+            )
             error = _sigmoid(total) - target
             bias_gradient += error
             for position, value in enumerate(vector):

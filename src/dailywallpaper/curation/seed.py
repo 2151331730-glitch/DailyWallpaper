@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -169,19 +168,18 @@ def analyze_rated(conn, model: str, thumbs: dict, cfg, api_key: str,
 def build_seed(conn, now: datetime | None = None) -> dict:
     moment = now or datetime.now().astimezone()
     profile = PreferenceProfile.from_ratings(rated_rows(conn), moment)
-    # tag weights are L2-normalised by from_ratings; source weights are raw
-    # sums (one person's 262 ratings produced -77). Normalise on the way out
-    # so the seed means the same thing on someone else's machine.
-    source_norm = math.sqrt(
-        sum(value * value for value in profile.source_weights.values())
-    ) or 1.0
+    # tag weights are L2-normalised by from_ratings; source weights are already
+    # a mean on the -1..+1 rating scale, so they need no further scaling. A v1
+    # seed normalised them by their L2 length instead, which pinned the one
+    # source everyone uses to -0.999 -- every Wallhaven picture then scored
+    # source_affinity 0.0, ten points below neutral, for every new install.
     return {
         "version": SEED_VERSION,
         "created_at": now_iso(),
         "rating_count": profile.rating_count,
         "tag_weights": dict(profile.tag_weights),
         "source_weights": {
-            key: value / source_norm
+            key: max(-1.0, min(1.0, value))
             for key, value in profile.source_weights.items()
         },
         "avoid_tags": list(DEFAULT_AVOID_TAGS),

@@ -175,7 +175,6 @@ def _sync_autostart(cfg, config_path) -> None:
     import json
     import logging
     from dataclasses import replace
-    from pathlib import Path
 
     from dailywallpaper.app_autostart import AutostartService, default_command
     from dailywallpaper.config import install_prefs, save_config, user_data_dir

@@ -124,7 +124,7 @@ def main(argv=None) -> int:
 
     model = fit(merged + live, min_support=args.min_support)
     model.save(args.out)
-    pairs = sorted(zip(model.tags, model.weights), key=lambda pair: pair[1])
+    pairs = sorted(zip(model.tags, model.weights, strict=True), key=lambda pair: pair[1])
     print("\n最像糖水的标签：")
     for tag, weight in pairs[-8:][::-1]:
         print(f"  {tag:20s} {weight:+.2f}")

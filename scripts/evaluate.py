@@ -116,7 +116,7 @@ def spearman(xs, ys) -> float:
     rx, ry = _ranks(xs), _ranks(ys)
     mx = sum(rx) / len(rx)
     my = sum(ry) / len(ry)
-    numerator = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    numerator = sum((a - mx) * (b - my) for a, b in zip(rx, ry, strict=True))
     left = math.sqrt(sum((a - mx) ** 2 for a in rx))
     right = math.sqrt(sum((b - my) ** 2 for b in ry))
     if left == 0 or right == 0:
@@ -478,13 +478,23 @@ def _fmt(value: float) -> str:
     return f"{value:.3f}"
 
 
+def mix_label() -> str:
+    """Name the weighting after the constants, not after a hard-coded ratio.
+
+    The report kept saying 55/45 long after the weights were re-tuned; a
+    label built from the constants cannot drift from the code that scores.
+    """
+    return f"{round(EXPLORE_WEIGHT * 100)}/{round(PERSONALIZE_WEIGHT * 100)}"
+
+
 def render_report(summary, quality, history, stats, cv) -> str:
+    mix = mix_label()
     strategy_labels = {
         "explore": "纯探索",
         "personalize": "纯个性化",
-        "blend": "55/45 纯混合",
-        "weighted": "55/45 + 惩罚（原状）",
-        "sugar": "55/45 + 糖水判别式",
+        "blend": f"{mix} 纯混合",
+        "weighted": f"{mix} + 惩罚（原状）",
+        "sugar": f"{mix} + 糖水判别式",
     }
     available = [name for name in strategy_labels if name in cv]
     best_label = strategy_labels[
@@ -497,6 +507,23 @@ def render_report(summary, quality, history, stats, cv) -> str:
         "",
         "由 `scripts/evaluate.py` 自动生成，数据全部来自 `data/app.db` 的缓存分析，",
         "不联网、不调用模型、不改动桌面。",
+        "",
+        "## 上一版报告为什么反过来了",
+        "",
+        "上一版报告的结论是「个性化那 45% 没有被证明有用」（纯个性化 0.572，"
+        "低于纯探索 0.639）。那个结论测的是**一个缺陷**，不是个性化这条路：",
+        "",
+        "1. 评分权重固定以 5.5 为中点（`(分数 − 5.5) / 4.5`）。这个库 366 条评分"
+        "平均 4.55，65% 落在 5.5 以下，于是画像学到的是「大部分都不喜欢」——"
+        "标签权重求和为负，`tag_affinity` 对几乎所有候选都返回中性以下，"
+        "个性化那一半再也不能说「更像这张」。",
+        "2. 来源权重用的是**求和**，随图库规模增长。真实数据里 wallhaven 原始权重 −109，"
+        "被 clamp 到端点，于是占候选 97% 的那个来源，每张图的来源分恒为 0.0。",
+        "",
+        "两处都改为以用户自己的均值为中点、来源取收缩后的均值。改完纯个性化从 0.572 升到 "
+        f"{cv['personalize']['accuracy_mean']:.3f}，本报告下面的表格就是修复后的结果。"
+        "这条记录留在报告里，是因为它比任何单个指标都说明问题：一个被 clamp 压平的项，"
+        "在读指标的人眼里长得像「这条路没用」。",
         "",
         "## 数据",
         "",
@@ -553,9 +580,9 @@ def render_report(summary, quality, history, stats, cv) -> str:
         "random": "随机（下限）",
         "explore": "纯探索",
         "personalize": "纯个性化",
-        "blend": "55/45 纯混合",
-        "weighted": "55/45 + 惩罚（现状）",
-        "sugar": "55/45 + 糖水判别式",
+        "blend": f"{mix} 纯混合",
+        "weighted": f"{mix} + 惩罚（不含糖水模型）",
+        "sugar": f"{mix} + 糖水判别式",
     }
     order = ("random", "explore", "personalize", "blend", "weighted", "sugar")
     for name in order:

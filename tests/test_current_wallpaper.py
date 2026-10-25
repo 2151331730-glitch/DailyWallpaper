@@ -1,6 +1,5 @@
 # tests/test_current_wallpaper.py
 """The rating target must be the wallpaper actually on the desktop."""
-from pathlib import Path
 
 from dailywallpaper.apply.service import ApplyService
 from dailywallpaper.db import connect, migrate

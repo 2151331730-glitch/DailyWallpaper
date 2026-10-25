@@ -153,9 +153,7 @@ class FetchMixin:
             full = data_dir / f"{row['id']}.jpg"
             if full.is_file():
                 asset = str(full)
-            elif row["file_url"] and Path(row["file_url"]).is_file():
-                asset = row["file_url"]
-            elif str(row["file_url"]).startswith(("http://", "https://")):
+            elif row["file_url"] and Path(row["file_url"]).is_file() or str(row["file_url"]).startswith(("http://", "https://")):
                 asset = row["file_url"]
             else:
                 continue

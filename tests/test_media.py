@@ -1,5 +1,4 @@
 # tests/test_media.py
-import subprocess
 
 import pytest
 from PIL import Image

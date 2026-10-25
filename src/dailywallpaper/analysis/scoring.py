@@ -40,8 +40,8 @@ def sugar_penalty(score) -> float:
     if score is None or score <= 50:
         return 0.0
     return SUGAR_PENALTY_MAX * (score - 50.0) / 50.0
-EXPLORE_WEIGHT = 0.55
-PERSONALIZE_WEIGHT = 0.45
+EXPLORE_WEIGHT = 0.25
+PERSONALIZE_WEIGHT = 0.75
 COLD_START_PRIOR = 60.0
 PRIOR_STRENGTH = 5.0
 RARITY_WINDOW = 30

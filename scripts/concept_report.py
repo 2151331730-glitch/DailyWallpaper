@@ -79,7 +79,7 @@ def auc(positives, negatives) -> float:
 
 
 def spearman(xs, ys) -> float:
-    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None]
+    pairs = [(x, y) for x, y in zip(xs, ys, strict=False) if x is not None]
     if len(pairs) < 3:
         return float("nan")
     xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
@@ -100,7 +100,7 @@ def spearman(xs, ys) -> float:
 
     rx, ry = ranks(xs), ranks(ys)
     mx, my = statistics.fmean(rx), statistics.fmean(ry)
-    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry, strict=True))
     left = sum((a - mx) ** 2 for a in rx) ** 0.5
     right = sum((b - my) ** 2 for b in ry) ** 0.5
     return num / (left * right) if left and right else float("nan")

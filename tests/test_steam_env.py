@@ -1,7 +1,6 @@
 # tests/test_steam_env.py
 from pathlib import Path
 
-import pytest
 
 from dailywallpaper import steam_env
 from dailywallpaper.config import load_config

@@ -669,7 +669,6 @@ class ApplyService:
     def _recheck_static(self, applier, image_path: Path, epoch: int) -> None:
         """Put the static wallpaper back if WE took the desktop over."""
         elapsed = 0
-        target = image_path.with_suffix(".apply.jpg")
         for delay in self.recheck_delays:
             if epoch != self._epoch():
                 return

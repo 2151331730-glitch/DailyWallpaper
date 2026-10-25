@@ -13,7 +13,7 @@ from dailywallpaper.analysis.vision import (
     VisionError,
     VisionScores,
 )
-from dailywallpaper.app import Application, RealPipeline
+from dailywallpaper.app import RealPipeline
 from dailywallpaper.apply.service import ApplyService
 from dailywallpaper.apply.windows_static import ApplyResult, WallpaperState
 from dailywallpaper.config import load_config
@@ -502,7 +502,6 @@ def test_a_stale_analysis_is_replaced_when_the_provider_answers(tmp_path):
 
 
 def test_a_cached_row_without_any_full_resolution_source_is_skipped(tmp_path):
-    import json
 
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")

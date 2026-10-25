@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dailywallpaper"
-version = "1.0.3"
+version = "1.1.0"
 authors = [{ name = "郭欣哈" }]
 license = { text = "MIT" }
 requires-python = ">=3.13"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.9"]
 
 [project.scripts]
 dailywallpaper = "dailywallpaper.__main__:main"
@@ -33,3 +33,24 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["live: real API calls; skipped unless DAILYWALLPAPER_LIVE=1"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# Only the rules that catch defects. Style is not enforced: this codebase has
+# a deliberate house style (comments explaining why, dense expressions) and a
+# formatter would rewrite it for no gain.
+select = ["F", "E9", "B", "RUF012"]
+ignore = [
+  # subprocess.run without check=True is used where the return code is the
+  # signal being read (probes), not an error to raise.
+  "PLW1510",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles legitimately carry mutable class attributes and catch bare
+# exceptions to prove a failure mode is handled.
+"tests/*" = ["B017", "RUF012", "B007", "F841"]
+"scripts/*" = ["F401", "F841"]

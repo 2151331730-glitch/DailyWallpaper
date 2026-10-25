@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import logging
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import keyring
 
-from dailywallpaper.analysis.images import download
 from dailywallpaper.analysis.scoring import rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
@@ -23,22 +20,22 @@ from dailywallpaper.pipeline.evaluate import EvaluateMixin
 from dailywallpaper.pipeline.fetch import FetchMixin
 from dailywallpaper.pipeline.materialize import MaterializeMixin
 from dailywallpaper.pipeline.select import SelectMixin
+# configure_session / RATE_LIMIT_ABORT_AFTER are re-exported: this module was
+# once the whole application, and callers (and tests) still import them from
+# here. Keep the names importable rather than chasing every call site.
 from dailywallpaper.app_support import (
-    configure_session,
-    rate_limited,
+    configure_session,  # noqa: F401  (re-export)
     refresh_session_proxy,
     workshop_root,
 )
 from dailywallpaper.apply.factory import build_apply_service
 from dailywallpaper.cost.budget import BudgetGuard
 from dailywallpaper.db import connect, migrate
-from dailywallpaper.models import Decision
 from dailywallpaper.power import PowerStatus
 from dailywallpaper.recommend.media_plan import DYNAMIC_TYPES
 from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
-from dailywallpaper.sources.base import Candidate
 from dailywallpaper.sources.repository import (
     mark_source_down,
     source_is_down,
@@ -50,7 +47,7 @@ from dailywallpaper.sources.steam_workshop import (
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
     MAX_FORCED_PREPARES,
-    RATE_LIMIT_ABORT_AFTER,
+    RATE_LIMIT_ABORT_AFTER,  # noqa: F401  (re-export)
 )
 from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.sources.workshop import WorkshopSource

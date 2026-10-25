@@ -282,4 +282,7 @@ def check_sites(proxy: str = "", timeout: float = 3.0) -> dict[str, bool]:
                 values.append(False)
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
-    return {name: ok for (name, _), ok in zip(SITES, values)}
+    # strict=True: one value per site is the whole contract above (every
+    # future appends exactly one entry), so a mismatch is a bug to surface,
+    # not something zip should swallow by truncating.
+    return {name: ok for (name, _), ok in zip(SITES, values, strict=True)}

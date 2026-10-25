@@ -5,7 +5,9 @@ import pytest
 
 from dailywallpaper.analysis.scoring import (
     CONTEXT_WEIGHT,
+    EXPLORE_WEIGHT,
     FORMULAIC_PENALTY_CAP,
+    PERSONALIZE_WEIGHT,
     SUGAR_PENALTY_MAX,
     context_adjust,
     explore_score,
@@ -62,10 +64,12 @@ def _decision(wid, final, quality=80):
     )
 
 
-def test_final_is_55_45_of_explore_and_personalize():
+def test_final_is_the_configured_mix_of_explore_and_personalize():
     result = final_score(_scores(), "wallhaven", _Profile(n=10), [], 0)
 
-    assert result.final == pytest.approx(0.55 * result.explore + 0.45 * result.personalize)
+    assert result.final == pytest.approx(
+        EXPLORE_WEIGHT * result.explore + PERSONALIZE_WEIGHT * result.personalize
+    )
 
 
 def test_a_formulaic_image_is_ranked_down_not_just_gated():

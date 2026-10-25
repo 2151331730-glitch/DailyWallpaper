@@ -93,8 +93,101 @@ def test_source_affinity_is_high_for_liked_source():
 
     profile = PreferenceProfile.from_ratings(rows, NOW)
 
-    assert profile.source_affinity("wallhaven") == 100.0
+    # One 10 out of a library holding a single rating: the centre shrinks
+    # toward the midpoint and the source mean shrinks toward neutral, so this
+    # is above neutral but nowhere near the top of the range.
+    assert profile.source_affinity("wallhaven") > 52.0
     assert profile.source_affinity("bing") == 50.0
+
+
+def test_source_weight_is_a_shrunk_mean_of_its_ratings():
+    """Three ratings must not speak as loudly as three hundred.
+
+    The shrink is toward neutral, so the weight is the per-rating mean
+    discounted by the evidence behind it -- not the raw sum the old code
+    accumulated (which grew without bound as the library grew).
+    """
+    from dailywallpaper.recommend.profile import (
+        SOURCE_PRIOR_STRENGTH,
+        _rating_weight,
+        rating_centre,
+    )
+
+    ratings = [10, 9, 2, 3, 7, 8]
+    rows = [
+        _row(["landscape"], rating, f"2026-09-{(index % 28) + 1:02d}T10:00:00")
+        for index, rating in enumerate(ratings)
+    ]
+
+    profile = PreferenceProfile.from_ratings(rows, NOW)
+
+    centre = rating_centre(ratings)
+    expected = sum(_rating_weight(rating, centre) for rating in ratings) / (
+        len(ratings) + SOURCE_PRIOR_STRENGTH
+    )
+    assert profile.source_weights["wallhaven"] == pytest.approx(expected)
+    # Discounted, so strictly nearer neutral than the plain mean would be.
+    plain_mean = sum(_rating_weight(rating, centre) for rating in ratings) / len(ratings)
+    assert abs(profile.source_weights["wallhaven"]) < abs(plain_mean)
+
+
+def test_source_affinity_does_not_saturate_as_the_library_grows():
+    """The bug this guards: a sum grew with the library and pinned the source.
+
+    With the old sum-based weights, 300 ratings averaging +0.2 every day
+    became raw +60, which clamped to affinity 100 -- and any library whose
+    average leaned negative pinned every source to 0. Both destroyed the
+    20% source term instead of expressing it.
+    """
+    rows = [
+        _row(["landscape"], 7, f"2026-09-{(index % 28) + 1:02d}T10:00:00")
+        for index in range(300)
+    ]
+
+    profile = PreferenceProfile.from_ratings(rows, NOW)
+
+    affinity = profile.source_affinity("wallhaven")
+    # A steady 7 is slightly above this library's own centre, so the source
+    # should read slightly positive -- not 0, not 100.
+    assert 50.0 < affinity < 70.0
+
+
+def test_source_affinity_stays_meaningful_when_every_rating_is_low():
+    """This library's real shape: mostly 1-4, with a few 7-9 favourites.
+
+    With the old sum-based weights this library put the one source supplying
+    97% of the candidates at affinity 0.0 -- a fixed 10-point penalty on every
+    picture, no matter what the user thought. The mean keeps the term where it
+    belongs: a small number that moves, instead of a clamp that cannot.
+    """
+    rows = (
+        [_row(["landscape"], 3, "2026-09-01T10:00:00")]
+        + [_row(["landscape"], 9, "2026-09-02T10:00:00")]
+        + [_row(["landscape"], 3, "2026-09-03T10:00:00")]
+        + [_row(["landscape"], 3, "2026-09-04T10:00:00")]
+        + [_row(["landscape"], 4, "2026-09-05T10:00:00")]
+        + [_row(["landscape"], 9, "2026-09-06T10:00:00")]
+    )
+
+    profile = PreferenceProfile.from_ratings(rows, NOW)
+
+    affinity = profile.source_affinity("wallhaven")
+    # Not pinned to either end of the 0..100 range the clamp used to produce.
+    assert 10.0 < affinity < 90.0
+    assert affinity != 0.0
+
+
+def test_rating_centre_uses_the_users_own_average():
+    from dailywallpaper.recommend.profile import rating_centre
+
+    # A library that never goes above 6 must not treat 6 as "only average".
+    assert rating_centre([4, 4, 5, 5, 6, 6] * 20) < 5.5
+
+    # A tiny library is pulled back toward the midpoint, not trusted blindly.
+    assert rating_centre([10]) < 9.0
+
+    # Nothing to learn from yet.
+    assert rating_centre([]) == 5.5
 
 
 def test_rows_without_a_source_key_are_tolerated():

@@ -204,7 +204,6 @@ def test_the_best_ranked_item_survives_eviction(tmp_path):
 def test_setup_ready_needs_both_account_and_steamcmd(tmp_path):
     from dataclasses import replace
 
-    from dailywallpaper.config import SteamWorkshopSection
     from dailywallpaper.steam_prefetch import setup_ready
 
     cfg = _config_for(tmp_path)

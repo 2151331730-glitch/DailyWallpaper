@@ -2,7 +2,7 @@
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
 #define MyAppName "每日壁纸"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "郭欣哈"
 #define MyAppExeName "DailyWallpaper.exe"
 

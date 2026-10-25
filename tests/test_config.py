@@ -1,7 +1,7 @@
 # tests/test_config.py
 from pathlib import Path
 import pytest
-from dailywallpaper.config import load_config, default_config_path
+from dailywallpaper.config import load_config
 
 
 def test_load_example_config():

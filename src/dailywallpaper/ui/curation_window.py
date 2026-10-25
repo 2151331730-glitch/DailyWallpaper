@@ -30,9 +30,9 @@ COLUMNS = 5
 THUMB_W = 200
 THUMB_H = 125
 COLORS = {
-    **{value: "#dc2626" for value in range(1, 5)},
-    **{value: "#9ca3af" for value in range(5, 7)},
-    **{value: "#16a34a" for value in range(7, 11)},
+    **dict.fromkeys(range(1, 5), "#dc2626"),
+    **dict.fromkeys(range(5, 7), "#9ca3af"),
+    **dict.fromkeys(range(7, 11), "#16a34a"),
 }
 
 
@@ -271,18 +271,13 @@ def run_curation(cfg, config_path=None, count: int = 300) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
     from dailywallpaper.app import configure_session
-    from dailywallpaper.config import load_config
     from dailywallpaper.analysis.vision import (
         KEYRING_ACCOUNT,
         KEYRING_SERVICE,
-        VisionClient,
-        ZhipuVision,
     )
-    from dailywallpaper.cost.budget import BudgetGuard
     from dailywallpaper.curation import seed as seed_mod
     from dailywallpaper.curation.collect import collect_wallhaven, download_thumbs
     from dailywallpaper.db import connect, migrate
-    from dailywallpaper.state.machine import SystemClock
 
     import keyring
 
