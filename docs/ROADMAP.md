@@ -42,14 +42,12 @@
 
 ## Phase 4 交付内容
 
-- `media_strategy=mixed` 不再按日期轮换：先给两个池子打分，动态最高分**严格高于**静态才用动态
-  （`selection_margin`，默认 0）
+- 静态图和动态壁纸在同一个池子里打分、排序，分数达到 `min_score`（默认 55）就够格上桌面。
+  原来的"两个池子比最高分 / 动态日静态日 / 连续天数配额"已移除（2026-10-25）
 - 联系表 / GIF 首帧分数按测得偏差校准（creativity +5.8 / novelty +3.1 / formulaic −2.1），
   作者封面与静态图不校准；`scripts/evaluate_mixed.py` 读同一个常量
-- 电池 / 没有动态候选 → 动态出局；`static_only` / `dynamic_only` 保留“另一类兜底”语义
-- 防抽干：最多连续 2 天动态，最近 10 天最多 5 天动态（均可配置）
-- `state.media.recent_types` 只记录实际应用成功的那天；dry-run / 失败 / 没开机不计入
-- 每次决策打一行 `media decision: dynamic X vs static Y -> kind (reason)`
+- 电池是唯一还看类型的地方：没插电时跳过动态候选
+- 每次决策打一行 `media plan: N candidate(s) at or above X`
 
 ## Phase 2 交付内容
 

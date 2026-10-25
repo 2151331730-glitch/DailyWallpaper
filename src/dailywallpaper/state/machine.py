@@ -12,12 +12,6 @@ from typing import Protocol
 from dailywallpaper.constants import BANNED_MAX_RATING
 from dailywallpaper.db import _as_aware, parse_ts
 from dailywallpaper.power import PowerStatus
-from dailywallpaper.recommend.media_plan import dynamic_limit_reason
-from dailywallpaper.state.media_history import (
-    kind_for_media,
-    load_history,
-    record_applied,
-)
 
 # Where SelectMixin.prepare_next leaves tomorrow's (or this evening's) pick:
 # the same file the slow pipeline would have produced, only earlier.
@@ -164,24 +158,6 @@ class DailyStateMachine:
                 logger.info("parked live wallpaper dropped: running on battery")
                 self._discard_prepared("expired")
                 return None
-        # The parked pick was chosen before today's history existed: a streak
-        # or quota that is full today must still stop it, or a two-day streak
-        # becomes three by parking.
-        if (
-            payload.get("media_kind") in ("scene", "video")
-            and getattr(wallpaper_cfg, "media_strategy", "mixed") == "mixed"
-        ):
-            limit = dynamic_limit_reason(
-                load_history(self.conn),
-                now.date(),
-                getattr(wallpaper_cfg, "dynamic_max_streak", 2),
-                getattr(wallpaper_cfg, "dynamic_quota_days", 10),
-                getattr(wallpaper_cfg, "dynamic_quota_max", 5),
-            )
-            if limit is not None:
-                logger.info(f"parked live wallpaper dropped: {limit}")
-                self._discard_prepared("expired")
-                return None
         return payload
 
     def _apply_prepared(self, payload: dict, now: datetime) -> TickResult | None:
@@ -195,9 +171,6 @@ class DailyStateMachine:
         if not ok:
             self._discard_prepared("apply_failed")
             return None
-        record_applied(
-            self.conn, now.date(), kind_for_media(payload.get("media_kind"))
-        )
         decision_id = payload.get("decision_id")
         if decision_id is not None:
             self.conn.execute(
@@ -280,14 +253,6 @@ class DailyStateMachine:
             decision.apply_path or decision.image_path,
             trigger,
         )
-        if ok:
-            # The media plan's streak/quota read this: only a day whose
-            # desktop actually changed counts as a dynamic day.
-            record_applied(
-                self.conn,
-                now.date(),
-                kind_for_media(getattr(decision, "media_type", "image")),
-            )
         marker = getattr(self.pipeline, "mark_applied" if ok else "mark_failed", None)
         if marker is not None:
             marker(decision)

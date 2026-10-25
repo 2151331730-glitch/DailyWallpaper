@@ -85,18 +85,18 @@ class WeatherSection:
 class WallpaperSection:
     style: str = "fill"
     monitor: int = 0
-    media_strategy: str = "mixed"
-    # Kept for older config files. The mixed strategy no longer rotates by
-    # date: it compares the best dynamic candidate against the best static
-    # one on every prepare (see recommend/media_plan.py).
-    dynamic_every_n_days: int = 3
+    # Every candidate competes in one pool; anything at or above this score is
+    # good enough to go on the desktop. 0 keeps everything that passed
+    # screening (the old behaviour).
+    min_score: float = 55.0
+    # Battery is the only thing that still looks at the media type: a scene or
+    # video drains a laptop, so it is skipped while unplugged.
     dynamic_requires_ac: bool = True
-    # How much higher the best dynamic candidate must score to win the day.
-    # 0 means "strictly higher"; the comparison is only as good as the
-    # calibration, so this is the dial to raise if dynamic days disappoint.
+    # Kept so an older config file still parses. The static/dynamic day plan
+    # they drove is gone -- nothing reads these any more.
+    media_strategy: str = "mixed"
+    dynamic_every_n_days: int = 3
     selection_margin: float = 0.0
-    # Keep a small live pool from being drained: at most this many dynamic
-    # days in a row, and no more than quota_max in any quota_days window.
     dynamic_max_streak: int = 2
     dynamic_quota_days: int = 10
     dynamic_quota_max: int = 5

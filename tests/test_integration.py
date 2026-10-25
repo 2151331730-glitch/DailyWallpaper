@@ -876,7 +876,10 @@ def _score(creativity, novelty=60, quality=90, formulaic=10):
     )
 
 
-def test_mixed_takes_dynamic_when_it_scores_higher(tmp_path):
+def test_every_candidate_competes_in_one_pool(tmp_path):
+    # There is no static day / dynamic day any more and no comparing one
+    # pool's best against the other's: everything is scored and ranked
+    # together, and anything above the floor stays on the shortlist.
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
@@ -886,7 +889,7 @@ def test_mixed_takes_dynamic_when_it_scores_higher(tmp_path):
                       "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
     still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
                       "image", 3840, 2160, 0, [], {})
-    # The dynamic pool is scored first, so the provider answers in that order.
+    # Live candidates are listed first in the pool, so they are scored first.
     vision = VisionClient(Provider([_score(90), _score(70)]), conn, cfg.vision.pricing)
     pipeline = RealPipeline(
         cfg, conn, SynthSession(), [Source([scene, still])], vision,
@@ -895,11 +898,11 @@ def test_mixed_takes_dynamic_when_it_scores_higher(tmp_path):
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
-    assert [decision.media_type for decision in pipeline.shortlist] == ["scene"]
+    assert [decision.media_type for decision in pipeline.shortlist] == ["scene", "image"]
     assert pipeline.shortlist[0].calibrated is False
 
 
-def test_mixed_keeps_static_when_dynamic_scores_lower(tmp_path):
+def test_a_lower_scoring_candidate_still_ranks_second(tmp_path):
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")
     migrate(conn)
@@ -917,7 +920,7 @@ def test_mixed_keeps_static_when_dynamic_scores_lower(tmp_path):
 
     pipeline.prepare(datetime(2026, 10, 18, 9, 0))
 
-    assert [decision.media_type for decision in pipeline.shortlist] == ["image"]
+    assert [decision.media_type for decision in pipeline.shortlist] == ["image", "scene"]
 
 
 def test_mixed_ignores_a_dynamic_candidate_that_is_not_ready(tmp_path):
@@ -1012,69 +1015,6 @@ def test_cached_dynamic_scores_do_not_eat_the_refill_budget(tmp_path):
     second.prepare(datetime(2026, 10, 18, 9, 0), force=True)
 
     assert [decision.media_type for decision in second.shortlist][:1] == ["image"]
-
-
-def test_a_refill_gives_each_pool_a_share_of_the_fresh_analyses(tmp_path):
-    # Eight new dynamic candidates used to consume the whole refill budget,
-    # leaving the static pool unscored. Both pools need a fair share or the
-    # comparison is decided by evaluation order.
-    cfg = _config(tmp_path)
-    conn = connect(Path(cfg.app.data_dir) / "app.db")
-    migrate(conn)
-    scenes = []
-    for index in range(8):
-        asset = tmp_path / f"scene{index}.pkg"
-        asset.write_bytes(b"x")
-        scenes.append(Candidate(
-            "we_workshop", f"s{index}", "场景", "", str(asset),
-            f"https://img/s{index}.png", "scene", 0, 0, 0, [], {},
-        ))
-    stills = [
-        Candidate("bing", f"i{index}", "图片", "", "f",
-                  f"https://img/i{index}.png", "image", 3840, 2160, 0, [], {})
-        for index in range(3)
-    ]
-    # The dynamic pool gets at most half the refill budget, then the static
-    # candidates answer -- and they must outscore dynamic.
-    provider = Provider([_score(60)] * 4 + [_score(95)] * 3)
-    pipeline = RealPipeline(
-        cfg, conn, SynthSession(), [Source(scenes + stills)],
-        VisionClient(provider, conn, cfg.vision.pricing),
-        CountingBudget(100), power=_AcPower(),
-    )
-
-    pipeline.prepare(datetime(2026, 10, 18, 9, 0), force=True)
-
-    assert [decision.media_type for decision in pipeline.shortlist][:1] == ["image"]
-
-
-def test_a_dynamic_day_only_keeps_scene_and_video(tmp_path):
-    from datetime import date
-
-    cfg = _config(tmp_path)
-    conn = connect(Path(cfg.app.data_dir) / "app.db")
-    migrate(conn)
-    asset = tmp_path / "scene.pkg"
-    asset.write_bytes(b"x")
-    scene = Candidate("we_workshop", "s1", "场景", "", str(asset),
-                      "https://img/day1/0.png", "scene", 0, 0, 0, [], {})
-    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
-                      "image", 3840, 2160, 0, [], {})
-    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
-    budget = CountingBudget(100)
-    from dataclasses import replace
-
-    cfg = replace(cfg, wallpaper=replace(cfg.wallpaper, media_strategy="dynamic_only"))
-    pipeline = RealPipeline(
-        cfg, conn, SynthSession(), [Source([scene, still])], vision, budget,
-        power=_AcPower(),
-    )
-
-    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
-
-    types = {row["media_type"] for row in conn.execute("select media_type from wallpapers")}
-    assert types == {"scene"}
-    assert len(pipeline.shortlist) == 1
 
 
 def test_a_static_day_falls_back_when_only_dynamic_exists(tmp_path):

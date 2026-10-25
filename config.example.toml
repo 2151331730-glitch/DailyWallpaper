@@ -59,16 +59,15 @@ cache_minutes = 60
 [wallpaper]
 style = "fill"
 monitor = 0
-# mixed：每天比较两个池子的最高分，动态严格更高才用动态（不再按天轮换）。
-# static_only / dynamic_only：强制一种，另一种只在当天一个都不合格时兜底。
-media_strategy = "mixed"
-# 旧版本按天轮换用的值，mixed 已不再读取，保留以兼容老配置。
-dynamic_every_n_days = 3
+# 一个池子一个标准：静态图和动态壁纸一起打分排序，分数达到这条线就够格上桌面。
+# 不再有"动态日/静态日"，也不再拿两种类型的最分互相比较。
+min_score = 55.0
+# 唯一的类型限制：动态壁纸耗电，没插电时跳过。
 dynamic_requires_ac = true
-# 动态要比最高静态高出多少分才换；0 = 严格高于即可。
+# 以下几项是旧版"动态日/静态日"计划用的，现在没有代码读取，保留只为让老配置能解析。
+media_strategy = "mixed"
+dynamic_every_n_days = 3
 selection_margin = 0.0
-# 防止小动态池被抽干：最多连续 dynamic_max_streak 天动态，
-# 任意 dynamic_quota_days 天窗口内最多 dynamic_quota_max 天动态。
 dynamic_max_streak = 2
 dynamic_quota_days = 10
 dynamic_quota_max = 5
