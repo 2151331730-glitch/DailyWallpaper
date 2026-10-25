@@ -12,11 +12,13 @@ class FakeControl:
         self.opened = []
         self.replaced = []
         self.order = []
+        self.closed = 0
 
     def current(self):
         return self.current_value
 
     def close(self):
+        self.closed += 1
         self.order.append("close")
         return True
 
@@ -230,24 +232,13 @@ def test_a_web_project_is_recorded_as_its_declared_entry(tmp_path):
     assert control.replaced == [folder / "index.html"]
 
 
-def test_the_on_screen_project_is_released_before_the_new_one_loads(tmp_path):
-    # WE cross-fades from what it is drawing; the outgoing frame is the old
-    # wallpaper the user sees flash back. Release it, then aim, then open.
+def test_switching_never_stops_the_current_wallpaper_first(tmp_path):
+    # Stopping it left a static gap between the two live wallpapers; the old
+    # one has to stay on screen until WE has the new one ready.
     project = _project(tmp_path)
     control = FakeControl()
 
     _applier(control).apply(project)
 
-    assert control.order == ["close", "replace", "open"]
-
-
-def test_a_cold_engine_is_never_sent_a_close_command(tmp_path):
-    # `-control closeWallpaper` on a stopped engine boots it, which is exactly
-    # the second window the cold-start path exists to avoid.
-    project = _project(tmp_path)
-    control = ColdStartControl(boot_calls=1, resolves=True)
-
-    _applier(control).apply(project)
-
+    assert control.order == ["replace", "open"]
     assert control.closed == 0
-    assert control.opened == [project]
