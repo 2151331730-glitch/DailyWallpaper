@@ -411,16 +411,13 @@ class ApplyService:
         chosen, method = self._applier_for(wallpaper_id)
         state = chosen.snapshot()
         we_before = self._we_current()
-        # A WE apply switches the project itself; only a static one has to
-        # release the live wallpaper first (spec 9.1). Skipping the close when
-        # WE has not reopened anything saves its ~1.2 s control round trip on
-        # every click.
+        # A WE apply switches the project itself; a static one has to release
+        # the live wallpaper -- but only *after* the new picture is in place.
+        # Closing first showed the old Windows wallpaper in the gap between
+        # the two, which is the flash on the way to a still picture.
         close_we = bool(
             self.we and method == "static" and self.we_rendering()
         )
-        if close_we and not self._we_close():
-            logger.warning(f"apply {wallpaper_id}: Wallpaper Engine did not close")
-            return False
 
         # Between two live wallpapers WE unloads one before the other is ready,
         # so the desktop shows through for a moment. Painting the desktop black
@@ -446,6 +443,15 @@ class ApplyService:
             return False
         finally:
             self._finish_blackout(blackout, ok)
+        if ok and close_we:
+            # Now that the desktop picture is the new one, take WE off it. A
+            # failed close is not a failed change: the guard retries within
+            # ten seconds and the picture is already in place underneath.
+            if not self._we_close():
+                logger.warning(
+                    f"apply {wallpaper_id}: Wallpaper Engine stayed over the"
+                    " new picture; the guard will retry"
+                )
         if not result.ok:
             # A failed apply used to be silent in the log, so "换一张 did
             # nothing" left no trace to debug from.
@@ -454,8 +460,8 @@ class ApplyService:
                 f"{time.monotonic() - started:.1f} s: {result.error}"
             )
             self.last_error = _apply_error_hint(getattr(result, "error", "")) or self.last_error
-            if close_we:
-                self._we_open(Path(we_before))
+            # WE was never closed on this path (the close happens after a
+            # successful static apply), so there is nothing to put back.
             return False
         if method == "we":
             # Every scene/video can carry sound; honour the tray switch.

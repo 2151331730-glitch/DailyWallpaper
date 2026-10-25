@@ -114,7 +114,9 @@ def test_manual_trigger_is_recorded_as_manual(tmp_path):
     assert conn.execute("select method from change_log").fetchone()[0] == "manual"
 
 
-def test_we_is_closed_before_the_static_apply(tmp_path):
+def test_we_is_closed_after_the_static_picture_is_in_place(tmp_path):
+    # Closing first left the old Windows wallpaper showing in the gap before
+    # the new picture landed -- that gap is the flash on the way to a still.
     we = _FakeWe()
     conn, wid, service = _service(tmp_path, we=we)
 
@@ -122,20 +124,23 @@ def test_we_is_closed_before_the_static_apply(tmp_path):
     assert we.closed == 1
 
 
-def test_we_is_reopened_when_the_apply_fails(tmp_path):
+def test_a_failed_static_apply_never_closes_we(tmp_path):
     we = _FakeWe()
     conn, wid, service = _service(tmp_path, ok=False, we=we)
 
     assert service.apply(wid, tmp_path / "new.jpg") is False
-    assert we.opened == ["D:/we/scene.pkg"]
+    assert we.closed == 0
+    assert we.opened == []
 
 
-def test_apply_aborts_when_we_cannot_close(tmp_path):
+def test_a_failed_we_close_does_not_undo_the_new_picture(tmp_path):
+    # The picture is already on the desktop underneath; a WE that refuses to
+    # close is the guard's problem, not a failed change.
     we = _FakeWe(close_ok=False)
     conn, wid, service = _service(tmp_path, we=we)
 
-    assert service.apply(wid, tmp_path / "new.jpg") is False
-    assert conn.execute("select count(*) from change_log").fetchone()[0] == 0
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert conn.execute("select count(*) from change_log").fetchone()[0] == 1
 
 
 def test_undo_restores_the_previous_wallpaper(tmp_path):
