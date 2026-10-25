@@ -8,18 +8,11 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import urlparse
 
 import keyring
-import requests
 
-from dailywallpaper.analysis.images import canonicalize, download
-from dailywallpaper.analysis.media import gif_first_frame, video_contact_sheet
-from dailywallpaper.analysis.prefilter import prefilter
-from dailywallpaper.analysis.prompts import PROMPT_VERSION
-from dailywallpaper.analysis.desktop_fit import measure as measure_desktop_fit
-from dailywallpaper.analysis.quality import inspect_image
-from dailywallpaper.analysis.scoring import final_score, hard_gate, rank
+from dailywallpaper.analysis.images import download
+from dailywallpaper.analysis.scoring import rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
     KEYRING_SERVICE,
@@ -31,33 +24,24 @@ from dailywallpaper.pipeline.fetch import FetchMixin
 from dailywallpaper.pipeline.materialize import MaterializeMixin
 from dailywallpaper.pipeline.select import SelectMixin
 from dailywallpaper.app_support import (
-    apply_path_for,
     configure_session,
-    install_allows_seed,
-    interleave,
-    merge_tags,
     rate_limited,
     refresh_session_proxy,
     workshop_root,
 )
 from dailywallpaper.apply.factory import build_apply_service
-from dailywallpaper.apply.windows_static import convert_to_jpeg
 from dailywallpaper.cost.budget import BudgetGuard
-from dailywallpaper.db import connect, migrate, now_iso
+from dailywallpaper.db import connect, migrate
 from dailywallpaper.models import Decision
 from dailywallpaper.power import PowerStatus
 from dailywallpaper.recommend.media_plan import DYNAMIC_TYPES
-from dailywallpaper.recommend.profile import PreferenceProfile
 from dailywallpaper.recommend.weather import weather_label
 from dailywallpaper.sources.bing import BingSource
 from dailywallpaper.recommend.weather import cached_weather
 from dailywallpaper.sources.base import Candidate
 from dailywallpaper.sources.repository import (
     mark_source_down,
-    set_local_path,
-    set_phash,
     source_is_down,
-    upsert_wallpaper,
 )
 from dailywallpaper.sources.steam_workshop import (
     SteamWorkshopClient,
@@ -65,9 +49,7 @@ from dailywallpaper.sources.steam_workshop import (
 )
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
-    MATERIALIZE_TOP_N,
     MAX_FORCED_PREPARES,
-    MAX_SEARCH_INTENTS,
     RATE_LIMIT_ABORT_AFTER,
 )
 from dailywallpaper.sources.wallhaven import WallhavenSource
