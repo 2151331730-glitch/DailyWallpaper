@@ -32,3 +32,7 @@ class Decision:
     # frame rather than the author's cover. Only those carry the measured
     # dynamic bias (analysis/calibration.py), so only those are calibrated.
     calibrated: bool = False
+    # The source's own title. The sugar-word check looks at it, and the review
+    # pass re-scores the same decision -- without this the named words found in
+    # the title were dropped on the second pass and the penalty vanished.
+    title: str = ""

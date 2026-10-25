@@ -325,6 +325,7 @@ class EvaluateMixin:
                         ),
                         media_type=candidate.media_type,
                         calibrated=contact_sheet,
+                        title=candidate.title,
                     )
                 )
             except Exception as exc:
@@ -380,9 +381,7 @@ class EvaluateMixin:
                 scores_now, decision.source, profile, recent, weather_code,
                 desktop_fit=None if fit is None else fit.score,
                 hour=hour,
-                sugar=self._sugar_score(
-                    record.scores, getattr(decision, "title", "")
-                ),
+                sugar=self._sugar_score(record.scores, decision.title),
             )
             reviewed.append(
                 replace(

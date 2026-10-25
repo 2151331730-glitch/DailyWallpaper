@@ -458,11 +458,11 @@ class ApplyService:
                 result = chosen.apply(image_path)
             ok = bool(result.ok)
         except Exception as exc:
-            # An applier that raises is a failed apply; do not leave WE closed.
+            # WE is only closed after a successful static apply, so there is
+            # nothing to reopen here -- doing it anyway re-asserted the old
+            # live wallpaper over a desktop that never lost it.
             logger.warning(f"apply {wallpaper_id} [{method}] raised: {exc}")
             self.last_error = _apply_error_hint(str(exc))
-            if close_we:
-                self._we_open(Path(we_before))
             return False
         finally:
             self._finish_blackout(blackout, ok)
@@ -554,7 +554,14 @@ class ApplyService:
         except Exception:
             current = ""
         state = self._blackout_state
-        if state is None or _norm(current) != _norm(image):
+        # WindowsStaticApplier applies the ".apply.jpg" sibling, so that -- not
+        # the .png handed to it -- is what the desktop reports back. Comparing
+        # against the .png alone never matched, so a second live swap re-took
+        # the black picture as the thing to restore and left the desktop black.
+        applied = Path(image).with_suffix(".apply.jpg")
+        if state is None or _norm(current) not in {
+            _norm(image), _norm(applied)
+        }:
             # Either the first blackout of a burst, or something else put a
             # picture back -- take a fresh snapshot of what to restore.
             try:
@@ -671,11 +678,12 @@ class ApplyService:
                 elapsed = delay
                 if epoch != self._epoch():
                     return
-                # The desktop still shows our image: nothing took it over,
-                # and re-applying would undo whatever the user did meanwhile.
-                if _norm(getattr(applier, "current_wallpaper", lambda: "")()) == _norm(target):
-                    continue
-                if not self._we_current():
+                # The Windows wallpaper keeps naming our image even while WE
+                # draws over it, so "the desktop still shows our image" says
+                # nothing about a takeover -- ask WE itself instead. The old
+                # check compared the two and always matched, which made this
+                # recheck a no-op in production.
+                if not self._we_current() or not self.we_rendering():
                     continue
                 if not self._we_close():
                     logger.warning("post-apply recheck: WE did not close")

@@ -19,7 +19,12 @@ class _FakeApplier:
     def apply(self, image, style="fill"):
         self.applied.append(image)
         if self.ok:
-            self.current = WallpaperState(wallpaper=str(image), style="22", tile="0")
+            # WindowsStaticApplier applies the ".apply.jpg" sibling, and that
+            # is what the desktop reports back -- a fake that kept the original
+            # path made the "already black" check look correct when it never
+            # matched in production.
+            applied = Path(image).with_suffix(".apply.jpg")
+            self.current = WallpaperState(wallpaper=str(applied), style="22", tile="0")
             return ApplyResult(ok=True)
         return ApplyResult(ok=False, error="boom")
 
@@ -224,7 +229,10 @@ def test_applier_exception_is_treated_as_failure(tmp_path):
     service = ApplyService(conn, _Boom(), we=we)
 
     assert service.apply(wid, tmp_path / "new.jpg") is False
-    assert we.opened == ["D:/we/scene.pkg"]
+    # WE is closed only after a successful static apply, so a raised applier
+    # never took it off the screen -- reopening it here would be a no-op at
+    # best and a bogus openWallpaper(".") when we_before is empty.
+    assert we.opened == []
     assert conn.execute("select count(*) from change_log").fetchone()[0] == 0
 
 
@@ -323,6 +331,19 @@ def test_a_dynamic_apply_does_not_close_wallpaper_engine_first(tmp_path):
     assert service.apply(wid, project) is True
 
 
+class _ComeBackWe(_FakeWe):
+    """WE that is closed and immediately takes the desktop again.
+
+    What the post-apply recheck exists for: the Windows wallpaper still names
+    our picture while WE draws over it, so only WE's own rendering state says
+    a takeover happened.
+    """
+
+    def close(self):
+        self.closed += 1
+        return self.close_ok
+
+
 def _recheck_service(tmp_path, we, delays=(5, 30)):
     conn = connect(tmp_path / "app.db")
     migrate(conn)
@@ -344,7 +365,7 @@ def _recheck_service(tmp_path, we, delays=(5, 30)):
 
 
 def test_a_static_apply_rechecks_for_a_we_takeover_at_5s_and_30s(tmp_path):
-    we = _FakeWe()
+    we = _ComeBackWe()
     service, wid, slept = _recheck_service(tmp_path, we)
 
     assert service.apply(wid, tmp_path / "new.jpg") is True
@@ -860,7 +881,7 @@ def test_the_recheck_can_read_the_epoch_from_another_thread(tmp_path):
     wid = conn.execute("select id from wallpapers").fetchone()[0]
     targets = []
     service = ApplyService(
-        conn, _FakeApplier(), we=_FakeWe(),
+        conn, _FakeApplier(), we=_ComeBackWe(),
         recheck_delays=(5, 30), sleep=lambda s: None, spawn=targets.append,
     )
     assert service.apply(wid, tmp_path / "new.jpg") is True

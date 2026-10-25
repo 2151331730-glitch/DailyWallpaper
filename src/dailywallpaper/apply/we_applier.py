@@ -70,7 +70,7 @@ class WeApplier:
     def __init__(self, control, sleep=time.sleep, attempts: int | None = None,
                  interval: float = VERIFY_INTERVAL,
                  boot_seconds: float = BOOT_SECONDS,
-                 settle_seconds: float | None = SETTLE_SECONDS,
+                 settle_seconds: float | None = None,
                  monitor: int = 0):
         self.control = control
         self.sleep = sleep
@@ -78,11 +78,13 @@ class WeApplier:
         self.monitor = int(monitor or 0)
         self.attempts = attempts if attempts is not None else VERIFY_ATTEMPTS
         # An explicit attempt budget wins over the default settle window, so a
-        # caller (or a test) can still say "give up after N x interval".
-        self.settle_seconds = (
-            settle_seconds if settle_seconds is not None
-            else self.attempts * interval
-        )
+        # caller (or a test) can say "give up after N x interval".
+        if settle_seconds is not None:
+            self.settle_seconds = settle_seconds
+        elif attempts is not None:
+            self.settle_seconds = attempts * interval
+        else:
+            self.settle_seconds = SETTLE_SECONDS
         self.boot_seconds = boot_seconds
 
     def snapshot(self) -> WeState:
