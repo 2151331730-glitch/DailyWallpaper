@@ -387,6 +387,7 @@ class ApplyService:
     @_serialised
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         self.last_error = ""
+        started = time.monotonic()
         if not self._inspection_passes(Path(image_path)):
             return False
         chosen, method = self._applier_for(wallpaper_id)
@@ -419,7 +420,8 @@ class ApplyService:
             # A failed apply used to be silent in the log, so "换一张 did
             # nothing" left no trace to debug from.
             logger.warning(
-                f"apply {wallpaper_id} [{method}] failed: {result.error}"
+                f"apply {wallpaper_id} [{method}] failed after "
+                f"{time.monotonic() - started:.1f} s: {result.error}"
             )
             self.last_error = _apply_error_hint(getattr(result, "error", "")) or self.last_error
             if close_we:
@@ -459,6 +461,11 @@ class ApplyService:
         if method == "static" and self.we is not None and self.recheck_delays:
             epoch = self._bump_epoch()
             self.spawn(lambda: self._recheck_static(chosen, image_path, epoch))
+        # A click that felt slow needs to say where the seconds went.
+        logger.info(
+            f"apply {wallpaper_id} [{method}] took "
+            f"{time.monotonic() - started:.1f} s"
+        )
         return True
 
     def _inspection_passes(self, image_path: Path) -> bool:

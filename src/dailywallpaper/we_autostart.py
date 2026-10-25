@@ -63,6 +63,9 @@ def _run(runner, *args):
         encoding="utf-8",
         errors="replace",
         timeout=30,
+        # pythonw has no console: without this every tasklist/sc query flashes
+        # a black window on the desktop.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
 

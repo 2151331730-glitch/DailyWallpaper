@@ -17,6 +17,64 @@ logger = logging.getLogger(__name__)
 def _norm(path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
+
+WE_EXE_NAME = "wallpaper64.exe"
+
+
+class _ProcessEntry32(ctypes.Structure):
+    """PROCESSENTRY32; ``th32DefaultHeapID`` is a ULONG_PTR on 64-bit."""
+
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_char * 260),
+    ]
+
+
+def process_running(image_name: str) -> bool:
+    """Is a process with this image name running?
+
+    Done with a toolhelp snapshot rather than ``tasklist``: the app runs from
+    ``pythonw`` (no console of its own), so every ``tasklist`` child flashes a
+    black console window on screen -- and this is polled once a second while a
+    cold engine boots.
+    """
+    try:
+        kernel32 = ctypes.windll.kernel32
+    except AttributeError:  # non-Windows
+        return False
+    TH32CS_SNAPPROCESS = 0x00000002
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32)]
+    kernel32.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        return False
+    entry = _ProcessEntry32()
+    entry.dwSize = ctypes.sizeof(_ProcessEntry32)
+    target = image_name.lower().encode("ascii", "ignore")
+    try:
+        more = kernel32.Process32First(snapshot, ctypes.byref(entry))
+        while more:
+            name = bytes(entry.szExeFile).split(b"\0", 1)[0].lower()
+            if name == target:
+                return True
+            more = kernel32.Process32Next(snapshot, ctypes.byref(entry))
+        return False
+    except OSError:
+        return False
+    finally:
+        kernel32.CloseHandle(snapshot)
+
 class WeConfigError(RuntimeError):
     pass
 
@@ -140,9 +198,9 @@ class WeControl:
         """
         probe = self.processes
         if probe is None:
-            from dailywallpaper.we_autostart import we_processes_running
+            from functools import partial
 
-            probe = we_processes_running
+            probe = partial(process_running, WE_EXE_NAME)
         try:
             return bool(probe())
         except Exception as exc:  # a missing tasklist is "cannot tell"

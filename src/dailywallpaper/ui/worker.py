@@ -19,6 +19,8 @@ TICK_SECONDS = 60
 # EnumWindows walk every few heartbeats for no visible gain; ten still closes
 # a WE takeover long before the user notices.
 KEEP_ALIVE_SECONDS = 10
+# A tick longer than this is worth a log line even when nobody clicked.
+SLOW_TICK_SECONDS = 5.0
 
 
 def _set_thread_priority(below_normal: bool) -> None:
@@ -202,6 +204,7 @@ class Worker:
         if pipeline is None or clock is None:
             return
         _set_thread_priority(True)
+        started = time.monotonic()
         try:
             pipeline.prepare(clock.now())
             # The shortlist lives in memory while the day stays marked as
@@ -213,12 +216,23 @@ class Worker:
             if rehydrate is not None and not getattr(pipeline, "shortlist", None):
                 rehydrate(clock.now())
             prepare_next = getattr(pipeline, "prepare_next", None)
-            if prepare_next is not None:
+            # A click that lands while this runs is queued behind it; the
+            # pre-generation is a convenience, the click is not.
+            if prepare_next is not None and not self._manual.is_set():
+                started_next = time.monotonic()
                 prepare_next(clock.now())
+                logger.info(
+                    f"prepare_next took {time.monotonic() - started_next:.1f} s"
+                )
         except Exception as exc:  # warming must never kill the tick thread
             logger.warning(f"shortlist warm-up failed: {exc}")
         finally:
             _set_thread_priority(False)
+            # A manual click waits behind this pass, so its duration is part
+            # of what the user feels as "换一张 is slow".
+            logger.info(
+                f"shortlist warm-up took {time.monotonic() - started:.1f} s"
+            )
 
     def _guard_loop(self) -> None:
         """Hold the desktop between ticks, on a connection of its own."""
@@ -327,6 +341,7 @@ class Worker:
         # The tick can spend minutes screening pictures; let the desktop stay
         # responsive by running it below normal priority.
         _set_thread_priority(True)
+        started = time.monotonic()
         try:
             # A failure while applying a pending config or rebuilding the pool
             # must not leave the thread at low priority.
@@ -350,6 +365,14 @@ class Worker:
             self.result_seq += 1
         finally:
             _set_thread_priority(False)
+            # "换一张 is slow" needs to say which half was slow: the pick
+            # (fetch + vision) or the apply. A manual click always logs.
+            elapsed = time.monotonic() - started
+            if manual or elapsed >= SLOW_TICK_SECONDS:
+                logger.info(
+                    f"tick [{self.last_action or '?'}] manual="
+                    f"{int(bool(manual))} took {elapsed:.1f} s"
+                )
 
     # -- manual change -------------------------------------------------
     def change_now(self) -> bool:
