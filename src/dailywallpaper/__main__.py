@@ -16,6 +16,19 @@ INSTANCE_NAME = "DailyWallpaper"
 
 
 def _version() -> str:
+    """The version this build actually carries.
+
+    ``importlib.metadata`` reads whatever dist-info was installed alongside,
+    which is how a 1.0.3 build kept reporting 1.0.2: the editable install's
+    metadata was stale. The package constant is what ships in the code, so it
+    wins; the metadata is only a fallback for a tree without it.
+    """
+    try:
+        from dailywallpaper import __version__
+
+        return __version__
+    except Exception:  # pragma: no cover - a broken package
+        pass
     try:
         from importlib.metadata import version
 
