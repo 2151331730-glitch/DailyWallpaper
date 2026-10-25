@@ -18,6 +18,23 @@
 - **`we_control.py` 用了未定义的 `logger`**：`replace_selection` 的读回失败分支会
   抛 `NameError`，把一次可恢复的读回失败变成崩溃。
 
+### 改进
+
+- **切换动态壁纸时闪黑窗**：「引擎在不在跑」用 `tasklist` 探测，而托盘是 `pythonw`
+  起的、自己没有控制台，子进程每次都会**新开一个黑色控制台窗口**；冷启动等待期间
+  每秒一次，屏幕上就是连续闪。改为进程内 toolhelp 快照（`we_control.process_running`），
+  `we_autostart` 里的 `tasklist` / `sc query` 也补了 `CREATE_NO_WINDOW`。
+- **换一张的耗时不可见**：新增 `tick` / `shortlist warm-up` / `prepare_next` /
+  `apply` 四段计时日志（手动点击必记，自动 tick 超过 5 s 才记）。实测定位到"点击很慢"
+  的来源是点击排在启动预热（约 50-65 s）后面，不是切换本身——切换实测 1.1-2.4 s。
+  预热期间收到点击会跳过后面的 `prepare_next` 预下载。
+- **切换时的过渡**：先改写 WE `selectedwallpapers`（写的值是项目真正的主资源
+  `scene.pkg` / `index.html`，不是 `project.json`），再对**已经在跑**的引擎发
+  `closeWallpaper`，最后 `openWallpaper`。冷启动不发 close（`-control` 打到已停止的
+  引擎上会把它拉起来，等于第二次弹窗）。WE 的转场本来就是 `none`，中途那一瞬是
+  真实的卸载到加载空档，无法消除；现在的取舍是露出静态背景约 0.5 s，而不是让旧
+  动态壁纸闪回（用户选定这个行为）。
+
 ## 1.0.2 — 2026-10-24
 
 安装包审核（真实静默安装 + 覆盖升级 + 中文路径 + 无界面/GUI 启动）修出的一条缺陷。
