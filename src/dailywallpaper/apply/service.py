@@ -116,6 +116,15 @@ class ApplyService:
         self.we_rendering = we_rendering or self._default_we_rendering
         self._last_dynamic_attempt = 0.0
         self._sound_sent_at = 0.0
+        # A blackout's delayed restore must not fire into a newer swap's
+        # blackout -- clicking twice in a row did exactly that and flashed the
+        # still picture back. Each blackout takes a ticket; only the newest
+        # one's restore is allowed to run.
+        self._blackout_seq = 0
+        # The picture the desktop had before the first blackout in a burst.
+        # A second swap in a row snapshots the black picture otherwise, and
+        # then "restoring" leaves the desktop black for good.
+        self._blackout_state = None
         # (kind, current path, table stamp) -> wallpaper id, for the 2 s poll
         self._match_cache: dict[tuple, int | None] = {}
         # Decoding a 4K image costs ~0.1 s and never changes for one file;
@@ -511,7 +520,21 @@ class ApplyService:
         if image is None:
             return None
         try:
-            state = self.applier.snapshot()
+            probe = getattr(self.applier, "current_wallpaper", None)
+            current = probe() if probe is not None else ""
+        except Exception:
+            current = ""
+        state = self._blackout_state
+        if state is None or _norm(current) != _norm(image):
+            # Either the first blackout of a burst, or something else put a
+            # picture back -- take a fresh snapshot of what to restore.
+            try:
+                state = self.applier.snapshot()
+            except Exception as exc:
+                logger.warning(f"blackout failed: {exc}")
+                return None
+            self._blackout_state = state
+        try:
             result = self.applier.apply(image, style=self.style)
         except Exception as exc:
             logger.warning(f"blackout failed: {exc}")
@@ -523,12 +546,14 @@ class ApplyService:
             )
             return None
         logger.info("blackout: desktop painted black")
-        return state
+        self._blackout_seq += 1
+        return (state, self._blackout_seq)
 
-    def _finish_blackout(self, state, ok: bool) -> None:
+    def _finish_blackout(self, token, ok: bool) -> None:
         """Put the desktop picture back once WE owns the screen again."""
-        if state is None:
+        if token is None:
             return
+        state, seq = token
         if not ok:
             # Nothing is drawing over the desktop, so a delayed restore would
             # leave the user looking at a black screen.
@@ -536,6 +561,8 @@ class ApplyService:
                 self.applier.restore(state)
             except Exception as exc:
                 logger.warning(f"blackout restore failed: {exc}")
+            else:
+                self._blackout_state = None
             return
 
         def restore():
@@ -555,10 +582,16 @@ class ApplyService:
                     "blackout: WE never painted; restoring the desktop anyway"
                 )
             self.sleep(BLACKOUT_RESTORE_SECONDS)
+            if seq != self._blackout_seq:
+                # A newer change owns the desktop (and its own blackout); this
+                # restore would replace that black beat with the old picture.
+                return
             try:
                 self.applier.restore(state)
             except Exception as exc:
                 logger.warning(f"blackout restore failed: {exc}")
+            else:
+                self._blackout_state = None
 
         self.spawn(restore)
 

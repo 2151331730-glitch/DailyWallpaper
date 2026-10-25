@@ -27,6 +27,9 @@ class _FakeApplier:
         self.restored.append(state)
         self.current = state
 
+    def current_wallpaper(self):
+        return self.current.wallpaper
+
 
 class _FakeWe:
     def __init__(self, current="D:/we/scene.pkg", close_ok=True):
@@ -461,6 +464,61 @@ def test_a_failed_live_swap_restores_the_desktop_immediately(tmp_path):
 
     assert applier.restored, "a failed swap must not leave a black desktop"
     assert not waits, "the restore is not deferred when nothing is drawing"
+
+
+def test_back_to_back_swaps_keep_the_first_picture_and_drop_stale_restores(tmp_path):
+    # Clicking twice in a row: the first restore must not fire into the second
+    # blackout, and the second blackout must not snapshot the black picture as
+    # the thing to restore -- that would leave the desktop black for good.
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','444','scene','x')"
+    )
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','555','scene','x')"
+    )
+    conn.commit()
+    ids = [row[0] for row in conn.execute("select id from wallpapers order by id")]
+    wid, wid2 = ids[0], ids[1]
+    control = _FakeWe(current="D:/we/old/scene.pkg")
+
+    def open_and_resolve(file, monitor=0):
+        control._current = str(Path(file).parent / "scene.pkg")
+        return True
+
+    control.open = open_and_resolve
+    applier = _FakeApplier(wallpaper=str(tmp_path / "original.jpg"))
+    pending = []
+    service = ApplyService(
+        conn,
+        applier,
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None),
+        sleep=lambda s: None,
+        spawn=pending.append,
+    )
+
+    def project(name):
+        path = tmp_path / name / "project.json"
+        path.parent.mkdir()
+        path.write_bytes(b"x")
+        return path
+
+    assert service.apply(wid, project("a"), trigger="manual") is True
+    assert service.apply(wid2, project("b"), trigger="manual") is True
+
+    for job in pending:
+        job()
+
+    # Only the newest swap restores, and it restores the original picture --
+    # not the black one the second blackout snapshotted.
+    assert len(applier.restored) == 1
+    assert applier.restored[0].wallpaper.endswith("original.jpg")
 
 
 def test_a_failing_recheck_is_swallowed(tmp_path):
