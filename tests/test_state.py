@@ -247,6 +247,47 @@ def test_manual_change_refills_an_exhausted_shortlist(tmp_path):
     assert forces == [True]
 
 
+def test_a_manual_change_answers_from_history_instead_of_waiting(tmp_path):
+    # A refill takes 40-60 s and can fail outright; the click gets a known
+    # good wallpaper at once rather than looking dead for a minute.
+    from types import SimpleNamespace
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.state.machine import DailyStateMachine
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    clock = FakeClock(datetime(2026, 10, 18, 9, 0))
+    forces = []
+    repeated = _decision(wid)
+
+    class Pipeline:
+        def prepare(self, now, force=False, mark=True, dry_run=False):
+            forces.append(force)
+
+        def pick(self, now, dry_run=False):
+            return None
+
+        def repeat_pick(self, now):
+            return repeated
+
+    machine = DailyStateMachine(
+        conn,
+        SimpleNamespace(app=AppSection()),
+        clock,
+        Pipeline(),
+        FakeApplyService(conn, clock),
+    )
+
+    result = machine.tick(manual=True)
+
+    assert result.action == "applied"
+    assert forces == []
+
+
 def test_automatic_change_refills_without_forcing(tmp_path):
     from types import SimpleNamespace
 
