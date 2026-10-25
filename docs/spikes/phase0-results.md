@@ -2,7 +2,7 @@
 
 - Worktree: `C:\Users\win11\DailyWallpaper\.claude\worktrees\phase0-1a`
 - Branch: `worktree-phase0-1a`
-- Spec: `docs/superpowers/specs/2026-10-17-dailywallpaper-design.md`
+- Spec: `docs/archive/superpowers/specs/2026-10-17-dailywallpaper-design.md`
 
 ## Probe 1: Static apply
 

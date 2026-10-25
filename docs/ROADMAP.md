@@ -1,6 +1,6 @@
 # DailyWallpaper 路线图
 
-决策日期：2026-10-18。依据 `docs/superpowers/specs/2026-10-17-dailywallpaper-design.md` §15。
+决策日期：2026-10-18。依据 `docs/archive/superpowers/specs/2026-10-17-dailywallpaper-design.md` §15。
 
 ## 已完成
 
