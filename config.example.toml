@@ -23,7 +23,7 @@ aspect_min = 1.70
 aspect_max = 1.85
 max_image_mb = 40
 max_video_mb = 500
-wallhaven_pages = 4
+wallhaven_pages = 6
 # Pigeon/Clash users: point this at the local mixed proxy. Without it,
 # requests ignores the Windows system proxy and Wallhaven/Steam time out.
 proxy = ""

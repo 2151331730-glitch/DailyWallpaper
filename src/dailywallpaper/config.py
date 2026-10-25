@@ -41,7 +41,7 @@ class SourcesSection:
     aspect_max: float = 1.85
     max_image_mb: int = 40
     max_video_mb: int = 500
-    wallhaven_pages: int = 4
+    wallhaven_pages: int = 6
     connect_timeout: int = 5
     # Explicit proxy for Wallhaven / Steam / downloads. Empty means "use the
     # environment", which on Windows ignores Pigeon/Clash's system proxy.

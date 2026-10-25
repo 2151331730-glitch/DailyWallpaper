@@ -138,6 +138,10 @@ class UiShell:
             if reason == "no candidate passed":
                 reason = "没有候选通过筛选（网络或模型限流）"
             self.tray.notify("没换成", reason or "没有可用的候选，稍后再试")
+        elif action == "applied" and "以前用过" in (reason or ""):
+            # The pool ran dry and the applier handed back something already
+            # seen. Without a word that looks like the click did nothing.
+            self.tray.notify("候选已用完", "先用一张以前用过的；新图还在下载")
         elif action in ("apply_failed", "tick_failed"):
             self.tray.notify("更换失败", reason or "应用壁纸时出错，详情见日志")
 
