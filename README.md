@@ -9,7 +9,7 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 | | |
 |---|---|
 | 规模 | 源码 12,535 行 / 测试 11,155 行（**测试接近生产代码 1:1**） |
-| 测试 | **630 个用例**，约 50 秒跑完，CI 可用 |
+| 测试 | **632 个用例**，约 51 秒跑完，CI 可用 |
 | 成本 | 三级筛选：本地预筛免费 → 免费模型初筛 → 付费复核；复核约 ¥0.003/张 |
 | 评估 | 带**离线可复现**的排序评估（成对比较 + NDCG@5，5 折交叉验证），见下节 |
 
@@ -191,7 +191,7 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 
 ## 安装（Windows，推荐）
 
-1. 下载 [DailyWallpaper-Setup-1.1.0.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
+1. 下载 [DailyWallpaper-Setup-1.1.1.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
 2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\DailyWallpaper`
    - 安装时可选「将任务栏和搜索框改成深色」，适配深色壁纸（只改当前用户，可随时改回）
 3. 首次启动会要求填写智谱 API key（免费注册：open.bigmodel.cn → API Keys）
