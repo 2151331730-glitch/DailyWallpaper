@@ -167,6 +167,7 @@ class EvaluateMixin:
         """Screen and score one group of candidates; returns that group."""
         found: list[Decision] = []
         for candidate in candidates:
+            wallpaper_id = None
             if counters["downloads"] >= self.cfg.app.max_downloads_per_day:
                 break
             if counters["analyses"] >= self.cfg.app.max_analyses_per_day:
@@ -333,6 +334,17 @@ class EvaluateMixin:
                 logger.warning(f"candidate {candidate.source_id} skipped: {exc}")
                 if not rate_limited(exc):
                     self._rate_limited_streak = 0
+                    # The model returned something malformed for this image
+                    # (a bad palette, a missing field) rather than failing to
+                    # answer. Retrying it every prepare burns a call each time
+                    # and never succeeds, so remember it for a while -- a
+                    # prompt bump will clear it via the analysis cache key.
+                    from dailywallpaper.analysis.vision import VisionError
+
+                    if isinstance(exc, VisionError) and wallpaper_id is not None:
+                        self._record_rejection(
+                            wallpaper_id, [f"analysis: {exc}"]
+                        )
                     continue
                 self._rate_limited_streak += 1
                 if self._rate_limited_streak >= RATE_LIMIT_ABORT_AFTER:

@@ -7,7 +7,12 @@ import numpy as np
 from PIL import Image
 
 from dailywallpaper.analysis.prompts import PROMPT_VERSION
-from dailywallpaper.analysis.vision import VisionCallResult, VisionClient, VisionScores
+from dailywallpaper.analysis.vision import (
+    VisionCallResult,
+    VisionClient,
+    VisionError,
+    VisionScores,
+)
 from dailywallpaper.app import Application, RealPipeline
 from dailywallpaper.apply.service import ApplyService
 from dailywallpaper.apply.windows_static import ApplyResult, WallpaperState
@@ -874,6 +879,43 @@ def _score(creativity, novelty=60, quality=90, formulaic=10):
         style_tags=["landscape"], mood_tags=["calm"], palette=["#112233"],
         subject="s", reason="r",
     )
+
+
+def test_a_malformed_analysis_is_not_retried_on_the_next_prepare(tmp_path):
+    # One image whose palette the model keeps returning malformed burned a
+    # vision call on every prepare. It is remembered as a rejection instead.
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    still = Candidate("bing", "i1", "图片", "", "f", "https://img/day1/1.png",
+                      "image", 3840, 2160, 0, [], {})
+
+    class Broken:
+        def __init__(self):
+            self.calls = 0
+
+        def analyze(self, image_path, model, extra_instruction=""):
+            self.calls += 1
+            raise VisionError("bad palette")
+
+    broken = Broken()
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source([still])],
+        VisionClient(broken, conn, cfg.vision.pricing),
+        CountingBudget(100), power=_AcPower(),
+    )
+
+    pipeline.prepare(datetime(2026, 10, 18, 9, 0))
+
+    rows = conn.execute("select reason from rejections").fetchall()
+    assert rows and "bad palette" in rows[0][0]
+    first_calls = broken.calls
+
+    pipeline.shortlist = []
+    pipeline._prepared_on = None
+    pipeline.prepare(datetime(2026, 10, 18, 10, 0), force=True)
+
+    assert broken.calls == first_calls, "the known-bad image was tried again"
 
 
 def test_every_candidate_competes_in_one_pool(tmp_path):

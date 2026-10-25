@@ -58,7 +58,13 @@ class MaterializeMixin:
         """
         kept = []
         made = 0
-        for decision in self.shortlist:
+        for index, decision in enumerate(self.shortlist):
+            # A click waiting behind this pass should not sit through three
+            # 40 MB downloads; whatever is left stays for pick() to fetch if a
+            # click ever gets there.
+            if self.should_stop():
+                kept.extend(self.shortlist[index:])
+                break
             if decision.apply_path is not None:
                 # Already a file on disk, or a local path with nothing better.
                 kept.append(decision)

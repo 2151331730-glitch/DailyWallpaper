@@ -186,6 +186,9 @@ def migrate(conn) -> None:
             "update ratings set rating = case rating"
             " when -1 then 1 when 0 then 5 when 1 then 10 else rating end"
         )
+    # The static/dynamic day plan is gone (single pool on a score floor now),
+    # so its history key has no reader. Idempotent, so it can run every time.
+    conn.execute("delete from state where key='media.recent_types'")
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.commit()
 
