@@ -15,6 +15,10 @@ from dailywallpaper.apply.we_control import desktop_window_visible
 
 # A failed live-wallpaper reopen must not spawn WE every guard cycle.
 DYNAMIC_RETRY_SECONDS = 60.0
+# How long the black desktop stays after a live swap before the old picture is
+# put back. WE is drawing over it by then, so this is only about not flashing
+# the still picture at the moment the new wallpaper appears.
+BLACKOUT_RESTORE_SECONDS = 2.0
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
     SOUND_KEY,
@@ -404,11 +408,21 @@ class ApplyService:
             logger.warning(f"apply {wallpaper_id}: Wallpaper Engine did not close")
             return False
 
+        # Between two live wallpapers WE unloads one before the other is ready,
+        # so the desktop shows through for a moment. Painting the desktop black
+        # first makes that gap a black beat instead of a flash of the old still.
+        blackout = None
+        if method == "we":
+            blackout = self._start_blackout()
+            if blackout is not None and self.we is not None and self.we_rendering():
+                self._we_close()
+        ok = False
         try:
             if method == "static":
                 result = chosen.apply(image_path, style=self.style)
             else:
                 result = chosen.apply(image_path)
+            ok = bool(result.ok)
         except Exception as exc:
             # An applier that raises is a failed apply; do not leave WE closed.
             logger.warning(f"apply {wallpaper_id} [{method}] raised: {exc}")
@@ -416,6 +430,8 @@ class ApplyService:
             if close_we:
                 self._we_open(Path(we_before))
             return False
+        finally:
+            self._finish_blackout(blackout, ok)
         if not result.ok:
             # A failed apply used to be silent in the log, so "换一张 did
             # nothing" left no trace to debug from.
@@ -467,6 +483,59 @@ class ApplyService:
             f"{time.monotonic() - started:.1f} s"
         )
         return True
+
+    def _blackout_image(self) -> Path | None:
+        """A full-black picture used as the desktop during a live swap."""
+        cache = Path(self._db_path).parent / "cache"
+        target = cache / "blackout.png"
+        if target.is_file():
+            return target
+        try:
+            from PIL import Image
+
+            cache.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (64, 36), (0, 0, 0)).save(target)
+            return target
+        except Exception as exc:  # no Pillow, no black beat -- not fatal
+            logger.warning(f"blackout image unavailable: {exc}")
+            return None
+
+    def _start_blackout(self):
+        """Paint the desktop black and return what it looked like before."""
+        image = self._blackout_image()
+        if image is None:
+            return None
+        try:
+            state = self.applier.snapshot()
+            result = self.applier.apply(image, style=self.style)
+        except Exception as exc:
+            logger.warning(f"blackout failed: {exc}")
+            return None
+        if not getattr(result, "ok", False):
+            return None
+        return state
+
+    def _finish_blackout(self, state, ok: bool) -> None:
+        """Put the desktop picture back once WE owns the screen again."""
+        if state is None:
+            return
+        if not ok:
+            # Nothing is drawing over the desktop, so a delayed restore would
+            # leave the user looking at a black screen.
+            try:
+                self.applier.restore(state)
+            except Exception as exc:
+                logger.warning(f"blackout restore failed: {exc}")
+            return
+
+        def restore():
+            self.sleep(BLACKOUT_RESTORE_SECONDS)
+            try:
+                self.applier.restore(state)
+            except Exception as exc:
+                logger.warning(f"blackout restore failed: {exc}")
+
+        self.spawn(restore)
 
     def _inspection_passes(self, image_path: Path) -> bool:
         """Refuse a static image that cannot look right on this screen.

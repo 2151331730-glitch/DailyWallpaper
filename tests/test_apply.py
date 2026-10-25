@@ -381,7 +381,86 @@ def test_a_dynamic_apply_is_not_rechecked(tmp_path):
     )
 
     assert service.apply(wid, project) is True
-    assert slept == []
+    # No static recheck delays (5, 30); the black beat restores on its own
+    # schedule and is not a recheck.
+    assert not any(delay in (5, 30) for delay in slept)
+
+
+def test_a_live_swap_paints_the_desktop_black_first(tmp_path):
+    # Between two live wallpapers WE unloads one before the other is ready.
+    # The desktop is painted black first so that gap is a black beat instead
+    # of a flash of the old still picture.
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    project = tmp_path / "222" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','222','scene','x')"
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    control = _FakeWe(current="D:/we/old/scene.pkg")
+
+    def open_and_resolve(file, monitor=0):
+        control.opened.append(str(file).replace("\\", "/"))
+        control._current = str(Path(file).parent / "scene.pkg")
+        return True
+
+    control.open = open_and_resolve
+    applier = _FakeApplier()
+    service = ApplyService(
+        conn,
+        applier,
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None),
+        recheck_delays=(5, 30),
+        sleep=lambda s: None,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, project) is True
+
+    assert applier.applied[0].name == "blackout.png"
+    assert applier.restored, "the desktop picture has to come back"
+
+
+def test_a_failed_live_swap_restores_the_desktop_immediately(tmp_path):
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    project = tmp_path / "333" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','333','scene','x')"
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    control = _FakeWe(current="D:/we/old/scene.pkg")
+    control.open = lambda file, monitor=0: False
+    applier = _FakeApplier()
+    waits = []
+    service = ApplyService(
+        conn,
+        applier,
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None,
+                                  attempts=1, interval=0.01),
+        recheck_delays=(5, 30),
+        sleep=waits.append,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, project) is False
+
+    assert applier.restored, "a failed swap must not leave a black desktop"
+    assert not waits, "the restore is not deferred when nothing is drawing"
 
 
 def test_a_failing_recheck_is_swallowed(tmp_path):
