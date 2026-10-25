@@ -37,6 +37,48 @@ def test_a_closed_port_is_not_alive():
     assert proxy_alive(f"http://127.0.0.1:{_free_port()}") is False
 
 
+def test_a_flaky_proxy_gets_a_second_probe(monkeypatch):
+    # A local proxy can be a few ms late to accept while it switches node.
+    # One failed probe used to send the whole prepare down direct connections,
+    # where every foreign source times out.
+    from dailywallpaper import net
+
+    calls = []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake(addr, timeout=None):
+        calls.append(addr)
+        if len(calls) < 3:
+            raise OSError("busy")
+        return Conn()
+
+    monkeypatch.setattr(net.socket, "create_connection", fake)
+
+    assert net.proxy_alive("http://127.0.0.1:7892") is True
+    assert len(calls) == 3
+
+
+def test_a_really_dead_proxy_still_gives_up(monkeypatch):
+    from dailywallpaper import net
+
+    calls = []
+
+    def fake(addr, timeout=None):
+        calls.append(addr)
+        raise OSError("refused")
+
+    monkeypatch.setattr(net.socket, "create_connection", fake)
+
+    assert net.proxy_alive("http://127.0.0.1:7892") is False
+    assert len(calls) == net.PROBE_ATTEMPTS
+
+
 def test_empty_or_hostless_values_are_not_alive():
     assert proxy_alive("") is False
     assert proxy_alive("   ") is False
