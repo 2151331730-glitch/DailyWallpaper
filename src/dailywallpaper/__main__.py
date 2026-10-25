@@ -98,7 +98,14 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         try:
             from dailywallpaper.we_autostart import restore
 
-            restore(load_config(default_config_path()))
+            # 配置可能不存在（卸载时用户已经删了、或这台机器从没运行过），
+            # 而参数会先求值 —— 直接传 load_config(...) 会让异常在调 restore
+            # 之前抛出，被下面的 except 吞掉，结果是"卸载了但 WE 的开关没还回去"。
+            try:
+                cfg = load_config(default_config_path())
+            except Exception:
+                cfg = None
+            restore(cfg)
         except Exception:
             pass
         return 0

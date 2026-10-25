@@ -30,3 +30,6 @@ dist/
 
 # Bundled binaries fetched by scripts/fetch_ffmpeg.py
 vendor/
+
+# 私有：本机运维说明（含本机路径与运行状态），只在本地保留
+CLAUDE.md
