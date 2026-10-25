@@ -332,6 +332,7 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         retry_at_key = f"prepare_retry_at_{day}"
         if self._prepared_on == prepared_key and not force:
             # One pass per day: the resident loop ticks every 60 s.
+            logger.info("prepare skipped: this process already prepared today")
             return
         if not force:
             # The pool can already be complete after a restart: rebuilding it
@@ -341,6 +342,7 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             ).fetchone()
             if row is not None:
                 self._prepared_on = prepared_key
+                logger.info("prepare skipped: the database says today is prepared")
                 return
             retry_at = self._state_number(retry_at_key)
             if retry_at is not None and time.time() < retry_at:
@@ -351,8 +353,10 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
                 self._forced_on = day
                 self._forced_count = 0
             if self._forced_count >= MAX_FORCED_PREPARES:
+                logger.info("prepare skipped: forced-refill cap reached for today")
                 return
             self._forced_count += 1
+            logger.info(f"prepare running: forced refill {self._forced_count} today")
         throttle = self.conn.execute(
             "select value from state where key='empty_prepare_at'"
         ).fetchone()
@@ -364,6 +368,7 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
                 pass
 
         # The proxy may have come up (or gone down) since the last pass.
+        logger.info("prepare running: rebuilding the pool")
         refresh_session_proxy(self.session, self.cfg)
         failed_sources: list[str] = []
         self._rate_limited_streak = 0
