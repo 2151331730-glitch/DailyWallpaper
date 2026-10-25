@@ -140,6 +140,20 @@ class ApplyService:
             return bool(probe())
         return desktop_window_visible()
 
+    def _we_engine_running(self) -> bool:
+        """Whether Wallpaper Engine is up at all, drawing or not.
+
+        ``running`` (a process check) is preferred; the rendering probe is the
+        fallback for controls and test fakes that only have that.
+        """
+        probe = getattr(self.we, "running", None)
+        if probe is None:
+            return self.we_rendering()
+        try:
+            return bool(probe())
+        except Exception:
+            return self.we_rendering()
+
     def _change_date(self) -> str:
         # Follow the state machine's clock when one is supplied, so a
         # simulated day and the row it writes agree on the date.
@@ -415,8 +429,12 @@ class ApplyService:
         # the live wallpaper -- but only *after* the new picture is in place.
         # Closing first showed the old Windows wallpaper in the gap between
         # the two, which is the flash on the way to a still picture.
+        # Whether WE is *drawing* is the wrong question here: its desktop
+        # window can go unrecognised while the app still owns the screen, and
+        # then the close is skipped and the still picture only appears when
+        # the guard gets to it ten seconds later.
         close_we = bool(
-            self.we and method == "static" and self.we_rendering()
+            self.we and method == "static" and self._we_engine_running()
         )
 
         # Between two live wallpapers WE unloads one before the other is ready,

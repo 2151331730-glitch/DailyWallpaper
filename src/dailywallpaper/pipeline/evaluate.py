@@ -37,17 +37,32 @@ logger = logging.getLogger(__name__)
 
 
 class EvaluateMixin:
-    def _sugar_score(self, scores):
+    def _sugar_score(self, scores, title: str = ""):
         """The learned sugar-water score, or None when there is no model.
 
         None is what tells ``final_score`` to fall back to the formulaic
         nudge, so a machine without ``data/sugar_model.json`` behaves exactly
         as before.
+
+        Words the user named as sugar water (luxury cars, 哪吒) are matched
+        against the title and the tags separately from the model: the model's
+        vocabulary is English style tags and has no training support for them.
         """
+        from dailywallpaper.recommend.sugar import (
+            SUGAR_WORD_SCORE,
+            sugar_word_hit,
+        )
+
         model = getattr(self, "sugar", None)
-        if model is None:
-            return None
-        return model.score(list(scores.style_tags) + list(scores.mood_tags))
+        base = None
+        if model is not None:
+            base = model.score(list(scores.style_tags) + list(scores.mood_tags))
+        if sugar_word_hit(
+            title, " ".join(scores.style_tags), " ".join(scores.mood_tags)
+        ):
+            # A named word beats a silent model, and never lowers a loud one.
+            return max(base if base is not None else 0.0, SUGAR_WORD_SCORE)
+        return base
 
     def _desktop_fit(self, path):
         """Measure a candidate once per process.
@@ -285,7 +300,7 @@ class EvaluateMixin:
                     scores_now, candidate.source, profile, recent, weather_code,
                     desktop_fit=None if fit is None else fit.score,
                     hour=hour,
-                    sugar=self._sugar_score(record.scores),
+                    sugar=self._sugar_score(record.scores, candidate.title),
                 )
                 reason = record.scores.reason
                 if weather_text:
@@ -365,7 +380,9 @@ class EvaluateMixin:
                 scores_now, decision.source, profile, recent, weather_code,
                 desktop_fit=None if fit is None else fit.score,
                 hour=hour,
-                sugar=self._sugar_score(record.scores),
+                sugar=self._sugar_score(
+                    record.scores, getattr(decision, "title", "")
+                ),
             )
             reviewed.append(
                 replace(

@@ -28,6 +28,31 @@ LEARNING_RATE = 0.5
 ITERATIONS = 1500
 NEUTRAL = 50.0
 
+# Words the user named as sugar water (2026-10-25): luxury/sports cars and the
+# 哪吒 character. The learned model cannot know them -- its vocabulary is
+# English style/mood tags with no training support for these -- so they are
+# matched against the title and the tags as a flat "this is sugar water" vote.
+# Deliberately specific: a bare "car" would catch every picture with a vehicle
+# in it, and the model already carries a small weight for that tag.
+SUGAR_WORDS = (
+    "豪车", "跑车", "超跑", "名车", "兰博基尼", "法拉利", "保时捷", "布加迪",
+    "哪吒",
+    "supercar", "sports-car", "sportscar", "luxury-car", "luxurycar",
+    "lamborghini", "ferrari", "porsche", "bugatti",
+)
+# What a named word is worth on the model's 0..100 scale. Anything above the
+# neutral 50 costs points (see analysis/scoring.sugar_penalty); this is high
+# enough that one hit outweighs a model that says nothing.
+SUGAR_WORD_SCORE = 90.0
+
+
+def sugar_word_hit(*texts) -> bool:
+    """True when any of these strings contains a word the user called out."""
+    haystack = " ".join(str(text).lower() for text in texts if text)
+    if not haystack:
+        return False
+    return any(word in haystack for word in SUGAR_WORDS)
+
 
 def _tags(row) -> list[str]:
     out = []

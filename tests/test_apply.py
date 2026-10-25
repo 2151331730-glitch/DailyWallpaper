@@ -143,6 +143,19 @@ def test_a_failed_we_close_does_not_undo_the_new_picture(tmp_path):
     assert conn.execute("select count(*) from change_log").fetchone()[0] == 1
 
 
+def test_a_we_that_is_up_but_not_drawing_is_still_closed(tmp_path):
+    # Its desktop window can go unrecognised while it still owns the screen;
+    # asking "is it rendering" then skips the close, and the still picture
+    # only appears when the guard gets to it ten seconds later.
+    we = _FakeWe()
+    we.rendering_now = False
+    we.running = lambda: True
+    conn, wid, service = _service(tmp_path, we=we)
+
+    assert service.apply(wid, tmp_path / "new.jpg") is True
+    assert we.closed == 1
+
+
 def test_undo_restores_the_previous_wallpaper(tmp_path):
     conn, wid, service = _service(tmp_path)
     service.apply(wid, tmp_path / "new.jpg")

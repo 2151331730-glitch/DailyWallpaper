@@ -3,10 +3,12 @@ import pytest
 
 from dailywallpaper.recommend.sugar import (
     NEUTRAL,
+    SUGAR_WORD_SCORE,
     SugarModel,
     build_vocabulary,
     fit,
     roc_auc,
+    sugar_word_hit,
 )
 
 
@@ -96,3 +98,33 @@ def test_regularisation_keeps_weights_small():
     rows = [_row(["neon"], [], "yes")] * 20 + [_row(["abstract"], [], "no")] * 20
     model = fit(rows)
     assert max(abs(weight) for weight in model.weights) < 12
+
+
+def test_a_named_word_counts_as_sugar_water():
+    # The user called these out by name; the learned model's vocabulary is
+    # English style tags and has no training support for them.
+    assert sugar_word_hit("兰博基尼跑车 4K 壁纸")
+    assert sugar_word_hit("", "哪吒闹海")
+    assert sugar_word_hit("", "lamborghini countach")
+    assert not sugar_word_hit("misty forest at dawn")
+    assert not sugar_word_hit("")
+
+
+def test_a_named_word_outranks_a_silent_model():
+    from dailywallpaper.pipeline.evaluate import EvaluateMixin
+
+    class Scores:
+        style_tags = ["minimalist"]
+        mood_tags = ["calm"]
+
+    class Fake:
+        sugar = None
+
+        def _scores(self):
+            return Scores()
+
+    mixin = EvaluateMixin()
+    mixin.sugar = None
+    # No model at all: the word alone has to produce a score.
+    assert mixin._sugar_score(Scores(), "保时捷 911") == SUGAR_WORD_SCORE
+    assert mixin._sugar_score(Scores(), "quiet lake") is None
