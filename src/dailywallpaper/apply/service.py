@@ -15,6 +15,13 @@ from dailywallpaper.apply.we_control import desktop_window_visible
 
 # A failed live-wallpaper reopen must not spawn WE every guard cycle.
 DYNAMIC_RETRY_SECONDS = 60.0
+# Reopening the same project that WE will not paint is how a single bad
+# wallpaper turned into an all-day black desktop: the guard retried forever and
+# the blackout picture stayed. After this many attempts in a row the guard
+# stops driving WE, takes it off the desktop so the still picture shows, and
+# waits DYNAMIC_GIVE_UP_SECONDS before trying again.
+DYNAMIC_REOPEN_LIMIT = 3
+DYNAMIC_GIVE_UP_SECONDS = 30 * 60.0
 # How long the black desktop stays after a live swap before the old picture is
 # put back. WE is drawing over it by then, so this is only about not flashing
 # the still picture at the moment the new wallpaper appears.
@@ -116,6 +123,9 @@ class ApplyService:
         # rendering() in tests).
         self.we_rendering = we_rendering or self._default_we_rendering
         self._last_dynamic_attempt = 0.0
+        # Consecutive reopens that did not end with WE drawing.
+        self._dynamic_failures = 0
+        self._dynamic_hold_until = 0.0
         self._sound_sent_at = 0.0
         # A blackout's delayed restore must not fire into a newer swap's
         # blackout -- clicking twice in a row did exactly that and flashed the
@@ -185,6 +195,22 @@ class ApplyService:
         except Exception as exc:
             logger.warning(f"WE open failed: {exc}")
             return False
+
+    def _we_prepared(self, path: Path) -> Path | None:
+        """The path WE is actually given for ``path`` (an ASCII alias if needed).
+
+        WE reads the ``-file`` argument as ANSI, so a Chinese name arrives as
+        mojibake and nothing is painted. ``None`` means no such path exists and
+        the wallpaper cannot be shown.
+        """
+        prepare = getattr(self.we, "prepare", None)
+        if prepare is None:  # test fakes and controls without aliasing
+            return Path(path)
+        try:
+            return prepare(Path(path))
+        except Exception as exc:
+            logger.warning(f"WE path preparation failed: {exc}")
+            return None
 
     def _we_mute(self) -> bool:
         try:
@@ -446,8 +472,12 @@ class ApplyService:
         # Between two live wallpapers WE unloads one before the other is ready,
         # so the desktop shows through for a moment. Painting the desktop black
         # first makes that gap a black beat instead of a flash of the old still.
+        # Only between two live ones: a cold start has no engine to hide, and a
+        # blackout there is pure downside -- when the boot fails (a 32-bit
+        # engine that went unrecognised, a slow disk) the black picture is all
+        # the user sees, for a full minute.
         blackout = None
-        if method == "we":
+        if method == "we" and self._we_engine_running():
             blackout = self._start_blackout()
             if blackout is not None and self.we is not None and self.we_rendering():
                 self._we_close()
@@ -484,6 +514,13 @@ class ApplyService:
                 f"{time.monotonic() - started:.1f} s: {result.error}"
             )
             self.last_error = _apply_error_hint(getattr(result, "error", "")) or self.last_error
+            if method == "we" and self.we is not None and self._we_engine_running():
+                # The failed swap left the blackout picture on the desktop with
+                # an engine that has nothing to draw. Putting the still picture
+                # back underneath changes nothing while WE owns the screen, so
+                # take the engine off it -- otherwise the desktop stays black
+                # until the guard gives up minutes later.
+                self._we_close()
             # WE was never closed on this path (the close happens after a
             # successful static apply), so there is nothing to put back.
             return False
@@ -796,10 +833,19 @@ class ApplyService:
         project = row["file_url"] or row["local_path"]
         if not project or self.we is None:
             return False
-        target = Path(project)
+        prepared = self._we_prepared(Path(project))
+        if prepared is None:
+            logger.warning(
+                f"keep_visible: {project} has a non-ASCII path Wallpaper Engine"
+                " cannot load; leaving the desktop alone"
+            )
+            return False
         try:
-            target_folder = target.parent.resolve()
+            target_folder = prepared.parent.resolve()
         except OSError:
+            return False
+        now = time.time()
+        if now < self._dynamic_hold_until:
             return False
         current = self._we_current()
         if current:
@@ -810,14 +856,28 @@ class ApplyService:
             if ours and self.we_rendering():
                 # WE may have restarted since the last apply and forgotten
                 # the mute; re-assert it while the switch is off.
+                self._dynamic_failures = 0
                 self._ensure_sound_policy()
                 return False
-        now = time.time()
         if now - self._last_dynamic_attempt < DYNAMIC_RETRY_SECONDS:
             return False
+        if self._dynamic_failures >= DYNAMIC_REOPEN_LIMIT:
+            # WE accepted this project several times and never painted it.
+            # Reopening it again only keeps the blackout picture on screen, so
+            # close the engine -- the still picture underneath becomes what the
+            # user sees -- and stay away for a while.
+            self._dynamic_hold_until = now + DYNAMIC_GIVE_UP_SECONDS
+            self._dynamic_failures = 0
+            self._we_close()
+            logger.warning(
+                f"keep_visible: gave up on WE project {target_folder.name}"
+                " after repeated failed reopens; the still picture stays"
+            )
+            return True
         self._last_dynamic_attempt = now
-        opened = self._we_open(target)
+        opened = self._we_open(prepared)
         if opened:
+            self._dynamic_failures += 1
             logger.info(f"keep_visible: reopened WE project {target_folder.name}")
         return opened
 

@@ -30,7 +30,11 @@ HELPER_NAME = "wallpaperservice64.exe"
 # machine that starts through the service, but an old install may still have
 # one and it would undo the whole point.
 RUN_VALUES = ("WallpaperEngine", "Wallpaper Engine")
-EXE_NAME = "wallpaper64.exe"
+# WE ships a 32-bit and a 64-bit engine in the same folder, and either can be
+# the one running (its own setting picks the build), so both names are probed
+# and both are stopped before config.json is edited.
+EXE_NAMES = ("wallpaper64.exe", "wallpaper32.exe")
+EXE_NAME = EXE_NAMES[0]
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -82,11 +86,14 @@ def service_present(runner=subprocess.run) -> bool:
 
 
 def we_processes_running(runner=subprocess.run) -> bool:
-    try:
-        out = _run(runner, "tasklist", "/FI", f"IMAGENAME eq {EXE_NAME}", "/NH")
-        return EXE_NAME.lower() in (out.stdout or "").lower()
-    except Exception:
-        return False
+    for name in EXE_NAMES:
+        try:
+            out = _run(runner, "tasklist", "/FI", f"IMAGENAME eq {name}", "/NH")
+        except Exception:
+            continue
+        if name in (out.stdout or "").lower():
+            return True
+    return False
 
 
 def we_install_dir(cfg=None) -> Path | None:
@@ -305,7 +312,8 @@ def disable(
         # WE holds its settings in memory and rewrites config.json on exit, so
         # an edit made while it runs is silently undone.
         try:
-            _run(runner, "taskkill", "/IM", EXE_NAME, "/F")
+            for name in EXE_NAMES:
+                _run(runner, "taskkill", "/IM", name, "/F")
             result.changed.append("已结束正在运行的 Wallpaper Engine")
         except Exception as exc:
             logger.warning(f"WE not stopped: {exc}")

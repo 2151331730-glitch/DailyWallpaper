@@ -646,6 +646,16 @@ def build_application(cfg):
         "insert or ignore into state(key,value) values('sound_enabled','0')"
     )
     conn.commit()
+    # The installer's "mark my subscribed wallpapers as liked" checkbox. It
+    # runs before the pipeline: the first launch of a fresh install has no key
+    # yet, and the ratings are still worth having when the key arrives. A
+    # locked or half-downloaded workshop folder must not block the launch.
+    try:
+        from dailywallpaper.curation.like_seed import maybe_seed_subscribed_likes
+
+        maybe_seed_subscribed_likes(cfg, conn)
+    except Exception as exc:
+        logger.warning(f"like seed skipped: {exc}")
     pipeline = build_pipeline(cfg, conn)
     # The service is assembled in its own module so the boot-time pass in
     # ``dailywallpaper.startup`` can build it without importing this file.

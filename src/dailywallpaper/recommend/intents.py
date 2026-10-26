@@ -16,12 +16,13 @@ import json
 import logging
 import time
 
+from dailywallpaper.analysis.vision import DEFAULT_PROVIDER
 from dailywallpaper.db import now_iso
 
 logger = logging.getLogger(__name__)
 
 KINDS = ("local", "preference", "search", "action", "conditional")
-DEFAULT_MODEL = "glm-4.6v-flash"
+DEFAULT_MODEL = "deepseek-flash"
 # The same upper bound the vision path uses; classification is a much smaller
 # call, but the budget guard needs a number before the call happens.
 CLASSIFY_ESTIMATE_CNY = 0.003
@@ -67,11 +68,14 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
     text = (text or "").strip()
     if not text:
         return None
+    # The request and the ledger must name the same provider; resolving it
+    # once here keeps a defaulted call from billing the wrong vendor.
+    provider = (provider or DEFAULT_PROVIDER).strip().lower()
     usage_id = None
     if budget is not None:
         try:
             usage_id = budget.prewrite_estimate(
-                provider=provider or "zhipu", model=model, purpose="classify",
+                provider=provider, model=model, purpose="classify",
                 estimate=CLASSIFY_ESTIMATE_CNY,
             )
         except Exception:

@@ -57,7 +57,8 @@
 ## 第四步：安装 Mural 每日壁纸
 
 1. 双击 `Mural-Setup-x.x.x.exe`，**不需要管理员权限**
-2. 首次启动填智谱 API key（`open.bigmodel.cn` 免费申请）
+2. 首次启动填视觉模型 API key（默认 DeepSeek，`platform.deepseek.com` 申请；
+   想用智谱就把 `config.toml` 的 `[vision] provider` 改成 `"zhipu"`）
 3. 首次运行的环境检查会直接告诉你：
    - 有没有找到 Wallpaper Engine
    - Steam 商店和社区能不能打开

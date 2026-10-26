@@ -7,6 +7,7 @@ own daemon thread and quietly fills that cache.
 """
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import threading
@@ -22,7 +23,13 @@ from dailywallpaper.constants import BANNED_MAX_RATING
 APP_ID = 431960
 INTERVAL_SECONDS = 900
 CANDIDATE_WINDOW = 50
+# Retry spacing for one broken item: 30 min, 1 h, 2 h, 4 h, 8 h, then weekly.
+# A fixed 30-minute retry meant the same dead item re-ran -- and stalled the
+# pass behind a 30-minute steamcmd timeout -- every half hour, forever.
 FAILURE_RETRY_SECONDS = 30 * 60
+FAILURE_MAX_COOLDOWN_SECONDS = 24 * 60 * 60
+FAILURE_GIVE_UP_AFTER = 6
+FAILURE_ABANDONED_RETRY_SECONDS = 7 * 24 * 60 * 60
 
 
 class Prefetcher:
@@ -115,21 +122,64 @@ class Prefetcher:
             if folder.is_dir() and folder != self.staging
         )
 
-    def _recently_failed(self, conn, file_id: str) -> bool:
+    def _cooldown_seconds(self, count: int) -> float:
+        """How long to wait after the ``count``-th consecutive failure."""
+        if count >= FAILURE_GIVE_UP_AFTER:
+            # Still not abandoned: the usual cause is the workshop being
+            # unreachable for a while, so try again once a week instead of
+            # never. A permanent skip would hide an item that was only unlucky.
+            return FAILURE_ABANDONED_RETRY_SECONDS
+        return min(
+            FAILURE_RETRY_SECONDS * 2 ** max(0, count - 1),
+            FAILURE_MAX_COOLDOWN_SECONDS,
+        )
+
+    def _failure(self, conn, file_id: str) -> tuple[float, int] | None:
+        """(timestamp, consecutive failures) for an item, or None if it never failed."""
         row = conn.execute(
             "select value from state where key=?", (f"steam_failed_{file_id}",)
         ).fetchone()
         if row is None:
-            return False
+            return None
+        raw = row[0]
+        if isinstance(raw, str) and raw.lstrip().startswith("{"):
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                return None
+            if not isinstance(data, dict):
+                return None
+            try:
+                ts = float(data.get("ts"))
+            except (TypeError, ValueError):
+                return None
+            try:
+                count = max(1, int(data.get("count") or 1))
+            except (TypeError, ValueError):
+                count = 1
+            return ts, count
+        # Rows written before the counter existed hold a bare timestamp.
         try:
-            return time.time() - float(row[0]) < FAILURE_RETRY_SECONDS
+            return float(raw), 1
         except (TypeError, ValueError):
+            return None
+
+    def _recently_failed(self, conn, file_id: str) -> bool:
+        failure = self._failure(conn, file_id)
+        if failure is None:
             return False
+        ts, count = failure
+        return time.time() - ts < self._cooldown_seconds(count)
 
     def _mark_failure(self, conn, file_id: str) -> None:
+        failure = self._failure(conn, file_id)
+        count = failure[1] + 1 if failure else 1
         conn.execute(
             "insert or replace into state(key,value) values(?,?)",
-            (f"steam_failed_{file_id}", str(time.time())),
+            (
+                f"steam_failed_{file_id}",
+                json.dumps({"ts": time.time(), "count": count}),
+            ),
         )
         conn.commit()
 

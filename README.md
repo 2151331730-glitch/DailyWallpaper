@@ -108,8 +108,8 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 | 层 | 做什么 | 成本 |
 |---|---|---|
 | 本地预筛 | 分辨率、宽高比、模糊、黑边、重复图 | 免费 |
-| 免费初筛 | `glm-4.6v-flash` 打画质/创意/新颖/套路四个分 | ¥0 |
-| 付费复核 | `glm-4.6v` 复核排名前 N 的候选并重排 | ≈¥0.003/张 |
+| 模型初筛 | `deepseek-flash` 打画质/创意/新颖/套路四个分 | ≈¥0.004/张 |
+| 复核（默认关） | `review_model` 与 `screen_model` 相同时跳过；想复核就换一个视觉模型 | 另计 |
 
 硬门槛：画质 <60、套路 >70、NSFW、水印、大段文字 → 直接淘汰。
 
@@ -199,17 +199,19 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
   复现不出来，值得做；但它不构成满意度或留存数据，样本量也不足以下任何结论。
 - **测量本身的局限**（视觉模型分辨率有限、97% 的样本来自 wallhaven）写在上一节，
   这里不重复。
-- **1.2.0 起功能冻结**：之后只修 bug，不加来源、不改界面。
+- **1.2.0 起功能冻结**：之后只修 bug，不加来源、不改界面。唯一例外是 1.2.1 的
+  「安装时把我已订阅的壁纸标记为喜欢」——用户直接要求的一个初始评分项，不是新来源。
 
 ---
 
 ## 安装（Windows，推荐）
 
-1. 下载 [Mural-Setup-1.2.0.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
+1. 下载 [Mural-Setup-1.2.1.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
 2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\Mural`
    - 安装时可选「将任务栏和搜索框改成深色」，适配深色壁纸（只改当前用户，可随时改回）
-3. 首次启动会要求填写视觉模型的 API key：默认智谱（open.bigmodel.cn → API Keys），
-   也支持 DeepSeek（`[vision] provider = "deepseek"`，model `deepseek-flash`）
+3. 首次启动会要求填写视觉模型的 API key：默认 DeepSeek（platform.deepseek.com → API keys，
+   `[vision] provider = "deepseek"`，model `deepseek-flash`）；也支持智谱
+   （把 `provider` 改成 `"zhipu"`，model 用 `glm-4.6v-flash`）
 4. 安装时会问一次「是否使用作者的默认审美筛选」，可以选不使用
 5. 可选：想让程序自己去创意工坊找新图，在设置页填 Steam Web API key
    （免费，`steamcommunity.com/dev/apikey`；做法见《Steam 壁纸设置》第五步）
@@ -236,7 +238,7 @@ py -3.13 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev]"
 ```
 
-把 API key 存进 Windows 凭据管理器（服务名 `DailyWallpaper`，账户名 `zhipu`）：
+把 API key 存进 Windows 凭据管理器（服务名 `DailyWallpaper`，账户名 `zhipu`——这个账户名是历史遗留，换 provider 也不改）：
 
 ```powershell
 .venv\Scripts\python scripts\set_key.py        # 终端输入

@@ -57,12 +57,14 @@ class VisionPricing:
 
 @dataclass(frozen=True)
 class VisionSection:
-    provider: str = "zhipu"
+    provider: str = "deepseek"
     # Empty means "whatever the provider's own endpoint is"; set it to point
     # at a proxy or a compatible endpoint the map does not know.
     base_url: str = ""
-    screen_model: str = "glm-4.6v-flash"
-    review_model: str = "glm-4.6v"
+    screen_model: str = "deepseek-flash"
+    # Equal to screen_model -> the review pass is skipped (see app.py); set a
+    # different vision model to spend a second call on the finalists.
+    review_model: str = "deepseek-flash"
     review_top_n: int = 5
     prompt_version: str = "v1"
     max_output_tokens: int = 500

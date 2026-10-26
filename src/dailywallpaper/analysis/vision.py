@@ -29,7 +29,10 @@ PROVIDER_BASE_URLS = {
     "zhipu": "https://open.bigmodel.cn/api/paas/v4",
     "deepseek": "https://api.deepseek.com/v1",
 }
-DEFAULT_PROVIDER = "zhipu"
+# The provider a config that says nothing gets. Must match the shipped
+# config.example.toml and VisionSection's defaults, or a fresh install asks
+# for one vendor's key and then calls the other one's endpoint.
+DEFAULT_PROVIDER = "deepseek"
 
 # What the UI calls each vendor, and where a user goes to get a key. A key
 # prompt that still said "智谱" while the config pointed at DeepSeek sent the
@@ -166,7 +169,10 @@ def _as_palette(value) -> list[str]:
 
     glm-4.6v-flash returns the palette as a comma-separated string of bare
     hex codes ("ff8c00, 8b4513"). The spec requires #RRGGBB, so the '#'
-    is restored; a malformed value still fails validation."""
+    is restored; a malformed value still fails validation. A model that
+    returns six or seven colours is not a broken answer -- the caller
+    truncates to the five the prompt asked for, because throwing away a
+    paid analysis over a decorative field costs a whole candidate."""
     if isinstance(value, str):
         items: list = [part.strip() for part in value.split(",") if part.strip()]
     elif isinstance(value, list):
@@ -211,9 +217,9 @@ def validate_scores(payload: dict) -> VisionScores:
     overlay = payload["text_overlay"]
     if not isinstance(overlay, str) or overlay not in {"none","minor","major"}:
         raise VisionError("bad text_overlay")
-    palette = _as_palette(payload["palette"])
-    if len(palette) > 5:
-        raise VisionError("bad palette")
+    # The prompt asks for 0-5 colours; keep the first five if the model
+    # volunteers more instead of discarding scores that are otherwise fine.
+    palette = _as_palette(payload["palette"])[:5]
     return VisionScores(
         quality=_int(payload,"quality"),
         creativity=_int(payload,"creativity"),

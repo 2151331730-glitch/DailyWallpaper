@@ -9,8 +9,10 @@ def test_load_example_config():
     assert cfg.app.daily_time == "08:30"
     assert cfg.app.latest_change_time == "22:00"
     assert cfg.budget.monthly_cny == 10.0
-    assert cfg.vision.screen_model == "glm-4.6v-flash"
-    assert cfg.vision.pricing["glm-4.6v"].output_cny_per_million == 3.0
+    assert cfg.vision.provider == "deepseek"
+    assert cfg.vision.screen_model == "deepseek-flash"
+    assert cfg.vision.review_model == "deepseek-flash"
+    assert cfg.vision.pricing["deepseek-flash"].output_cny_per_million == 8.0
     assert cfg.sources.allow_mature is False
 
 

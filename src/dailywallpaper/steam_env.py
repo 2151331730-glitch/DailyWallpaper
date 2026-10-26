@@ -19,8 +19,10 @@ from pathlib import Path
 
 APP_ID = "431960"
 WE_FOLDER = "wallpaper_engine"
-# WeControl drives this exact executable; a 32-bit-only folder cannot be used.
-WE_EXE = "wallpaper64.exe"
+# WE ships both builds side by side and the 32-bit one is a perfectly normal
+# engine (its own setting picks which one starts), so either file makes the
+# folder usable. Requiring the 64-bit name hid a working install.
+WE_EXES = ("wallpaper64.exe", "wallpaper32.exe")
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +135,8 @@ def is_wallpaper_engine_dir(install_dir: str | Path | None) -> bool:
     """
     if not install_dir:
         return False
-    return (Path(install_dir) / WE_EXE).is_file()
+    folder = Path(install_dir)
+    return any((folder / name).is_file() for name in WE_EXES)
 
 
 def workshop_dir_for(install: Path) -> Path | None:

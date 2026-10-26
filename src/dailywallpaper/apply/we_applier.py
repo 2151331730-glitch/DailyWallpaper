@@ -92,7 +92,19 @@ class WeApplier:
 
     def apply(self, image_path) -> ApplyResult:
         state = self.snapshot()
-        target = Path(image_path)
+        real = Path(image_path)
+        target = self._prepared(real)
+        if target is None:
+            # WE reads this argument as ANSI, so a non-ASCII name arrives as
+            # mojibake, gets stored that way and paints nothing. Refusing here
+            # is what keeps the blackout picture from becoming the wallpaper.
+            return ApplyResult(
+                ok=False,
+                error=(
+                    "wallpaper engine cannot open a path with non-ASCII "
+                    f"characters: {real}"
+                ),
+            )
         was_running = self._engine_running()
         # Deliberately no closeWallpaper here: stopping the wallpaper first put
         # a static gap in the middle of the swap. The old project stays on
@@ -132,12 +144,29 @@ class WeApplier:
 
     def restore(self, state: WeState) -> None:
         if state.file:
+            target = self._prepared(Path(state.file))
+            if target is None:
+                logger.warning(
+                    f"cannot roll back to {state.file}: no ASCII path WE can open"
+                )
+                return
             # The saved selection has to follow, or the next boot restores the
             # project this rollback just backed away from.
-            self._prepoint(Path(state.file))
-            self.control.open(Path(state.file))
+            self._prepoint(target)
+            self.control.open(target)
 
     # -- internals -----------------------------------------------------
+    def _prepared(self, target: Path) -> Path | None:
+        """The ASCII path WE is given for ``target`` (see ``we_paths``)."""
+        prepare = getattr(self.control, "prepare", None)
+        if prepare is None:  # test fakes and older controls
+            return target
+        try:
+            return prepare(target)
+        except Exception as exc:  # a broken alias must not crash the swap
+            logger.warning(f"could not prepare a wallpaper engine path: {exc}")
+            return None
+
     def _prepoint(self, target: Path) -> None:
         """Aim WE's saved selection at the target before it switches.
 

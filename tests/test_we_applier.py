@@ -4,6 +4,21 @@ from pathlib import Path
 from dailywallpaper.apply.we_applier import WeApplier
 
 
+def _resolve_package(file):
+    """What WE does with a manifest target: it stores the sibling ``scene.pkg``.
+
+    That file must exist: the applier now treats a stored path WE cannot open
+    as "nothing is painting", so a fake has to resolve to a real file.
+    """
+    resolved = Path(file).parent / "scene.pkg"
+    try:
+        if not resolved.exists():
+            resolved.write_bytes(b"pkg")
+    except OSError:  # a fake path outside the test tree: nothing to create
+        pass
+    return str(resolved)
+
+
 class FakeControl:
     def __init__(self, ok=True, resolves=True):
         self.ok = ok
@@ -31,7 +46,7 @@ class FakeControl:
         self.opened.append(Path(file))
         self.order.append("open")
         if self.ok and self.resolves:
-            self.current_value = str(Path(file).parent / "scene.pkg")
+            self.current_value = _resolve_package(file)
         return self.ok
 
 
@@ -126,7 +141,7 @@ class ColdStartControl:
     def open(self, file, monitor=0):
         self.opened.append(Path(file))
         if self.resolves:
-            self.current_value = str(Path(file).parent / "scene.pkg")
+            self.current_value = _resolve_package(file)
         return True
 
 
@@ -230,6 +245,34 @@ def test_a_web_project_is_recorded_as_its_declared_entry(tmp_path):
     _applier(control).apply(project)
 
     assert control.replaced == [folder / "index.html"]
+
+
+def test_a_non_ascii_target_we_cannot_alias_is_refused(tmp_path):
+    # WE reads the -file argument as ANSI: a Chinese name arrives as mojibake
+    # and paints nothing, which is what left the desktop black all day.
+    project = _project(tmp_path)
+    control = FakeControl()
+    control.prepare = lambda path: None
+
+    result = _applier(control).apply(project)
+
+    assert result.ok is False
+    assert "non-ASCII" in result.error
+    assert control.opened == []
+
+
+def test_the_ascii_alias_is_what_we_is_given(tmp_path):
+    project = _project(tmp_path)
+    alias = project.parent / "alias-scene.pkg"
+    alias.write_bytes(b"pkg")
+    control = FakeControl()
+    control.prepare = lambda path: alias
+
+    result = _applier(control).apply(project)
+
+    assert result.ok is True
+    assert control.opened == [alias]
+    assert control.replaced == [alias]
 
 
 def test_switching_never_stops_the_current_wallpaper_first(tmp_path):

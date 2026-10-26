@@ -2,9 +2,14 @@
 """Bing daily wallpaper adapter (one UHD image per day)."""
 from __future__ import annotations
 
+import logging
+import time
+
 import requests
 
 from .base import Candidate, SourceError
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.bing.com"
 ARCHIVE_URL = f"{BASE_URL}/HPImageArchive.aspx"
@@ -16,6 +21,16 @@ BROWSER_USER_AGENT = (
 REQUEST_TIMEOUT = 30
 UHD_WIDTH = 3840
 UHD_HEIGHT = 2160
+# One more attempt after a short pause. The archive endpoint occasionally
+# answers 200 with an HTML error page while the same request works a moment
+# later, and Bing is the only source that needs no proxy here -- losing it for
+# half an hour (SOURCE_RETRY_SECONDS) over one bad response costs the whole day's
+# domestic candidate. 429 and other 4xx are not retried: they mean "stop asking".
+RETRY_DELAY_SECONDS = 1.5
+
+
+class _TransientError(Exception):
+    """A failure worth one more attempt: dropped connection, 5xx, HTML body."""
 
 
 class BingSource:
@@ -30,7 +45,19 @@ class BingSource:
         self.session = session
         self.config = config
 
-    def fetch(self, limit: int | None = None) -> list[Candidate]:
+    def _archive_payload(self):
+        """The decoded archive response, with one retry on a transient failure."""
+        try:
+            return self._request_once()
+        except _TransientError as exc:
+            logger.warning(f"bing request failed ({exc}); retrying once")
+        time.sleep(RETRY_DELAY_SECONDS)
+        try:
+            return self._request_once()
+        except _TransientError as exc:
+            raise SourceError(f"bing request failed twice: {exc}") from exc
+
+    def _request_once(self):
         try:
             response = self.session.get(
                 ARCHIVE_URL,
@@ -39,17 +66,32 @@ class BingSource:
                 timeout=(getattr(self.config, "connect_timeout", 5), REQUEST_TIMEOUT),
             )
         except requests.RequestException as exc:
-            raise SourceError(f"bing request failed: {exc}") from exc
-        if response.status_code == 429:
+            raise _TransientError(f"connection error: {exc}") from exc
+        status = response.status_code
+        if status == 429:
+            # Retrying a rate limit only makes it worse; the source is parked
+            # by the caller and comes back after SOURCE_RETRY_SECONDS.
             raise SourceError("bing rate limit hit (HTTP 429)")
+        if status >= 400:
+            detail = (
+                f"HTTP {status}, content-type "
+                f"{response.headers.get('Content-Type', 'unknown')}, "
+                f"body {response.text[:120]!r}"
+            )
+            if status >= 500:
+                raise _TransientError(detail)
+            raise SourceError(f"bing HTTP {status}")
         try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            raise SourceError(f"bing HTTP {response.status_code}") from exc
-        try:
-            payload = response.json()
+            return response.json()
         except ValueError as exc:
-            raise SourceError("bing returned malformed JSON") from exc
+            raise _TransientError(
+                f"malformed JSON (HTTP {status}, content-type "
+                f"{response.headers.get('Content-Type', 'unknown')}, "
+                f"body {response.text[:120]!r})"
+            ) from exc
+
+    def fetch(self, limit: int | None = None) -> list[Candidate]:
+        payload = self._archive_payload()
         images = payload.get("images") if isinstance(payload, dict) else None
         if not isinstance(images, list) or not images:
             return []

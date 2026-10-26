@@ -136,7 +136,9 @@ def test_auto_detect_off_leaves_the_config_alone(tmp_path, monkeypatch):
     assert updated.sources.we_workshop_enabled is False
 
 
-def test_a_32_bit_only_folder_is_not_usable(tmp_path, monkeypatch):
+def test_a_32_bit_only_folder_is_usable(tmp_path, monkeypatch):
+    # WE ships both builds and its own setting decides which one runs; a
+    # 64-bit-name-only check hid a working 32-bit install entirely.
     library = _make_library(tmp_path / "Steam", with_we=True, with_manifest=True)
     we = library / "steamapps" / "common" / "wallpaper_engine"
     (we / "wallpaper64.exe").unlink()
@@ -145,8 +147,7 @@ def test_a_32_bit_only_folder_is_not_usable(tmp_path, monkeypatch):
 
     env = steam_env.detect()
 
-    # WeControl drives wallpaper64.exe, so a 32-bit folder must not be offered.
-    assert env.we_install_dir is None
+    assert env.we_install_dir == we
 
 
 def test_workshop_source_turns_on_for_an_already_configured_path(tmp_path, monkeypatch):

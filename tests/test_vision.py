@@ -40,6 +40,17 @@ def test_bad_palette_rejected():
     with pytest.raises(VisionError):
         validate_scores(bad)
 
+def test_extra_palette_colours_are_truncated_not_rejected():
+    payload = load("vision_ok.json")
+    payload["palette"] = ["#112233", "#223344", "#334455", "#445566",
+                          "#556677", "#667788", "#778899"]
+
+    scores = validate_scores(payload)
+
+    assert scores.palette == ["#112233", "#223344", "#334455", "#445566", "#556677"]
+    assert scores.quality == 82
+
+
 def test_bad_text_overlay_rejected():
     bad = load("vision_ok.json")
     bad["text_overlay"] = "huge"

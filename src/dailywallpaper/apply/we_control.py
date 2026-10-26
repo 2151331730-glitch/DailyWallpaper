@@ -18,7 +18,10 @@ def _norm(path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
-WE_EXE_NAME = "wallpaper64.exe"
+# Both builds ship side by side in the same folder and either one can be the
+# engine that is actually running; WE records its own choice in
+# ``general.user.autostartx64``.
+WE_EXE_NAMES = ("wallpaper64.exe", "wallpaper32.exe")
 
 
 class _ProcessEntry32(ctypes.Structure):
@@ -77,6 +80,46 @@ def process_running(image_name: str) -> bool:
 
 class WeConfigError(RuntimeError):
     pass
+
+
+def _find_key(node: Any, key: str) -> Any:
+    """First value stored under ``key`` at any depth in WE's config."""
+    if isinstance(node, dict):
+        if key in node:
+            return node[key]
+        children = node.values()
+    elif isinstance(node, list):
+        children = node
+    else:
+        return None
+    for child in children:
+        found = _find_key(child, key)
+        if found is not None:
+            return found
+    return None
+
+
+def engine_exe_name(config_path: Path | None = None) -> str:
+    """Which engine build this installation starts.
+
+    WE ships ``wallpaper32.exe`` and ``wallpaper64.exe`` together and keeps the
+    user's pick in ``general.user.autostartx64`` (its "用 64 位版本" switch).
+    Driving a hardcoded 64-bit name was the bug: on a machine set to the 32-bit
+    build, ``running()`` said "not running" while the engine was on the
+    desktop, so every apply tried to boot a second engine, waited a minute for
+    it, and left the blackout picture on screen the whole time.
+    """
+    if config_path is None:
+        return WE_EXE_NAMES[0]
+    try:
+        raw = json.loads(
+            Path(config_path).read_text(encoding="utf-8", errors="replace")
+        )
+    except (OSError, ValueError):
+        return WE_EXE_NAMES[0]
+    if _find_key(raw, "autostartx64") is False:
+        return WE_EXE_NAMES[1]
+    return WE_EXE_NAMES[0]
 
 
 def desktop_window_visible() -> bool:
@@ -150,7 +193,10 @@ class WeConfig:
 
     @classmethod
     def from_file(cls, path: Path) -> "WeConfig":
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        # replace, not strict: a mangled wallpaper path (U+FFFD) in this file
+        # must not stop the read -- telling "nothing is playing" from "playing
+        # something we cannot load" is exactly what the guard needs.
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
         wallpaperconfig = _find_wallpaperconfig(raw)
         if wallpaperconfig is None:
             raise WeConfigError("wallpaperconfig not found")
@@ -168,10 +214,17 @@ def same_project(current: str, target: Path) -> bool:
 
     Wallpaper Engine resolves a ``project.json`` target to a sibling
     ``scene.pkg`` or video file, so comparing file names is not reliable.
+    The stored path must also exist: a name WE mangled on the way in (GBK
+    bytes read as UTF-8, see ``we_paths``) keeps the same folder, so a
+    parent-only comparison called a wallpaper that paints nothing a success --
+    and the blackout picture stayed on the desktop.
     """
     if not current:
         return False
-    return Path(current).parent.resolve() == target.parent.resolve()
+    stored = Path(current)
+    if not stored.is_file():
+        return False
+    return stored.parent.resolve() == target.parent.resolve()
 
 class WeControl:
     def __init__(
@@ -180,17 +233,59 @@ class WeControl:
         config_path: Path,
         runner: Callable[..., Any] = subprocess.run,
         processes: Callable[[], bool] | None = None,
+        alias_root: Path | None = None,
     ):
-        self.exe = install_dir / "wallpaper64.exe"
+        self.install_dir = Path(install_dir)
         self.config_path = config_path
         self.runner = runner
         self.processes = processes
+        # Where ASCII aliases of non-ASCII wallpaper paths are kept. None
+        # means "pass the path through", which is what test fakes and older
+        # callers expect.
+        self.alias_root = Path(alias_root) if alias_root else None
+
+    def prepare(self, file: Path) -> Path | None:
+        """An ASCII path WE can open for ``file``; None when it cannot.
+
+        Every path this class hands to WE must go through here: ``open``, the
+        config pre-point, and the guard's "is this ours" comparison.
+        """
+        from dailywallpaper.apply.we_paths import ascii_path
+
+        if self.alias_root is None:
+            return Path(file)
+        return ascii_path(Path(file), self.alias_root)
 
     def current(self) -> str:
         return WeConfig.from_file(self.config_path).current_file()
 
+    @property
+    def exe(self) -> Path:
+        """The engine binary ``start`` and ``-control`` must address.
+
+        Both builds live in the same folder and only one of them matches the
+        engine that is actually on this machine. Order of trust: a build that
+        is running right now (``-control`` only reaches the live instance),
+        then WE's own recorded choice, then whichever file exists, and finally
+        the 64-bit name so a mocked install path still resolves to something
+        predictable.
+        """
+        if self.processes is None:
+            # An injected probe answers "is WE up", not "which build": only a
+            # real process table can name the binary.
+            for name in WE_EXE_NAMES:
+                if process_running(name) and (self.install_dir / name).is_file():
+                    return self.install_dir / name
+        preferred = engine_exe_name(self.config_path)
+        if (self.install_dir / preferred).is_file():
+            return self.install_dir / preferred
+        for name in WE_EXE_NAMES:
+            if (self.install_dir / name).is_file():
+                return self.install_dir / name
+        return self.install_dir / WE_EXE_NAMES[0]
+
     def running(self) -> bool:
-        """True when a Wallpaper Engine process is up.
+        """True when a Wallpaper Engine process is up, whichever build it is.
 
         ``-control`` only talks to a live instance; on a stopped engine the
         same command boots the whole app instead, which takes tens of seconds
@@ -198,9 +293,10 @@ class WeControl:
         """
         probe = self.processes
         if probe is None:
-            from functools import partial
-
-            probe = partial(process_running, WE_EXE_NAME)
+            # Either build counts: probing only the 64-bit image reported a
+            # running 32-bit engine as stopped, and the applier then spent a
+            # full minute booting an engine that was already on the desktop.
+            return any(process_running(name) for name in WE_EXE_NAMES)
         try:
             return bool(probe())
         except Exception as exc:  # a missing tasklist is "cannot tell"

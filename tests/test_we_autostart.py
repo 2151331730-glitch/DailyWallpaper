@@ -189,3 +189,30 @@ def test_restore_without_a_marker_changes_nothing(tmp_path):
 
     assert result.changed == []
     assert _user(cfg)["autostart"] is True
+
+
+def test_a_running_32_bit_engine_is_seen_and_stopped(tmp_path):
+    # WE ships both builds and either can be the one in use; asking only about
+    # wallpaper64.exe left the 32-bit engine running, and it then rewrote
+    # config.json (its autostart switches) on exit.
+    class _Runner32:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, args, **_kwargs):
+            self.calls.append(list(args))
+            if args[:2] == ["sc", "query"]:
+                return _Result(1)  # no auto-start service: nothing needs admin
+            if args[:1] == ["tasklist"]:
+                if "wallpaper32.exe" in " ".join(args):
+                    return _Result(0, "wallpaper32.exe  4242 Console  1  12,345 K")
+                return _Result(0, "INFO: No tasks are running which match the criteria.")
+            return _Result(0)
+
+    runner = _Runner32()
+    assert wa.we_processes_running(runner) is True
+
+    wa.disable(_cfg(tmp_path), runner=runner, registry=_Registry(), admin=False)
+
+    killed = [call[2] for call in runner.calls if call[:1] == ["taskkill"]]
+    assert "wallpaper32.exe" in killed

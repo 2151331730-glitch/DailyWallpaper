@@ -11,12 +11,17 @@ from dailywallpaper.sources.wallhaven import WallhavenSource
 from dailywallpaper.sources.bing import BingSource
 
 class FakeResponse:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, text=None, content_type="application/json"):
         self.payload, self.status_code = payload, status
+        self.headers = {"Content-Type": content_type}
+        self.text = json.dumps(payload) if text is None else text
+        self.malformed = text is not None
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(str(self.status_code))
     def json(self):
+        if self.malformed:
+            raise ValueError("body is not JSON")
         return self.payload
 
 class FakeSession:
@@ -24,6 +29,18 @@ class FakeSession:
         self.payload, self.status = payload, status
     def get(self, *args, **kwargs):
         return FakeResponse(self.payload, self.status)
+
+
+class QueueSession:
+    """Returns the given responses in order and remembers how many were asked for."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def get(self, *args, **kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
 
 def test_wallhaven_parses_fixture():
     payload = json.loads(Path("tests/fixtures/wallhaven.json").read_text(encoding="utf-8"))
@@ -41,6 +58,66 @@ def test_bing_parses_fixture():
 def test_429_raises_source_error():
     with pytest.raises(Exception):
         WallhavenSource(FakeSession({}, status=429)).fetch(24)
+
+
+def test_bing_retries_once_when_the_body_is_not_json(monkeypatch):
+    from dailywallpaper.sources import bing
+
+    monkeypatch.setattr(bing, "RETRY_DELAY_SECONDS", 0)
+    payload = json.loads(Path("tests/fixtures/bing.json").read_text(encoding="utf-8"))
+    session = QueueSession([
+        FakeResponse({}, text="<html>oops</html>", content_type="text/html"),
+        FakeResponse(payload),
+    ])
+
+    items = bing.BingSource(session).fetch()
+
+    assert session.calls == 2
+    assert items[0].source == "bing"
+
+
+def test_bing_gives_up_after_two_malformed_bodies(monkeypatch):
+    from dailywallpaper.sources import bing
+
+    monkeypatch.setattr(bing, "RETRY_DELAY_SECONDS", 0)
+    session = QueueSession([FakeResponse({}, text="nope"), FakeResponse({}, text="nope")])
+
+    with pytest.raises(SourceError):
+        bing.BingSource(session).fetch()
+    assert session.calls == 2
+
+
+def test_bing_retries_a_5xx(monkeypatch):
+    from dailywallpaper.sources import bing
+
+    monkeypatch.setattr(bing, "RETRY_DELAY_SECONDS", 0)
+    payload = json.loads(Path("tests/fixtures/bing.json").read_text(encoding="utf-8"))
+    session = QueueSession([FakeResponse({}, status=503), FakeResponse(payload)])
+
+    assert bing.BingSource(session).fetch()[0].source == "bing"
+    assert session.calls == 2
+
+
+def test_bing_does_not_retry_a_429(monkeypatch):
+    from dailywallpaper.sources import bing
+
+    monkeypatch.setattr(bing, "RETRY_DELAY_SECONDS", 0)
+    session = QueueSession([FakeResponse({}, status=429)])
+
+    with pytest.raises(SourceError):
+        bing.BingSource(session).fetch()
+    assert session.calls == 1
+
+
+def test_bing_does_not_retry_a_4xx(monkeypatch):
+    from dailywallpaper.sources import bing
+
+    monkeypatch.setattr(bing, "RETRY_DELAY_SECONDS", 0)
+    session = QueueSession([FakeResponse({}, status=403)])
+
+    with pytest.raises(SourceError):
+        bing.BingSource(session).fetch()
+    assert session.calls == 1
 
 
 def test_upsert_dedupes(tmp_path):

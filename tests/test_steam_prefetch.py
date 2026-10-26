@@ -289,3 +289,75 @@ def test_no_download_into_a_full_cache(tmp_path):
 
     assert prefetcher.run_once() == []
     assert fake.calls == []
+
+
+def test_a_failure_counts_up_and_the_wait_grows(tmp_path):
+    import time
+
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    prefetcher = _prefetcher(tmp_path, FakeSteamCmd(root, fail={"111"}), top_n=1)
+
+    prefetcher.run_once()
+    ts, count = prefetcher._failure(conn, "111")
+    assert count == 1
+    assert time.time() - ts < 60
+
+    prefetcher._mark_failure(conn, "111")
+    assert prefetcher._failure(conn, "111")[1] == 2
+
+
+def test_the_retry_wait_doubles_then_falls_back_to_weekly():
+    prefetcher = Prefetcher(
+        conn_factory=lambda: None, download_root=Path("."),
+        steamcmd=None, account="me",
+    )
+
+    assert prefetcher._cooldown_seconds(1) == 30 * 60
+    assert prefetcher._cooldown_seconds(2) == 60 * 60
+    assert prefetcher._cooldown_seconds(3) == 2 * 60 * 60
+    assert prefetcher._cooldown_seconds(5) == 8 * 60 * 60
+    # Never a permanent skip: a long-broken item is retried once a week.
+    assert prefetcher._cooldown_seconds(6) == 7 * 24 * 60 * 60
+    assert prefetcher._cooldown_seconds(20) == 7 * 24 * 60 * 60
+
+
+def test_a_legacy_failure_timestamp_is_still_respected(tmp_path):
+    import time
+
+    conn = _conn(tmp_path)
+    prefetcher = _prefetcher(tmp_path, FakeSteamCmd(tmp_path / "steam_workshop"))
+    conn.execute(
+        "insert or replace into state(key,value) values('steam_failed_111',?)",
+        (str(time.time() - 60),),
+    )
+    conn.commit()
+
+    assert prefetcher._recently_failed(conn, "111") is True
+
+
+def test_a_success_clears_the_failure_record(tmp_path):
+    import json
+    import time
+
+    conn = _conn(tmp_path)
+    root = tmp_path / "steam_workshop"
+    _remote(conn, "111", 95, root)
+    fake = FakeSteamCmd(root, fail={"111"})
+    prefetcher = _prefetcher(tmp_path, fake)
+
+    prefetcher.run_once()
+    assert prefetcher._failure(conn, "111") is not None
+
+    # Let the cooldown expire and let the next attempt succeed.
+    fake.fail.clear()
+    conn.execute(
+        "update state set value=? where key='steam_failed_111'",
+        (json.dumps({"ts": time.time() - 3600, "count": 1}),),
+    )
+    conn.commit()
+    prefetcher.run_once()
+
+    assert prefetcher._failure(conn, "111") is None
+    assert (root / "111" / "project.json").is_file()

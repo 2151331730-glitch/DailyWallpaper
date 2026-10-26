@@ -6,7 +6,7 @@
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
 #define MyAppName "Mural 每日壁纸"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "郭欣哈"
 #define MyAppExeName "Mural.exe"
 
@@ -39,6 +39,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："
 Name: "autostart"; Description: "开机自动启动"; GroupDescription: "启动选项："
 Name: "darktaskbar"; Description: "将任务栏和搜索框改成深色（适配深色壁纸）"; GroupDescription: "外观选项："
+Name: "likeseed"; Description: "把我已订阅的 Wallpaper Engine 壁纸标记为喜欢（8 分），让推荐一上来就懂我的口味"; GroupDescription: "初始评分："
 
 [InstallDelete]
 ; An upgrade copies over same-named files and leaves everything else alone, so
@@ -272,9 +273,13 @@ begin
   else
     Fresh := Fresh + ', "autostart": false';
   if WantDisableWe() then
-    Fresh := Fresh + ', "disable_we_autostart": true}'
+    Fresh := Fresh + ', "disable_we_autostart": true'
   else
-    Fresh := Fresh + ', "disable_we_autostart": false}';
+    Fresh := Fresh + ', "disable_we_autostart": false';
+  if WizardIsTaskSelected('likeseed') then
+    Fresh := Fresh + ', "seed_subscribed_likes": true}'
+  else
+    Fresh := Fresh + ', "seed_subscribed_likes": false}';
 
   Existing := '';
   if FileExists(Path) then
@@ -303,10 +308,18 @@ begin
       else
         StringChangeEx(Existing, '"disable_we_autostart": true',
                        '"disable_we_autostart": false', True);
+      if WizardIsTaskSelected('likeseed') then
+        StringChangeEx(Existing, '"seed_subscribed_likes": false',
+                       '"seed_subscribed_likes": true', True)
+      else
+        StringChangeEx(Existing, '"seed_subscribed_likes": true',
+                       '"seed_subscribed_likes": false', True);
       EnsurePref(Existing, 'use_seed', BoolWord(SeedPage.Values[0]));
       EnsurePref(Existing, 'autostart',
                  BoolWord(WizardIsTaskSelected('autostart')));
       EnsurePref(Existing, 'disable_we_autostart', BoolWord(WantDisableWe()));
+      EnsurePref(Existing, 'seed_subscribed_likes',
+                 BoolWord(WizardIsTaskSelected('likeseed')));
     end;
     SaveStringToFile(Path, Existing, False);
   end

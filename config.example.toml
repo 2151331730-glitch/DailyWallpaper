@@ -31,12 +31,15 @@ proxy = ""
 [vision]
 # zhipu (glm) or deepseek. The key lives in the credential manager under
 # DailyWallpaper / zhipu whatever this says -- the slot predates the knob.
-provider = "zhipu"
+provider = "deepseek"
 # Empty = the provider's own endpoint (see PROVIDER_BASE_URLS in vision.py).
 # Set it only to point at a proxy or another OpenAI-compatible endpoint.
 base_url = ""
-screen_model = "glm-4.6v-flash"
-review_model = "glm-4.6v"
+screen_model = "deepseek-flash"
+# Same model as screen_model means the paid review pass is skipped: DeepSeek
+# has no cheap vision model to review with, so the default saves the second
+# call. Point this at another vision model to turn review back on.
+review_model = "deepseek-flash"
 review_top_n = 5
 prompt_version = "v1"
 # Thinking models reason before answering: better-argued scores, ~4x the

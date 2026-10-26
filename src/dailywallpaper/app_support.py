@@ -48,6 +48,17 @@ def install_allows_seed() -> bool:
     return bool(install_prefs().get("use_seed", True))
 
 
+def install_allows_like_seed() -> bool:
+    """Did the installer tick "mark my subscribed wallpapers as liked"?
+
+    Off unless the installer said yes: writing ratings into someone's profile
+    is the user's decision, and a source run never saw that page.
+    """
+    from dailywallpaper.config import install_prefs
+
+    return bool(install_prefs().get("seed_subscribed_likes", False))
+
+
 def rate_limited(exc: Exception) -> bool:
     """True when the provider refused the call for being overloaded."""
     text = str(exc)

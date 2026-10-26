@@ -76,6 +76,21 @@ class _FakeWe:
         return True
 
 
+def _resolve_package(file):
+    """What WE does with a manifest target: it stores the sibling ``scene.pkg``.
+
+    The file has to exist: a stored path WE cannot open is exactly the
+    mangled-path failure the applier now treats as "nothing is painting".
+    """
+    resolved = Path(file).parent / "scene.pkg"
+    try:
+        if not resolved.exists():
+            resolved.write_bytes(b"pkg")
+    except OSError:  # a fake path outside the test tree: nothing to create
+        pass
+    return str(resolved)
+
+
 def _wallpaper(conn):
     conn.execute("insert into wallpapers(source,source_id,created_at) values('t','1','x')")
     conn.commit()
@@ -269,7 +284,7 @@ def test_a_real_we_applier_works_through_the_service(tmp_path):
 
         def open(self, file, monitor=0):
             self.opened.append(Path(file))
-            self.current_value = str(Path(file).parent / "scene.pkg")
+            self.current_value = _resolve_package(file)
             return True
 
     conn = connect(tmp_path / "app.db")
@@ -309,7 +324,7 @@ def test_a_dynamic_apply_does_not_close_wallpaper_engine_first(tmp_path):
             return self.current_value
 
         def open(self, file, monitor=0):
-            self.current_value = str(Path(file).parent / "scene.pkg")
+            self.current_value = _resolve_package(file)
             return True
 
         def close(self):
@@ -398,7 +413,7 @@ def test_a_dynamic_apply_is_not_rechecked(tmp_path):
             return self.current_value
 
         def open(self, file, monitor=0):
-            self.current_value = str(Path(file).parent / "scene.pkg")
+            self.current_value = _resolve_package(file)
             return True
 
     project = tmp_path / "111" / "project.json"
@@ -449,7 +464,7 @@ def test_a_live_swap_paints_the_desktop_black_first(tmp_path):
 
     def open_and_resolve(file, monitor=0):
         control.opened.append(str(file).replace("\\", "/"))
-        control._current = str(Path(file).parent / "scene.pkg")
+        control._current = _resolve_package(file)
         return True
 
     control.open = open_and_resolve
@@ -527,7 +542,7 @@ def test_back_to_back_swaps_keep_the_first_picture_and_drop_stale_restores(tmp_p
     control = _FakeWe(current="D:/we/old/scene.pkg")
 
     def open_and_resolve(file, monitor=0):
-        control._current = str(Path(file).parent / "scene.pkg")
+        control._current = _resolve_package(file)
         return True
 
     control.open = open_and_resolve
@@ -581,7 +596,7 @@ def test_a_pending_blackout_restore_cannot_overwrite_a_still_picture(tmp_path):
     control = _FakeWe(current="D:/we/old/scene.pkg")
 
     def open_and_resolve(file, monitor=0):
-        control._current = str(Path(file).parent / "scene.pkg")
+        control._current = _resolve_package(file)
         return True
 
     control.open = open_and_resolve
@@ -1178,6 +1193,79 @@ def test_a_failed_reopen_is_retried_at_most_once_a_minute(tmp_path):
     assert len(we.opened) == 1
 
 
+def test_a_failed_live_swap_takes_the_engine_off_the_desktop(tmp_path):
+    # The blackout picture is what the user is looking at when the swap fails.
+    # Restoring the still picture underneath is invisible while WE owns the
+    # screen, so the engine has to come off it.
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class PaintsNothing(_FakeWe):
+        def rendering(self):
+            return False
+
+        def running(self):
+            return True
+
+    project = tmp_path / "333" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','333','video','x')"
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    control = PaintsNothing(current="D:/we/old/scene.pkg")
+    control.open = lambda file, monitor=0: False
+    service = ApplyService(
+        conn,
+        _FakeApplier(),
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None,
+                                  attempts=1, interval=0.01),
+        sleep=lambda s: None,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, project) is False
+
+    assert control.closed == 1
+
+
+def test_the_guard_stops_reopening_a_wallpaper_we_never_paints(tmp_path):
+    # One unloadable project used to be reopened every minute forever, which
+    # kept the blackout picture on the desktop all day. Three attempts, then
+    # stop driving WE and let the still picture show.
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    scene = tmp_path / "ours" / "scene.pkg"
+    scene.parent.mkdir()
+    scene.write_bytes(b"x")
+    wid = _logged_wallpaper(conn, scene, media_type="scene")
+    conn.execute("update wallpapers set file_url=? where id=?", (str(scene), wid))
+    conn.commit()
+    we = _FakeWe(current="")
+    service = ApplyService(conn, _FakeApplier(), we=we)
+
+    for _ in range(3):
+        service._last_dynamic_attempt = 0.0
+        service.keep_visible()
+
+    assert len(we.opened) == 3
+    assert we.closed == 0
+
+    service._last_dynamic_attempt = 0.0
+    assert service.keep_visible() is True
+    assert we.closed == 1, "the engine has to come off the black desktop"
+
+    # And it stays away instead of starting the loop again immediately.
+    service._last_dynamic_attempt = 0.0
+    assert service.keep_visible() is False
+    assert len(we.opened) == 3
+
+
 def test_forget_banned_selection_moves_we_off_the_rated_one(tmp_path):
     conn = connect(tmp_path / "app.db")
     migrate(conn)
@@ -1330,3 +1418,66 @@ def test_undo_restores_the_previous_mode_and_style(tmp_path):
     assert applier.restored[-1].style == "10"
     assert applier.restored[-1].tile == "1"
     assert applier.background_type.set_calls == [2]
+
+
+def test_a_cold_start_paints_no_blackout(tmp_path):
+    # A stopped engine has nothing to hide, so the black beat is skipped; and
+    # if the boot then fails, the desktop keeps the old picture instead of a
+    # black one for the whole boot timeout (the 32-bit engine bug).
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class ColdEngine:
+        def __init__(self):
+            self.current_value = ""
+            self.running_now = False
+            self.opened = []
+            self.closed = 0
+
+        def current(self):
+            return self.current_value
+
+        def rendering(self):
+            return False
+
+        def running(self):
+            return self.running_now
+
+        def start(self):
+            self.running_now = True
+            return True
+
+        def open(self, file, monitor=0):
+            self.opened.append(str(file).replace("\\", "/"))
+            self.current_value = _resolve_package(file)
+            return True
+
+        def close(self):
+            self.closed += 1
+            return True
+
+    project = tmp_path / "555" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    conn.execute(
+        "insert into wallpapers(source,source_id,media_type,created_at)"
+        " values('we_workshop','555','scene','x')"
+    )
+    conn.commit()
+    wid = conn.execute("select id from wallpapers").fetchone()[0]
+    control = ColdEngine()
+    applier = _FakeApplier()
+    service = ApplyService(
+        conn,
+        applier,
+        we=control,
+        dynamic_applier=WeApplier(control, sleep=lambda s: None, attempts=1, interval=0.01),
+        sleep=lambda s: None,
+        spawn=lambda target: target(),
+    )
+
+    assert service.apply(wid, project) is True
+
+    assert applier.applied == [], "no blackout picture may reach the desktop"
+    assert control.opened and Path(control.opened[0]).name == "project.json"
