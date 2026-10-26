@@ -6,13 +6,16 @@ import argparse
 import sys
 from pathlib import Path
 
+from dailywallpaper import identity
 from dailywallpaper.app import AlreadyRunning, SingleInstance
 from dailywallpaper.config import default_config_path, load_config
 from dailywallpaper.logging_setup import setup_logging
 from dailywallpaper.steam_env import apply_to_config
 
 
-INSTANCE_NAME = "DailyWallpaper"
+# The mutex is per build: the source tree and the installed copy must not
+# refuse each other, and neither may depend on the other's name surviving.
+INSTANCE_NAME = identity.name()
 
 
 def _version() -> str:
@@ -180,7 +183,7 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         with SingleInstance(instance_name or INSTANCE_NAME):
             return run_inside()
     except AlreadyRunning:
-        print("另一个 DailyWallpaper 实例已经在运行，本次启动已退出。")
+        print(f"另一个 {identity.title()} 实例已经在运行，本次启动已退出。")
         return 1
     except RuntimeError as exc:
         # The headless path has no first-run dialog; say what is missing

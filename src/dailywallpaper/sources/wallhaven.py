@@ -6,12 +6,13 @@ import time
 
 import requests
 
+from dailywallpaper import identity
 from dailywallpaper.config import SourcesSection
 
 from .base import Candidate, SourceError
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
-USER_AGENT = "DailyWallpaper/0.1 (local app)"
+USER_AGENT = f"{identity.name()}/0.1 (local app)"
 PAGE_SIZE = 24
 REQUEST_TIMEOUT = 30
 REQUEST_SPACING_SECONDS = 1.0

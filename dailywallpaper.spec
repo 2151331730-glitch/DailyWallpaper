@@ -5,6 +5,12 @@ from pathlib import Path
 
 project = Path(SPECPATH).resolve()
 src = project / "src"
+# The exe and the dist folder carry the packaged build's name, and that name is
+# what identity.py hands to the Run value, the logon task, the mutex and the
+# credential slot. Taking it from there keeps the four from drifting apart; the
+# source tree itself keeps DailyWallpaper.
+sys.path.insert(0, str(src))
+from dailywallpaper.identity import PRODUCT_NAME  # noqa: E402
 
 # Qt modules this app never imports. Each one drags DLLs and plugins along;
 # cutting them here is the difference between a 400 MB folder and 250 MB.
@@ -66,7 +72,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="DailyWallpaper",
+    name=PRODUCT_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -81,5 +87,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="DailyWallpaper",
+    name=PRODUCT_NAME,
 )

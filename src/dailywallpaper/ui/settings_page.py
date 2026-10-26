@@ -21,6 +21,22 @@ from dailywallpaper.config import save_config
 
 logger = logging.getLogger(__name__)
 
+# Kept here rather than imported from app.py: that module is the composition
+# root and pulls the whole pipeline in with it.
+STEAM_KEY_ACCOUNT = "steam_api_key"
+
+
+def _stored_steam_key() -> str:
+    try:
+        import keyring
+
+        from dailywallpaper.analysis.vision import KEYRING_SERVICE
+
+        return keyring.get_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT) or ""
+    except Exception:
+        return ""
+
+
 def _valid_time(text: str) -> bool:
     try:
         time.fromisoformat(text.strip())
@@ -58,6 +74,17 @@ class SettingsPage(QWidget):
         )
         self.api_key_test_button = QPushButton("测试 key")
         self.api_key_test_button.clicked.connect(self.test_api_key)
+        # The online workshop needs a free Steam Web API key. The packaged build
+        # ships no scripts folder, so without this field the feature was
+        # unreachable there; it also removed the reason to paste a key into a
+        # terminal, where it would sit in the scrollback.
+        self.steam_key_edit = QLineEdit()
+        self.steam_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.steam_key_edit.setPlaceholderText(
+            "已保存的 key 不会显示；留空表示不修改"
+            if self._has_steam_key()
+            else "可选：线上创意工坊 key（steamcommunity.com/dev/apikey）"
+        )
         self.wallhaven_check = QCheckBox("启用 Wallhaven")
         self.wallhaven_check.setChecked(config.sources.wallhaven_enabled)
         self.bing_check = QCheckBox("启用 Bing 每日壁纸")
@@ -86,6 +113,7 @@ class SettingsPage(QWidget):
         form.addRow("", self.proxy_test_button)
         form.addRow(f"{self._provider_label()} API key", self.api_key_edit)
         form.addRow("", self.api_key_test_button)
+        form.addRow("Steam Web API key", self.steam_key_edit)
         form.addRow(self.wallhaven_check)
         form.addRow(self.bing_check)
         form.addRow(self.manual_counts_check)
@@ -185,6 +213,9 @@ class SettingsPage(QWidget):
             return bool(keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT))
         except Exception:
             return False
+
+    def _has_steam_key(self) -> bool:
+        return _stored_steam_key() != ""
 
     def test_proxy(self) -> None:
         from dailywallpaper.net import proxy_alive
@@ -296,6 +327,25 @@ class SettingsPage(QWidget):
             logger.warning(f"api key save failed: {exc}")
             self.status.setText("key 写入凭据管理器失败")
 
+    def _store_steam_key(self) -> None:
+        """Same for the workshop key; empty means "leave what is stored alone"."""
+        key = self.steam_key_edit.text().strip()
+        if not key:
+            return
+        try:
+            import keyring
+
+            from dailywallpaper.analysis.vision import KEYRING_SERVICE
+
+            keyring.set_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT, key)
+            self.steam_key_edit.clear()
+            self.steam_key_edit.setPlaceholderText(
+                "已保存的 key 不会显示；留空表示不修改"
+            )
+        except Exception as exc:
+            logger.warning(f"steam key save failed: {exc}")
+            self.status.setText("Steam key 写入凭据管理器失败")
+
     def save(self) -> bool:
         updated = self.collect()
         if updated is None:
@@ -307,6 +357,7 @@ class SettingsPage(QWidget):
             self.status.setText("保存失败：无法写入 config.toml")
             return False
         self._store_api_key()
+        self._store_steam_key()
         self._apply_autostart(updated.app.start_with_windows)
         self.config = updated
         self.status.setText("已保存")

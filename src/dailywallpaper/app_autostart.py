@@ -6,9 +6,14 @@ import logging
 import sys
 from pathlib import Path
 
+from dailywallpaper import identity
+
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-VALUE_NAME = "DailyWallpaper"
-TASK_NAME = "DailyWallpaper"
+# Both are named after the build, not the product as a whole: the uninstaller
+# deletes the Run value by name, so a shared name meant uninstalling one build
+# switched autostart off for the other.
+VALUE_NAME = identity.name()
+TASK_NAME = identity.name()
 
 logger = logging.getLogger(__name__)
 

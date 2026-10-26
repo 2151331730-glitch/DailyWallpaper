@@ -9,6 +9,7 @@ from pathlib import Path
 
 import keyring
 
+from dailywallpaper import identity
 from dailywallpaper.analysis.scoring import rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
@@ -99,7 +100,9 @@ class SingleInstance:
         if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
             kernel32.CloseHandle(self.handle)
             self.handle = None
-            raise AlreadyRunning("another DailyWallpaper instance is running")
+            raise AlreadyRunning(
+                f"another {identity.name()} instance is running"
+            )
         return self
 
     def __exit__(self, *exc):

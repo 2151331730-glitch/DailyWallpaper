@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 
+from dailywallpaper import identity
 from dailywallpaper.analysis.vision import KEYRING_ACCOUNT, KEYRING_SERVICE
 from dailywallpaper.config import install_prefs, user_data_dir
 from dailywallpaper.steam_env import (
@@ -147,7 +148,7 @@ def ensure_first_run(cfg) -> bool:
         vendor = provider_label(provider)
         key, ok = QInputDialog.getText(
             None,
-            "每日壁纸 · 首次设置",
+            f"{identity.title()} · 首次设置",
             f"需要一个 {vendor} API key 才能给壁纸打分。\n\n"
             f"申请：{provider_key_hint(provider)}\n"
             "（key 只保存在 Windows 凭据管理器，不写入任何文件）",
@@ -158,7 +159,7 @@ def ensure_first_run(cfg) -> bool:
         keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, key.strip())
         QMessageBox.information(
             None,
-            "每日壁纸 · 提示",
+            f"{identity.title()} · 提示",
             "key 已保存。若之后出现“没有候选通过筛选”，"
             f"多半是 key 无效或余额不足：到「设置 → {vendor} API key」"
             "粘贴 key 后点“测试 key”就能确认。",
@@ -167,7 +168,7 @@ def ensure_first_run(cfg) -> bool:
     if not install_prefs().get("first_run_done"):
         QMessageBox.information(
             None,
-            "每日壁纸 · 环境检查",
+            f"{identity.title()} · 环境检查",
             "设置完成，可以开始了。\n\n" + _environment_report(cfg),
         )
         _mark_done()

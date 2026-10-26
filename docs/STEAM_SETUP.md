@@ -4,7 +4,7 @@
 
 ## 先说清楚三件事
 
-1. **安装包里没有 Steam，也没有 Wallpaper Engine。** 每日壁纸只负责每天挑一张、自动换上，Steam 和壁纸引擎要你自己装。
+1. **安装包里没有 Steam，也没有 Wallpaper Engine。** 本程序只负责每天挑一张、自动换上，Steam 和壁纸引擎要你自己装。
 2. **Wallpaper Engine 是付费软件，约 ¥19，必须用自己的 Steam 账号购买。** 不能把别人的安装目录拷过来用，那是盗版，也违反 Steam 用户协议。
 3. 程序会自动读取你电脑上 Steam 的安装位置和已订阅的创意工坊内容，通常**不需要你手填任何路径**。
 
@@ -54,9 +54,9 @@
 
 ---
 
-## 第四步：安装每日壁纸
+## 第四步：安装 Mural 每日壁纸
 
-1. 双击 `DailyWallpaper-Setup-x.x.x.exe`，**不需要管理员权限**
+1. 双击 `Mural-Setup-x.x.x.exe`，**不需要管理员权限**
 2. 首次启动填智谱 API key（`open.bigmodel.cn` 免费申请）
 3. 首次运行的环境检查会直接告诉你：
    - 有没有找到 Wallpaper Engine
@@ -66,13 +66,31 @@
 
 ---
 
+## 可选：Steam Web API key（线上创意工坊）
+
+不填也能用：程序会在**你已经订阅/已经下载**的创意工坊项目里挑。
+填了之后，它还能通过 Steam 官方接口去创意工坊里找这几天的新图，
+候选池会大很多。
+
+1. 浏览器登录 Steam，打开 `https://steamcommunity.com/dev/apikey`
+   （国内直连打不开，先开 Watt Toolkit 的"商店/社区加速"，或用 Pigeon 走代理）
+2. 「域名」一栏填 `localhost`（只是注册用，不做验证），同意条款后点注册
+3. 复制那串 32 位字符
+4. 打开本程序 **设置页 → Steam Web API key**，粘贴，点「保存」
+   （key 存在 Windows 凭据管理器里，不写进任何配置文件，界面上也不再显示）
+
+> 这一步只认你登录 Steam 的那个账号，key 别外传。换机器或重装 Steam 后可以
+> 重新申请一个，旧的会自动失效。
+
+---
+
 ## 没自动识别怎么办
 
 打开程序的 **设置页 → 检测 Steam 环境**：
 
 - 显示“已找到 Wallpaper Engine” → 点 **保存** 写入配置
 - 仍然找不到 → 先在 Steam 里启动一次 Wallpaper Engine，再点一次检测
-- 还不行 → 手动编辑配置（`%LOCALAPPDATA%\DailyWallpaper\config.toml`）：
+- 还不行 → 手动编辑配置（`%LOCALAPPDATA%\Mural\config.toml`）：
 
 ```toml
 [wallpaper_engine]

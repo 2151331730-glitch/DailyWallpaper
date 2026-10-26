@@ -1,22 +1,28 @@
-; installer.iss -- DailyWallpaper installer
+; installer.iss -- Mural 每日壁纸 installer.
+; The packaged build answers to Mural, the source tree to DailyWallpaper: the
+; uninstaller deletes the Run value, the logon task (via --forget) and the
+; credential slots *by name*, so a shared name let an install+uninstall wipe the
+; source build's autostart and keys (see dailywallpaper/identity.py).
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
-#define MyAppName "每日壁纸"
-#define MyAppVersion "1.1.1"
+#define MyAppName "Mural 每日壁纸"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "郭欣哈"
-#define MyAppExeName "DailyWallpaper.exe"
+#define MyAppExeName "Mural.exe"
 
 [Setup]
 AppId={{8F3C9E2A-4B71-4C2D-9E55-1A2B3C4D5E6F}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\DailyWallpaper
+DefaultDirName={localappdata}\Programs\Mural
+; The folder follows the name; an upgrade must not land in the old one.
+UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=DailyWallpaper-Setup-{#MyAppVersion}
+OutputBaseFilename=Mural-Setup-{#MyAppVersion}
 SetupIconFile=packaging\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
@@ -41,11 +47,11 @@ Name: "darktaskbar"; Description: "将任务栏和搜索框改成深色（适配
 ; metadata is what `--version` and the about box read, and with two of them the
 ; old one won: an upgrade from 0.1.x to 1.0.1 still reported 0.1.0. The whole
 ; payload is rebuilt from source on every release, so clear it before copying.
-; User data lives in {localappdata}\DailyWallpaper and is untouched.
+; User data lives in {localappdata}\Mural and is untouched.
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
-Source: "dist\DailyWallpaper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\Mural\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "docs\STEAM_SETUP.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Icons]
@@ -75,7 +81,7 @@ begin
   if RegQueryDWordValue(HKCU,
        'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
        'SystemUsesLightTheme', original) then
-    RegWriteDWordValue(HKCU, 'Software\DailyWallpaper',
+    RegWriteDWordValue(HKCU, 'Software\Mural',
       'OrigSystemUsesLightTheme', original);
   { Both writes can be refused (the Search key is owned by SYSTEM on some
     machines). Inno raises on a refused RegWrite*, so each one is guarded:
@@ -119,7 +125,7 @@ begin
   { An upgrade should show the choice made last time, not quietly reset it. }
   Existing := '';
   if LoadStringFromFile(
-       ExpandConstant('{localappdata}\DailyWallpaper\install_prefs.json'),
+       ExpandConstant('{localappdata}\Mural\install_prefs.json'),
        Raw) then
     Existing := Raw;
   if Pos('"use_seed": false', Existing) > 0 then
@@ -159,12 +165,12 @@ begin
       cannot remove it cleanly. Stop it, then let the app delete the keys it
       stored in the Windows credential manager. }
     Exec(ExpandConstant('{sys}\taskkill.exe'),
-      '/F /IM DailyWallpaper.exe', '', SW_HIDE, ewWaitUntilTerminated,
+      '/F /IM Mural.exe', '', SW_HIDE, ewWaitUntilTerminated,
       ResultCode);
     Exec(ExpandConstant('{app}\{#MyAppExeName}'), '--forget', '',
       SW_HIDE, ewWaitUntilTerminated, ResultCode);
     { Put back the taskbar/theme choice the installer changed. }
-    if RegQueryDWordValue(HKCU, 'Software\DailyWallpaper',
+    if RegQueryDWordValue(HKCU, 'Software\Mural',
          'OrigSystemUsesLightTheme', original) then
     begin
       try
@@ -173,7 +179,7 @@ begin
           'SystemUsesLightTheme', original);
       except
       end;
-      RegDeleteValue(HKCU, 'Software\DailyWallpaper',
+      RegDeleteValue(HKCU, 'Software\Mural',
         'OrigSystemUsesLightTheme');
       SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0,
         SMTO_ABORTIFHUNG, 1000, ignored);
@@ -185,8 +191,8 @@ begin
       the Registry section, so Setup must remove it explicitly -- otherwise
       Windows keeps trying to start an executable that no longer exists. }
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
-      'DailyWallpaper');
-    DirName := ExpandConstant('{localappdata}\DailyWallpaper');
+      'Mural');
+    DirName := ExpandConstant('{localappdata}\Mural');
     if DirExists(DirName) and not WizardSilent then
     begin
       if MsgBox('是否同时删除配置、壁纸缓存和评分数据？' + #13#10 + DirName,
@@ -314,7 +320,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    DirName := ExpandConstant('{localappdata}\DailyWallpaper');
+    DirName := ExpandConstant('{localappdata}\Mural');
     ForceDirectories(DirName);
     WriteInstallPrefs(DirName);
     if WantDisableWe() then

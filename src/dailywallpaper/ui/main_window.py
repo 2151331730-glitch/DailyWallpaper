@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dailywallpaper import identity
 from dailywallpaper.cost.report import CostService
 from dailywallpaper.recommend.ratings import RatingsService, rating_text
 from dailywallpaper.resources import asset
@@ -67,7 +68,7 @@ class MainWindow(QWidget):
         self.conn = conn
         self.config = config
         self.review_model = review_model
-        self.setWindowTitle("每日壁纸")
+        self.setWindowTitle(identity.title())
         icon_path = asset("icon.png")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))

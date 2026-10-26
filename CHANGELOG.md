@@ -1,9 +1,20 @@
 # Changelog
 
-## 未发布 — 2026-10-26
+## 1.2.0 — 2026-10-26
 
 ### 变更
 
+- **安装版改名为 Mural，与源码版彻底分开**（`Mural 每日壁纸`）：两个版本原本共用
+  同一个开机启动项名、同一个登录计划任务名、同一个凭据槽和同一个数据目录，而
+  卸载程序是按**名字**删这些东西的——装一次再卸载，源码版的开机启动和 API key
+  跟着没了（2026-10-25 实际踩到）。现在：
+  源码版 `DailyWallpaper` / 安装版 `Mural`，四个身份各归各的；
+  安装版的数据在 `%LOCALAPPDATA%\Mural`，卸载时问"要不要删数据"也只碰它自己。
+  `dailywallpaper/identity.py` 是唯一来源，`sys.frozen` 决定当前进程是谁。
+  **已装的旧版请先卸载再装新版**（安装目录、AppName、exe 名都变了）；
+  升级不再沿用旧目录（`UsePreviousAppDir=no`）。
+- **设置页可以填 Steam Web API key 了**：识别安装版的用户没有 `scripts\` 目录，
+  之前填不了这个 key，线上创意工坊在安装版里等于不可用。
 - **视觉模型可以换厂商了，默认换成 DeepSeek flash**：新增 `[vision] provider`
   （`zhipu` / `deepseek`）和 `base_url`，评分和评语分类都走配置里的那一个。
   之前端点和模型名都写死在代码里（`ZhipuVision` 的 `BASE_URL`），换供应商要改代码。
@@ -13,8 +24,8 @@
   3000 左右，因为思考 token 计入 output，500 会把 JSON 从中间截断（`finish=length`）。
 - **界面文案跟着 provider 走**：首次运行、设置页、策展窗的 key 提示不再写死"智谱、
   open.bigmodel.cn"，会显示当前厂商和对应的申请地址。
-- **key 的凭据槽位保持 `DailyWallpaper` / `zhipu` 不变**：换厂商不需要重新粘 key 到
-  另一个格子，旧 key 也不会变孤儿。
+- **key 的凭据槽位名保持不变（源码版 `DailyWallpaper` / 安装版 `Mural`，账号名仍是
+  `zhipu`）**：换厂商不需要重新粘 key 到另一个格子，旧 key 也不会变孤儿。
 - 记账表的 `provider` 列改为取 provider 自报的名字，不再写死 `zhipu`。
 
 ### 修复

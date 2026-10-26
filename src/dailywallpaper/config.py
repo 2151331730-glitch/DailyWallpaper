@@ -10,6 +10,8 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
+from dailywallpaper import identity
+
 T = TypeVar("T")
 
 
@@ -168,15 +170,17 @@ def _section(cls: type[T], raw: dict[str, Any]) -> T:
 def user_data_dir() -> Path:
     """Where an installed copy keeps config, data and logs.
 
-    ``%LOCALAPPDATA%\\DailyWallpaper`` needs no admin rights, survives app
-    updates and is not wiped by uninstall.
+    ``%LOCALAPPDATA%\\<build name>`` needs no admin rights, survives app
+    updates and is not wiped by uninstall. It follows ``identity.name()`` so
+    the packaged build's "delete my data" prompt can never reach the source
+    tree's database -- which is where the ratings live.
     """
     override = os.environ.get("DAILYWALLPAPER_HOME")
     if override:
         return Path(override)
     base = os.environ.get("LOCALAPPDATA")
     if base:
-        return Path(base) / "DailyWallpaper"
+        return Path(base) / identity.name()
     return Path.home() / ".dailywallpaper"
 
 

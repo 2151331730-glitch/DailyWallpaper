@@ -15,6 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from dailywallpaper import identity
 from dailywallpaper.constants import DONATE_URL
 from dailywallpaper.resources import asset
 
@@ -88,7 +89,7 @@ class TrayIcon(QSystemTrayIcon):
                  wallpapers_dir=None):
         super().__init__(_icon(STATE_COLOURS["idle"]), parent)
         self.wallpapers_dir = wallpapers_dir
-        self.setToolTip(f"每日壁纸 · {STATE_LABELS['idle']}")
+        self.setToolTip(f"{identity.title()} · {STATE_LABELS['idle']}")
         self.service = service
         self.on_open = on_open
         self.on_quit = on_quit
@@ -208,7 +209,7 @@ class TrayIcon(QSystemTrayIcon):
     def set_state(self, kind: str) -> None:
         kind = kind if kind in STATE_COLOURS else "idle"
         self.setIcon(_icon(STATE_COLOURS[kind]))
-        self.setToolTip(f"每日壁纸 · {STATE_LABELS[kind]}")
+        self.setToolTip(f"{identity.title()} · {STATE_LABELS[kind]}")
 
     def notify(self, title: str, message: str) -> None:
         self.showMessage(

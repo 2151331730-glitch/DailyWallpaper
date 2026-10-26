@@ -191,18 +191,24 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 
 ## 安装（Windows，推荐）
 
-1. 下载 [DailyWallpaper-Setup-1.1.1.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
-2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\DailyWallpaper`
+1. 下载 [Mural-Setup-1.2.0.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
+2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\Mural`
    - 安装时可选「将任务栏和搜索框改成深色」，适配深色壁纸（只改当前用户，可随时改回）
 3. 首次启动会要求填写视觉模型的 API key：默认智谱（open.bigmodel.cn → API Keys），
    也支持 DeepSeek（`[vision] provider = "deepseek"`，model `deepseek-flash`）
 4. 安装时会问一次「是否使用作者的默认审美筛选」，可以选不使用
+5. 可选：想让程序自己去创意工坊找新图，在设置页填 Steam Web API key
+   （免费，`steamcommunity.com/dev/apikey`；做法见《Steam 壁纸设置》第五步）
 
 **想用 Steam 的 Wallpaper Engine 壁纸**：安装前先在自己电脑上装好 Steam 和
 Wallpaper Engine（付费软件，需自行购买），程序启动时会自动找到它。国内打开
 Steam 商店/创意工坊需要的设置，见安装目录下的《Steam 壁纸设置》（`docs/STEAM_SETUP.md`）。
 
-卸载：设置 → 应用 → 每日壁纸 → 卸载。卸载不会删除 `%LOCALAPPDATA%\DailyWallpaper` 里的配置和数据。
+卸载：设置 → 应用 → **Mural 每日壁纸** → 卸载。卸载不会删除 `%LOCALAPPDATA%\Mural` 里的配置和数据。
+
+> 安装版在系统里叫 **Mural**（程序名、目录、开机启动项、凭据槽都是这个名字），源码版仍叫
+> `DailyWallpaper`。两者刻意用不同的名字：卸载程序是按名字删开机启动项和 key 的，同名会让
+> 你装一次再卸载，把源码版的自启和 key 一起删掉。
 
 > 安装包没有代码签名，Windows 可能提示「未知发布者」，点「仍要运行」即可。
 

@@ -5,6 +5,7 @@ import re
 import time
 from pathlib import Path
 
+from dailywallpaper import identity
 from dailywallpaper.cost.ledger import (
     AnalysisRecord,
     actual_cost,
@@ -14,7 +15,9 @@ from dailywallpaper.db import now_iso
 
 from .prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
-KEYRING_SERVICE = "DailyWallpaper"
+# One slot per build: the uninstaller deletes the whole service in one call, so
+# a shared slot took the source tree's key with the packaged build's.
+KEYRING_SERVICE = identity.name()
 # The slot predates the provider knob (`[vision] provider`): it is where the
 # vision key lives, whatever vendor the config points at. Renaming it would
 # orphan every key already pasted in.

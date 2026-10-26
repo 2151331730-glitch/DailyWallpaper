@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer
 
+from dailywallpaper import identity
 from dailywallpaper.ui.main_window import MainWindow
 from dailywallpaper.ui.tray import TrayIcon
 
@@ -116,7 +117,7 @@ class UiShell:
             self.tray.set_state("changed")
             if self._notified_for != today:
                 self._notified_for = today
-                self.tray.notify("每日壁纸", "今日壁纸已更新")
+                self.tray.notify(identity.title(), "今日壁纸已更新")
         else:
             self.tray.set_state("idle")
 
