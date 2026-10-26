@@ -29,12 +29,21 @@ wallhaven_pages = 6
 proxy = ""
 
 [vision]
+# zhipu (glm) or deepseek. The key lives in the credential manager under
+# DailyWallpaper / zhipu whatever this says -- the slot predates the knob.
 provider = "zhipu"
+# Empty = the provider's own endpoint (see PROVIDER_BASE_URLS in vision.py).
+# Set it only to point at a proxy or another OpenAI-compatible endpoint.
+base_url = ""
 screen_model = "glm-4.6v-flash"
 review_model = "glm-4.6v"
 review_top_n = 5
 prompt_version = "v1"
+# Thinking models reason before answering: better-argued scores, ~4x the
+# latency, and the reasoning is billed as output tokens -- raise this to
+# ~3000 before turning thinking on, or the JSON gets cut off mid-string.
 max_output_tokens = 500
+thinking = false
 temperature = 0.2
 
 [vision.pricing."glm-4.6v"]
@@ -44,6 +53,11 @@ output_cny_per_million = 3.0
 [vision.pricing."glm-4.6v-flash"]
 input_cny_per_million = 0.0
 output_cny_per_million = 0.0
+
+# DeepSeek peak rates (weekdays 09-12 / 14-18 Beijing); off-peak is half.
+[vision.pricing."deepseek-flash"]
+input_cny_per_million = 2.0
+output_cny_per_million = 8.0
 
 [budget]
 monthly_cny = 10.0

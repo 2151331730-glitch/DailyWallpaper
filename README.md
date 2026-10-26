@@ -138,7 +138,7 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 
 ### 「补充一句」会做什么
 
-评分框里的「补充一句」会被发送给你配置的智谱模型做一次分类（每句一次调用），
+评分框里的「补充一句」会被发送给你配置的视觉模型做一次分类（每句一次调用），
 判断它是「对这张图的评价」「长期偏好」还是「搜索意图」。分类结果只保存在本机
 数据库，可以在「今日」页撤销。**只有这句话会发送，不上传图片或本地文件。**
 
@@ -194,7 +194,8 @@ Windows 本地 AI 自动壁纸应用。每天从 **Bing / Wallhaven / 本地 Wal
 1. 下载 [DailyWallpaper-Setup-1.1.1.exe](https://github.com/2151331730-glitch/DailyWallpaper/releases/latest)（约 86 MB）
 2. 双击安装，**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\Programs\DailyWallpaper`
    - 安装时可选「将任务栏和搜索框改成深色」，适配深色壁纸（只改当前用户，可随时改回）
-3. 首次启动会要求填写智谱 API key（免费注册：open.bigmodel.cn → API Keys）
+3. 首次启动会要求填写视觉模型的 API key：默认智谱（open.bigmodel.cn → API Keys），
+   也支持 DeepSeek（`[vision] provider = "deepseek"`，model `deepseek-flash`）
 4. 安装时会问一次「是否使用作者的默认审美筛选」，可以选不使用
 
 **想用 Steam 的 Wallpaper Engine 壁纸**：安装前先在自己电脑上装好 Steam 和

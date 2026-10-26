@@ -58,6 +58,21 @@ def test_missing_root_returns_empty(tmp_path):
     assert WorkshopSource(tmp_path / "nope").scan() == []
 
 
+def test_packed_scene_points_at_project_json(tmp_path):
+    """WE 2.x packs scenes into scene.pkg while project.json says scene.json.
+
+    The declared asset does not exist; the candidate must still carry a path
+    the applier can hand to WE, or the materialiser drops it as "not a local
+    file, not a URL" and the day's shortlist silently ends up empty.
+    """
+    folder = _project(tmp_path, "111", file="scene.json")
+    (folder / "scene.pkg").write_bytes(b"x")
+
+    items = WorkshopSource(tmp_path).scan()
+
+    assert items[0].file_url.endswith("project.json")
+
+
 def test_fetch_is_the_pipeline_interface(tmp_path):
     _project(tmp_path, "111")
 

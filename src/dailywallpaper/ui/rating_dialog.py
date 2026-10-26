@@ -29,17 +29,24 @@ class _IntentWorker(QObject):
 
     done = Signal(object)
 
-    def __init__(self, text: str, api_key: str, budget=None):
+    def __init__(self, text: str, api_key: str, budget=None,
+                 base_url: str = "", provider: str = "", model: str = ""):
         super().__init__()
         self.text = text
         self.api_key = api_key
         self.budget = budget
+        self.base_url = base_url
+        self.provider = provider
+        self.model = model
 
     def run(self) -> None:
-        from dailywallpaper.recommend.intents import classify_note
+        from dailywallpaper.recommend.intents import DEFAULT_MODEL, classify_note
 
         self.done.emit(
-            classify_note(self.text, self.api_key, budget=self.budget)
+            classify_note(self.text, self.api_key,
+                          model=self.model or DEFAULT_MODEL,
+                          budget=self.budget,
+                          base_url=self.base_url, provider=self.provider)
         )
 
 
@@ -65,9 +72,13 @@ class RatingDialog(QDialog):
     click made that impossible.
     """
 
-    def __init__(self, service, wallpaper_id, parent=None, budget=None):
+    def __init__(self, service, wallpaper_id, parent=None, budget=None,
+                 vision=None):
         super().__init__(parent)
         self.service = service
+        # Which endpoint the note classifier talks to; the pipeline's own
+        # provider settings, so the two never disagree.
+        self.vision = vision
         # The comment classifier is a paid model call; it must count against
         # the monthly cap like every other one.
         self.budget = budget
@@ -224,7 +235,13 @@ class RatingDialog(QDialog):
             # Do not mark it classified: a key added later should still work.
             return
         self._last_classified = text
-        worker = _IntentWorker(text, api_key, budget=self.budget)
+        vision = self.vision
+        worker = _IntentWorker(
+            text, api_key, budget=self.budget,
+            base_url=getattr(vision, "base_url", "") or "",
+            provider=getattr(vision, "provider", "") or "",
+            model=getattr(vision, "screen_model", "") or "",
+        )
         worker.done.connect(self._on_intent)
         # Keep a reference: a worker that goes out of scope cancels nothing,
         # but the signal must still have a live receiver.

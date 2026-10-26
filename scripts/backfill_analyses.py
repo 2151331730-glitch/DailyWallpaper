@@ -39,7 +39,7 @@ from dailywallpaper.analysis.vision import (  # noqa: E402
     KEYRING_ACCOUNT,
     KEYRING_SERVICE,
     VisionClient,
-    ZhipuVision,
+    provider_from_config,
 )
 from dailywallpaper.config import load_config  # noqa: E402
 from dailywallpaper.constants import ESTIMATE_CNY, VIDEO_SUFFIXES  # noqa: E402
@@ -121,13 +121,9 @@ def _prepare(row, source_dir: Path, session, ffmpeg: str):
 def _client(conn, cfg):
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
-        raise SystemExit("凭据管理器里没有智谱 key：先跑 scripts\\set_key_gui.py")
+        raise SystemExit("凭据管理器里没有模型 key：先跑 scripts\\set_key_gui.py")
     return VisionClient(
-        provider=ZhipuVision(
-            api_key,
-            max_output_tokens=cfg.vision.max_output_tokens,
-            temperature=cfg.vision.temperature,
-        ),
+        provider=provider_from_config(cfg, api_key),
         conn=conn,
         pricing=cfg.vision.pricing,
         budget=BudgetGuard(

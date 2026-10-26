@@ -12,7 +12,8 @@ from pathlib import Path
 
 from openai import RateLimitError
 
-from dailywallpaper.analysis.vision import ZhipuVision
+from dailywallpaper.analysis.vision import provider_from_config
+from dailywallpaper.config import load_config
 
 BACKOFF_SECONDS = [30, 60, 120, 180]
 
@@ -20,7 +21,9 @@ BACKOFF_SECONDS = [30, 60, 120, 180]
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
-    parser.add_argument("--model", default="glm-4.6v-flash")
+    parser.add_argument("--config", type=Path, default=Path("config.toml"))
+    parser.add_argument("--model", default="",
+                        help="默认用 config.toml 里的 screen_model")
     args = parser.parse_args()
 
     import keyring
@@ -29,10 +32,12 @@ def main() -> int:
     if not key:
         raise SystemExit("no key; run scripts/set_key.py first")
 
-    provider = ZhipuVision(key)
+    cfg = load_config(args.config)
+    provider = provider_from_config(cfg, key)
+    model = args.model or cfg.vision.screen_model
     for attempt in range(1, len(BACKOFF_SECONDS) + 2):
         try:
-            result = provider.analyze(args.image, args.model)
+            result = provider.analyze(args.image, model)
             break
         except RateLimitError as exc:
             if attempt > len(BACKOFF_SECONDS):
@@ -47,7 +52,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "model": args.model,
+                "model": model,
                 "scores": result.scores.__dict__,
                 "tokens_in": result.tokens_in,
                 "tokens_out": result.tokens_out,

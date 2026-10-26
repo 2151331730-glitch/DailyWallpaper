@@ -13,8 +13,9 @@ from dailywallpaper.analysis.scoring import rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
     KEYRING_SERVICE,
+    OpenAIVision,
     VisionClient,
-    ZhipuVision,
+    resolve_base_url,
 )
 from dailywallpaper.pipeline.evaluate import EvaluateMixin
 from dailywallpaper.pipeline.fetch import FetchMixin
@@ -591,15 +592,20 @@ def build_pipeline(cfg, conn):
             ))
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
-        raise RuntimeError("Zhipu key missing; run scripts/set_key.py")
+        raise RuntimeError(
+            f"{cfg.vision.provider} key missing; run scripts/set_key.py"
+        )
     budget = BudgetGuard(
         conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, SystemClock()
     )
     vision = VisionClient(
-        provider=ZhipuVision(
+        provider=OpenAIVision(
             api_key,
             max_output_tokens=cfg.vision.max_output_tokens,
             temperature=cfg.vision.temperature,
+            base_url=resolve_base_url(cfg.vision.provider, cfg.vision.base_url),
+            thinking=cfg.vision.thinking,
+            provider_name=cfg.vision.provider,
         ),
         conn=conn,
         pricing=cfg.vision.pricing,

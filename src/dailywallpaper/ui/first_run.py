@@ -141,11 +141,15 @@ def ensure_first_run(cfg) -> bool:
     import keyring
 
     if not keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT):
+        from dailywallpaper.analysis.vision import provider_key_hint, provider_label
+
+        provider = getattr(getattr(cfg, "vision", None), "provider", "")
+        vendor = provider_label(provider)
         key, ok = QInputDialog.getText(
             None,
             "每日壁纸 · 首次设置",
-            "需要一个智谱 API key 才能给壁纸打分。\n\n"
-            "免费申请：open.bigmodel.cn → API Keys\n"
+            f"需要一个 {vendor} API key 才能给壁纸打分。\n\n"
+            f"申请：{provider_key_hint(provider)}\n"
             "（key 只保存在 Windows 凭据管理器，不写入任何文件）",
             QLineEdit.EchoMode.Password,
         )
@@ -156,7 +160,7 @@ def ensure_first_run(cfg) -> bool:
             None,
             "每日壁纸 · 提示",
             "key 已保存。若之后出现“没有候选通过筛选”，"
-            "多半是 key 无效或余额不足：到「设置 → 智谱 API key」"
+            f"多半是 key 无效或余额不足：到「设置 → {vendor} API key」"
             "粘贴 key 后点“测试 key”就能确认。",
         )
 

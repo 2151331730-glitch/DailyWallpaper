@@ -1,19 +1,26 @@
-"""Temporary diagnostic: print the raw Zhipu vision response (never the key)."""
+"""Temporary diagnostic: print the raw vision response (never the key)."""
 
 import base64
 import time
+from pathlib import Path
 
 import keyring
 from openai import OpenAI, RateLimitError
 
 from dailywallpaper.analysis.prompts import SYSTEM_PROMPT
+from dailywallpaper.analysis.vision import resolve_base_url
+from dailywallpaper.config import load_config
 
 PATH = r"D:\games\steam\steamapps\workshop\content\431960\1132505365\preview.jpg"
 
 
 def main() -> int:
+    cfg = load_config(Path("config.toml"))
     key = keyring.get_password("DailyWallpaper", "zhipu")
-    client = OpenAI(api_key=key, base_url="https://open.bigmodel.cn/api/paas/v4")
+    client = OpenAI(
+        api_key=key,
+        base_url=resolve_base_url(cfg.vision.provider, cfg.vision.base_url),
+    )
     with open(PATH, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
 
@@ -21,11 +28,12 @@ def main() -> int:
     for attempt in range(1, 4):
         try:
             resp = client.chat.completions.create(
-                model="glm-4.6v-flash",
+                model=cfg.vision.screen_model,
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=cfg.vision.max_output_tokens,
                 response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body=None if cfg.vision.thinking else
+                {"thinking": {"type": "disabled"}},
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {

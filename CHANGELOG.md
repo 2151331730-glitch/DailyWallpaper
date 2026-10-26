@@ -1,5 +1,37 @@
 # Changelog
 
+## 未发布 — 2026-10-26
+
+### 变更
+
+- **视觉模型可以换厂商了，默认换成 DeepSeek flash**：新增 `[vision] provider`
+  （`zhipu` / `deepseek`）和 `base_url`，评分和评语分类都走配置里的那一个。
+  之前端点和模型名都写死在代码里（`ZhipuVision` 的 `BASE_URL`），换供应商要改代码。
+  现在 `provider = "deepseek"` + `screen_model = "deepseek-flash"` 即可，一屏评分
+  约 2.4 秒、¥0.0035，和 glm 差不多价。
+- **新增 `[vision] thinking` 开关**：默认关。开之前要把 `max_output_tokens` 提到
+  3000 左右，因为思考 token 计入 output，500 会把 JSON 从中间截断（`finish=length`）。
+- **界面文案跟着 provider 走**：首次运行、设置页、策展窗的 key 提示不再写死"智谱、
+  open.bigmodel.cn"，会显示当前厂商和对应的申请地址。
+- **key 的凭据槽位保持 `DailyWallpaper` / `zhipu` 不变**：换厂商不需要重新粘 key 到
+  另一个格子，旧 key 也不会变孤儿。
+- 记账表的 `provider` 列改为取 provider 自报的名字，不再写死 `zhipu`。
+
+### 修复
+
+- **一整天都不换壁纸，日志里却写着"有 2 个候选过线"**（2026-10-26 实测）：
+  Wallpaper Engine 2.x 把场景打包成 `scene.pkg`，而 `project.json` 里的 `file`
+  还写着 `scene.json`——那个文件根本不存在。本地创意工坊源照抄这个声明当
+  `file_url`，于是 `apply_path_for()` 判定"不是本地文件"，材料化阶段又发现
+  "不是本地文件也不是 URL"，两个候选被**静默丢弃**，`shortlist` 清空，
+  `pick()` 永远返回"候选队列已用完"。桌面因此一整天不动，而日志只有两条
+  INFO，看不出任何失败。
+  修法：声明里的资源文件不存在时，退回同一目录的 `project.json`——WE 的
+  `openWallpaper` 接受工程文件并自己解析到同目录的 `scene.pkg`，Steam 下载源
+  一直就是这么写的（`data\steam_workshop\<id>\project.json`），今天成功换上的
+  128 号就是证明。
+  顺带：材料化阶段每次丢候选都留一行日志（丢弃原因 + 路径），不再静默。
+
 ## 1.1.1 — 2026-10-25
 
 ### 修复

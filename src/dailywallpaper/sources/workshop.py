@@ -62,6 +62,16 @@ class WorkshopSource:
         if not asset:
             return None
         asset_path = folder / asset
+        if not asset_path.is_file():
+            # Wallpaper Engine 2.x ships scenes packed as ``scene.pkg`` while
+            # ``project.json`` still names ``scene.json``; the declared asset
+            # simply is not there. WE's ``openWallpaper`` accepts the project
+            # file and resolves it to the sibling package, which is how the
+            # Steam-downloaded source names its items too. Without this the
+            # candidate is scored from its preview and then dropped by the
+            # materializer as "not a local file, not a URL", so a day whose
+            # shortlist is packed scenes changes nothing at all.
+            asset_path = folder / "project.json"
 
         return Candidate(
             source="we_workshop",

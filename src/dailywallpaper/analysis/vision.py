@@ -15,8 +15,73 @@ from dailywallpaper.db import now_iso
 from .prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
 KEYRING_SERVICE = "DailyWallpaper"
+# The slot predates the provider knob (`[vision] provider`): it is where the
+# vision key lives, whatever vendor the config points at. Renaming it would
+# orphan every key already pasted in.
 KEYRING_ACCOUNT = "zhipu"
+
+# OpenAI-compatible chat endpoints that accept image_url content. A config
+# `base_url` wins; this is only what an empty one means.
+PROVIDER_BASE_URLS = {
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "deepseek": "https://api.deepseek.com/v1",
+}
+DEFAULT_PROVIDER = "zhipu"
+
+# What the UI calls each vendor, and where a user goes to get a key. A key
+# prompt that still said "智谱" while the config pointed at DeepSeek sent the
+# user to the wrong website.
+PROVIDER_LABELS = {
+    "zhipu": "智谱",
+    "deepseek": "DeepSeek",
+}
+PROVIDER_KEY_HINTS = {
+    "zhipu": "open.bigmodel.cn → API Keys",
+    "deepseek": "platform.deepseek.com → API keys",
+}
+
 RETRY_INSTRUCTION = "Return valid JSON only; style_tags must have at least one item."
+
+
+def provider_label(provider: str = "") -> str:
+    """The vendor's display name for the provider a config names."""
+    name = (provider or DEFAULT_PROVIDER).strip().lower()
+    return PROVIDER_LABELS.get(name, name or DEFAULT_PROVIDER)
+
+
+def provider_key_hint(provider: str = "") -> str:
+    """Where to apply for the provider's key."""
+    name = (provider or DEFAULT_PROVIDER).strip().lower()
+    return PROVIDER_KEY_HINTS.get(name, f"{provider_label(provider)} 官网 → API keys")
+
+
+def resolve_base_url(provider: str = "", base_url: str = "") -> str:
+    """The endpoint for a config, whatever half of it is filled in."""
+    if base_url:
+        return base_url
+    return PROVIDER_BASE_URLS.get(
+        (provider or DEFAULT_PROVIDER).strip().lower(),
+        PROVIDER_BASE_URLS[DEFAULT_PROVIDER],
+    )
+
+
+def provider_from_config(cfg, api_key: str, **overrides) -> "OpenAIVision":
+    """An OpenAIVision wired from ``[vision]``.
+
+    The scripts used to build ``ZhipuVision(...)`` by hand, which quietly kept
+    calling bigmodel no matter what the config said.
+    """
+    section = cfg.vision
+    return OpenAIVision(
+        api_key,
+        max_output_tokens=overrides.get(
+            "max_output_tokens", section.max_output_tokens
+        ),
+        temperature=overrides.get("temperature", section.temperature),
+        base_url=resolve_base_url(section.provider, section.base_url),
+        thinking=getattr(section, "thinking", False),
+        provider_name=section.provider,
+    )
 
 
 def save_key(key: str) -> None:
@@ -162,18 +227,30 @@ def validate_scores(payload: dict) -> VisionScores:
     )
 
 
-class ZhipuVision:
-    BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+class OpenAIVision:
+    """An OpenAI-compatible endpoint that reads an image and returns JSON.
+
+    Zhipu's GLM-vision and DeepSeek's flash both speak this dialect; only the
+    base URL, the model name and whether the model is allowed to reason
+    differ, so those are constructor arguments rather than hard-coded.
+    """
+
+    BASE_URL = PROVIDER_BASE_URLS[DEFAULT_PROVIDER]
     # Class-level defaults keep hand-built instances (tests use __new__)
     # working; __init__ overrides them from the config.
     temperature = 0.2
     max_output_tokens = 500
+    thinking = False
     def __init__(self, api_key: str, max_output_tokens: int = 500,
-                 temperature: float = 0.2):
+                 temperature: float = 0.2, base_url: str = "",
+                 thinking: bool = False, provider_name: str = ""):
         # The config owns these; hard-coding them made the settings page's
         # values silently unused.
         self.max_output_tokens = int(max_output_tokens)
         self.temperature = float(temperature)
+        self.thinking = bool(thinking)
+        # Only used to label rows in the usage ledger.
+        self.provider_name = provider_name or DEFAULT_PROVIDER
         # openai 3.x ships with httpx2 (the vendored successor of httpx).
         try:
             import httpx2 as httpx
@@ -181,17 +258,18 @@ class ZhipuVision:
             import httpx  # type: ignore[no-redef]
         from openai import OpenAI
 
-        # This endpoint is domestic, so it is always reached directly. The
-        # system proxy is Pigeon's business: when it points at a local port
-        # that nothing listens on (7892 with the client disconnected), every
-        # model call dies with "Connection error" while the site itself is up.
+        # Both endpoints are domestic, so they are always reached directly.
+        # The system proxy is Pigeon's business: when it points at a local
+        # port that nothing listens on (7892 with the client disconnected),
+        # every model call dies with "Connection error" while the site itself
+        # is up.
         http_client = httpx.Client(trust_env=False, timeout=60.0)
         # A 429 here means the model is overloaded, not that this request was
         # unlucky: the library's two retries just tripled the wait, and the
         # pipeline already skips a failed candidate and moves on.
         self.client = OpenAI(
             api_key=api_key,
-            base_url=self.BASE_URL,
+            base_url=base_url or self.BASE_URL,
             max_retries=0,
             http_client=http_client,
             # The SDK's own default is 600 s and it wins over the http_client
@@ -216,8 +294,10 @@ class ZhipuVision:
             response_format={"type": "json_object"},
             # glm-4.6v-flash spends the whole output budget on reasoning by
             # default (finish_reason=length, empty content). Disabling it
-            # leaves the budget for the JSON answer.
-            extra_body={"thinking": {"type": "disabled"}},
+            # leaves the budget for the JSON answer. DeepSeek accepts the same
+            # switch; with `thinking` on the parameter is left out and the
+            # model reasons first, which needs a much larger output budget.
+            extra_body=None if self.thinking else {"thinking": {"type": "disabled"}},
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [
@@ -256,6 +336,11 @@ class ZhipuVision:
         )
 
 
+# The pre-rename name: scripts and tests still import it. Same class, one
+# implementation -- keeping the alias stops the provider switch from turning
+# into a rename of every call site.
+ZhipuVision = OpenAIVision
+
 CACHE_HIT_PURPOSE = "screen"
 ESTIMATE_CNY = 0.003
 
@@ -274,12 +359,17 @@ class VisionClient:
         self.pricing = pricing
         self.budget = budget
         self.max_output_tokens = max_output_tokens
+        # The usage ledger labels rows by vendor; the provider knows its own
+        # name, and a hand-built test double without one keeps the old label.
+        self.provider_name = str(
+            getattr(provider, "provider_name", "") or DEFAULT_PROVIDER
+        )
 
     def _prewrite(self, model: str):
         if not self.budget:
             return None
         return self.budget.prewrite_estimate(
-            provider="zhipu",
+            provider=self.provider_name,
             model=model,
             purpose=CACHE_HIT_PURPOSE,
             estimate=ESTIMATE_CNY,
@@ -303,7 +393,7 @@ class VisionClient:
         else:
             record_usage(
                 self.conn,
-                provider="zhipu",
+                provider=self.provider_name,
                 model=model,
                 purpose=CACHE_HIT_PURPOSE,
                 tokens_in=tokens_in,
@@ -341,7 +431,7 @@ class VisionClient:
         self.conn.commit()
         record_usage(
             self.conn,
-            provider="zhipu",
+            provider=self.provider_name,
             model=model,
             purpose=CACHE_HIT_PURPOSE,
             tokens_in=0,
@@ -426,7 +516,7 @@ class VisionClient:
         else:
             record_usage(
                 self.conn,
-                provider="zhipu",
+                provider=self.provider_name,
                 model=model,
                 purpose=CACHE_HIT_PURPOSE,
                 tokens_in=result.tokens_in,

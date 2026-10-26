@@ -197,7 +197,8 @@ class MainWindow(QWidget):
             except Exception:
                 budget = None
         RatingDialog(
-            self.rating_service, wallpaper_id, self, budget=budget
+            self.rating_service, wallpaper_id, self, budget=budget,
+            vision=getattr(self.config, "vision", None),
         ).exec()
         self.history.refresh()
         self.refresh()

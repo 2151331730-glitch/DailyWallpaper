@@ -67,6 +67,8 @@ class UiShell:
             wallpaper_id,
             self.window,
             budget=self._classify_budget(),
+            vision=getattr(self.service, "full_config", None)
+            and self.service.full_config.vision,
         ).exec()
         self.window.refresh()
         if self.window.tabs.currentWidget() is self.window.history:

@@ -41,7 +41,7 @@ from dailywallpaper.analysis.vision import (  # noqa: E402
     KEYRING_ACCOUNT,
     KEYRING_SERVICE,
     VisionClient,
-    ZhipuVision,
+    provider_from_config,
 )
 from dailywallpaper.config import load_config  # noqa: E402
 from dailywallpaper.cost.budget import BudgetGuard  # noqa: E402
@@ -125,16 +125,12 @@ def ensure_wallpaper(conn, item, thumb: Path) -> int:
 def analyze(conn, cfg, batch_dir: Path | None = None) -> int:
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
-        print("凭据管理器里没有智谱 key，先跑 scripts/set_key.py")
+        print("凭据管理器里没有模型 key，先跑 scripts/set_key.py")
         return 1
     clock = SystemClock()
     budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
     client = VisionClient(
-        provider=ZhipuVision(
-            api_key,
-            max_output_tokens=cfg.vision.max_output_tokens,
-            temperature=cfg.vision.temperature,
-        ),
+        provider=provider_from_config(cfg, api_key),
         conn=conn,
         pricing=cfg.vision.pricing,
         budget=budget,

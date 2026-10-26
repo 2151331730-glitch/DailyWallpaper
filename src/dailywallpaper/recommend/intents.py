@@ -55,7 +55,8 @@ Rules:
 
 
 def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
-                  client=None, budget=None) -> dict | None:
+                  client=None, budget=None, base_url: str = "",
+                  provider: str = "") -> dict | None:
     """Return a validated intent dict, or None when the model cannot decide.
 
     ``client`` is injectable so tests can exercise the parse path without a
@@ -70,7 +71,7 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
     if budget is not None:
         try:
             usage_id = budget.prewrite_estimate(
-                provider="zhipu", model=model, purpose="classify",
+                provider=provider or "zhipu", model=model, purpose="classify",
                 estimate=CLASSIFY_ESTIMATE_CNY,
             )
         except Exception:
@@ -84,9 +85,11 @@ def classify_note(text: str, api_key: str, model: str = DEFAULT_MODEL,
         except ImportError:  # older openai
             import httpx  # type: ignore[no-redef]
 
+        from dailywallpaper.analysis.vision import resolve_base_url
+
         client = OpenAI(
             api_key=api_key,
-            base_url="https://open.bigmodel.cn/api/paas/v4",
+            base_url=resolve_base_url(provider, base_url),
             max_retries=0,
             http_client=httpx.Client(trust_env=False, timeout=30.0),
             timeout=30.0,  # the SDK default (600 s) would outlast the dialog

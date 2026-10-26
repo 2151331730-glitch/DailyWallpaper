@@ -58,6 +58,7 @@ class MaterializeMixin:
         """
         kept = []
         made = 0
+        before = len(self.shortlist)
         for index, decision in enumerate(self.shortlist):
             # A click waiting behind this pass should not sit through three
             # 40 MB downloads; whatever is left stays for pick() to fetch if a
@@ -76,15 +77,24 @@ class MaterializeMixin:
                 continue
             if self._rejected_recently(decision.wallpaper_id):
                 # Already known bad: do not pay 40 MB to learn it again.
+                logger.info(f"materialize: {decision.wallpaper_id} rejected recently")
                 continue
             row = self.conn.execute(
                 "select file_url from wallpapers where id=?", (decision.wallpaper_id,)
             ).fetchone()
             url = str(row[0]) if row else ""
             if not url.startswith(("http://", "https://")):
+                # Only a local project reaches here with a non-URL asset, and
+                # that one is applicable as-is: the workshop source names its
+                # project.json. Anything else has no file to put on screen.
+                logger.info(
+                    f"materialize: {decision.wallpaper_id} dropped:"
+                    f" no local asset and no http url ({url!r})"
+                )
                 continue
             host = urlparse(url).netloc
             if self._host_failed(host):
+                logger.info(f"materialize: {decision.wallpaper_id} host failed: {host}")
                 continue
             try:
                 raw = data_dir / "downloads" / f"{decision.wallpaper_id}.img"
@@ -119,6 +129,7 @@ class MaterializeMixin:
                     f"full image for {decision.wallpaper_id} failed: {exc}"
                 )
         self.shortlist = kept
+        logger.info(f"materialize: kept {len(kept)} of {before}")
 
     def _materialize_one(self, decision):
         """Fetch the full image for the candidate a click is about to apply.

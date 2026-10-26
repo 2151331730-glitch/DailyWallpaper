@@ -81,18 +81,23 @@ def _analyze_one(args) -> bool:
     "SQLite objects created in a thread can only be used in that same thread".
     """
     from dailywallpaper.analysis.images import canonicalize
-    from dailywallpaper.analysis.vision import VisionClient, ZhipuVision
+    from dailywallpaper.analysis.vision import OpenAIVision, VisionClient
     from dailywallpaper.cost.budget import BudgetGuard
     from dailywallpaper.db import connect
     from dailywallpaper.state.machine import SystemClock
 
     (wallpaper_id, thumb_path, model, data_dir, api_key, pricing,
-     monthly_cny, warn_ratio) = args
+     monthly_cny, warn_ratio, base_url, provider, thinking) = args
     conn = connect(data_dir / "app.db")
     try:
         budget = BudgetGuard(conn, monthly_cny, warn_ratio, SystemClock())
         vision = VisionClient(
-            provider=ZhipuVision(api_key),
+            provider=OpenAIVision(
+                api_key,
+                base_url=base_url,
+                thinking=thinking,
+                provider_name=provider,
+            ),
             conn=conn,
             pricing=pricing,
             budget=budget,
@@ -119,6 +124,8 @@ def analyze_rated(conn, model: str, thumbs: dict, cfg, api_key: str,
     Each rating bucket contributes at most ``max_per_rating`` pictures, and
     the calls run a few at a time -- serial calls took ~8 s each.
     """
+    from dailywallpaper.analysis.vision import resolve_base_url
+
     rows = conn.execute(
         """
         select wallpaper_id, source_id, rating from (
@@ -150,6 +157,9 @@ def analyze_rated(conn, model: str, thumbs: dict, cfg, api_key: str,
                 cfg.vision.pricing,
                 cfg.budget.monthly_cny,
                 cfg.budget.warn_ratio,
+                resolve_base_url(cfg.vision.provider, cfg.vision.base_url),
+                cfg.vision.provider,
+                cfg.vision.thinking,
             ))
     total = len(jobs)
     if not total:

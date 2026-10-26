@@ -21,7 +21,6 @@ from dailywallpaper.config import save_config
 
 logger = logging.getLogger(__name__)
 
-
 def _valid_time(text: str) -> bool:
     try:
         time.fromisoformat(text.strip())
@@ -55,7 +54,7 @@ class SettingsPage(QWidget):
         self.api_key_edit.setPlaceholderText(
             "已保存的 key 不会显示；留空表示不修改"
             if self._has_api_key()
-            else "粘贴智谱 API key（open.bigmodel.cn）"
+            else f"粘贴{self._provider_label()} API key（{self._key_hint()}）"
         )
         self.api_key_test_button = QPushButton("测试 key")
         self.api_key_test_button.clicked.connect(self.test_api_key)
@@ -85,7 +84,7 @@ class SettingsPage(QWidget):
         form.addRow("月度预算 (¥)", self.budget_edit)
         form.addRow("代理（可选）", self.proxy_edit)
         form.addRow("", self.proxy_test_button)
-        form.addRow("智谱 API key", self.api_key_edit)
+        form.addRow(f"{self._provider_label()} API key", self.api_key_edit)
         form.addRow("", self.api_key_test_button)
         form.addRow(self.wallhaven_check)
         form.addRow(self.bing_check)
@@ -164,6 +163,16 @@ class SettingsPage(QWidget):
         else:
             self.steam_status.setText(prefix + "商店和社区都能打开。")
 
+    def _provider_label(self) -> str:
+        from dailywallpaper.analysis.vision import provider_label
+
+        return provider_label(getattr(self.config.vision, "provider", ""))
+
+    def _key_hint(self) -> str:
+        from dailywallpaper.analysis.vision import provider_key_hint
+
+        return provider_key_hint(getattr(self.config.vision, "provider", ""))
+
     def _has_api_key(self) -> bool:
         try:
             import keyring
@@ -196,14 +205,21 @@ class SettingsPage(QWidget):
             self.status.setText(
                 "已保存过 key（输入新 key 可替换）；测试请先粘贴一个 key"
                 if self._has_api_key()
-                else "还没有 key：去 open.bigmodel.cn 申请后粘贴到这里"
+                else f"还没有 key：去 {self._key_hint()} 申请后粘贴到这里"
             )
             return
         from dailywallpaper.recommend.intents import classify_note
 
+        vision = self.config.vision
         self.status.setText("正在测试 key…")
         try:
-            result = classify_note("test", key)
+            result = classify_note(
+                "test",
+                key,
+                model=vision.screen_model,
+                base_url=getattr(vision, "base_url", ""),
+                provider=getattr(vision, "provider", ""),
+            )
         except Exception as exc:
             self.status.setText(f"key 测试失败：{exc}")
             return

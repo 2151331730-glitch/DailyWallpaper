@@ -321,7 +321,13 @@ def run_curation(cfg, config_path=None, count: int = 300) -> int:
 
     api_key = keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
     if not api_key:
-        QMessageBox.critical(None, "策展", "智谱 key 缺失，先运行 scripts/set_key.py。")
+        from dailywallpaper.analysis.vision import provider_label
+
+        QMessageBox.critical(
+            None, "策展",
+            f"{provider_label(getattr(cfg.vision, 'provider', ''))} key 缺失，"
+            "先运行 scripts/set_key.py。",
+        )
         return 1
 
     def build() -> tuple[Path, dict]:

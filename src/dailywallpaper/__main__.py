@@ -186,7 +186,7 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
         # The headless path has no first-run dialog; say what is missing
         # instead of dying with a traceback in a console nobody watches.
         print(f"启动失败：{exc}")
-        print("提示：先运行 scripts/set_key_gui.py 或 scripts/set_key.py 填入智谱 key。")
+        print("提示：先运行 scripts/set_key_gui.py 或 scripts/set_key.py 填入模型 key。")
         return 1
 
 
