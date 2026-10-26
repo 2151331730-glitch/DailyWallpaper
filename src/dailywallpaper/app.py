@@ -582,7 +582,8 @@ def build_pipeline(cfg, conn):
             )
         elif not steam_key:
             logger.warning(
-                "steam workshop is on but has no API key; run scripts/set_steam_key.py"
+                "steam workshop is on but has no API key;"
+                " 设置页 → Steam Web API key（源码版也可 scripts/set_steam_key.py）"
             )
         else:
             sources.append(SteamWorkshopSource(
