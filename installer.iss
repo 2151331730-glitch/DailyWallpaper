@@ -6,7 +6,7 @@
 ; Build: "C:\Users\win11\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer.iss
 
 #define MyAppName "Mural 每日壁纸"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.2.2"
 #define MyAppPublisher "郭欣哈"
 #define MyAppExeName "Mural.exe"
 
