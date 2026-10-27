@@ -59,25 +59,53 @@
 1. 双击 `Mural-Setup-x.x.x.exe`，**不需要管理员权限**
 2. 首次启动填视觉模型 API key（默认 DeepSeek，`platform.deepseek.com` 申请；
    想用智谱就把 `config.toml` 的 `[vision] provider` 改成 `"zhipu"`）
-3. 首次运行的环境检查会直接告诉你：
+3. 如果程序在电脑上找到了 Wallpaper Engine，接着还会**可选地**问你一次 Steam Web API
+   key（见下一节）；留空直接跳过，不影响使用。第一张壁纸照常换
+4. 首次运行的环境检查会直接告诉你：
    - 有没有找到 Wallpaper Engine
    - Steam 商店和社区能不能打开
    - 创意工坊订阅了几项
-4. 正常情况下路径已经自动填好，直接用即可
+   - 有没有填 Steam Web API key
+5. 正常情况下路径已经自动填好，直接用即可
 
 ---
 
 ## 可选：Steam Web API key（线上创意工坊）
 
-不填也能用：程序会在**你已经订阅/已经下载**的创意工坊项目里挑。
-填了之后，它还能通过 Steam 官方接口去创意工坊里找这几天的新图，
-候选池会大很多。
+不填也能用：程序会在**你已经订阅 / 已经下载**的创意工坊项目里挑。第一次启动时
+（而且只在找到 Wallpaper Engine 时）会问你一次，之后随时可以在 **设置页 →
+Steam Web API key** 补填或更换。
+
+但要说清楚：key 只是线上创意工坊的四个条件之一。程序要**全部**满足才会去线上找图：
+
+| 条件 | 默认 | 怎么设 |
+|---|---|---|
+| `[steam_workshop] enabled` | `false` | 编辑 `config.toml` |
+| `[steam_workshop] steam_account` | 空 | 编辑 `config.toml`，填 Steam 登录名 |
+| SteamCMD 已安装并登录过一次 | 无 | 解开 SteamCMD，用它登录（匿名登录下载不了付费游戏的工坊内容） |
+| Steam Web API key | 空 | 首次运行弹窗，或设置页 |
+
+**安装版没有前三项的配置界面**，要手动来：SteamCMD 放到
+`%LOCALAPPDATA%\Mural\tools\steamcmd\steamcmd.exe`（或把路径写进
+`[steam_workshop] steamcmd_path`），再编辑同一个文件里的 `enabled` 和
+`steam_account`。源码版有现成脚本：
+
+```powershell
+.venv\Scripts\python scripts\install_steamcmd.py
+.venv\Scripts\python scripts\steam_login.py
+```
+
+所以对大多数人来说，**填不填这一格都一样，用的都是已订阅的壁纸**——key 先存着
+而已，等 SteamCMD 那条路配好了才会真的收到调用。日志会写明是哪一步没满足
+（`steam workshop needs steam_account and steamcmd` / `no API key`）。
+
+### 怎么申请
 
 1. 浏览器登录 Steam，打开 `https://steamcommunity.com/dev/apikey`
    （国内直连打不开，先开 Watt Toolkit 的"商店/社区加速"，或用 Pigeon 走代理）
 2. 「域名」一栏填 `localhost`（只是注册用，不做验证），同意条款后点注册
 3. 复制那串 32 位字符
-4. 打开本程序 **设置页 → Steam Web API key**，粘贴，点「保存」
+4. 粘贴到首次运行的弹窗，或 **设置页 → Steam Web API key**，点「保存」
    （key 存在 Windows 凭据管理器里，不写进任何配置文件，界面上也不再显示）
 
 > 这一步只认你登录 Steam 的那个账号，key 别外传。换机器或重装 Steam 后可以
@@ -113,6 +141,7 @@ config_path = "D:/games/steam/steamapps/common/wallpaper_engine/config.json"
 |---|---|
 | 商店打不开 | 加速工具没开，或开了但没勾选 Steam 商店 |
 | 创意工坊能看、下载很慢 | 加速器里选“创意工坊下载”线路，或换个时段 |
+| 填了 Steam key 好像没变化 | 线上创意工坊还缺 `enabled` / `steam_account` / SteamCMD（见上一节）。只用已订阅的壁纸时，这只 key 不会参与 |
 | 提示“没找到 Wallpaper Engine” | 先在 Steam 启动一次 WE，再重启本程序 |
 | 动态壁纸不换 | 默认只有插电时才换（电池保护）；要改就编辑 config.toml 的 `dynamic_requires_ac = false` |
 | 动态壁纸没声音 | 默认静音；托盘菜单“壁纸声音”打开 |

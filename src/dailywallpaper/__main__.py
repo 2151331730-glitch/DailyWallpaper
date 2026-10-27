@@ -82,8 +82,9 @@ def main(argv=None, app_factory=None, run_gui=None, instance_name=None) -> int:
             KEYRING_ACCOUNT,
             KEYRING_SERVICE,
         )
+        from dailywallpaper.steam_key import ACCOUNT as STEAM_KEY_ACCOUNT
 
-        for account in (KEYRING_ACCOUNT, "steam_api_key"):
+        for account in (KEYRING_ACCOUNT, STEAM_KEY_ACCOUNT):
             try:
                 keyring.delete_password(KEYRING_SERVICE, account)
             except Exception:  # missing entry, or a locked credential store

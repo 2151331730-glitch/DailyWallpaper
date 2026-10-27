@@ -16,25 +16,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dailywallpaper import steam_key
 from dailywallpaper.app_autostart import AutostartService, default_command
 from dailywallpaper.config import save_config
 
 logger = logging.getLogger(__name__)
-
-# Kept here rather than imported from app.py: that module is the composition
-# root and pulls the whole pipeline in with it.
-STEAM_KEY_ACCOUNT = "steam_api_key"
-
-
-def _stored_steam_key() -> str:
-    try:
-        import keyring
-
-        from dailywallpaper.analysis.vision import KEYRING_SERVICE
-
-        return keyring.get_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT) or ""
-    except Exception:
-        return ""
 
 
 def _valid_time(text: str) -> bool:
@@ -215,7 +201,7 @@ class SettingsPage(QWidget):
             return False
 
     def _has_steam_key(self) -> bool:
-        return _stored_steam_key() != ""
+        return steam_key.stored() != ""
 
     def test_proxy(self) -> None:
         from dailywallpaper.net import proxy_alive
@@ -333,11 +319,7 @@ class SettingsPage(QWidget):
         if not key:
             return
         try:
-            import keyring
-
-            from dailywallpaper.analysis.vision import KEYRING_SERVICE
-
-            keyring.set_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT, key)
+            steam_key.store(key)
             self.steam_key_edit.clear()
             self.steam_key_edit.setPlaceholderText(
                 "已保存的 key 不会显示；留空表示不修改"

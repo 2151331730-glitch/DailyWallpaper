@@ -5,15 +5,17 @@ with the same Steam account that owns Wallpaper Engine.
 
 The app's settings page ("Steam Web API key") does the same thing and is the
 only way from inside the packaged build, which ships no scripts folder. Either
-route writes the slot of the build it runs in: this script from the source tree
-means ``DailyWallpaper`` / ``steam_api_key``.
+route writes the slot of the build it runs in -- the account name is shared
+with the app (``dailywallpaper.steam_key``), and the service name follows
+``identity.py``, so this script run from the source tree means
+``DailyWallpaper`` / ``steam_api_key``.
 """
 import getpass
 
-import keyring
+from dailywallpaper.steam_key import store
 
 key = getpass.getpass("Steam Web API key: ").strip()
 if not key:
     raise SystemExit("empty key")
-keyring.set_password("DailyWallpaper", "steam_api_key", key)
+store(key)
 print("stored in Windows Credential Manager")

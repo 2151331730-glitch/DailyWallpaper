@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QInputDialog, QLineEdit, QMessageBox
 
-from dailywallpaper import identity
+from dailywallpaper import identity, steam_key
 from dailywallpaper.analysis.vision import KEYRING_ACCOUNT, KEYRING_SERVICE
 from dailywallpaper.config import install_prefs, user_data_dir
 from dailywallpaper.steam_env import (
@@ -47,6 +47,22 @@ def _setup_doc_hint() -> str:
     return f"详见 {doc}"
 
 
+def _steam_key_lines() -> list[str]:
+    """One report entry for the optional workshop key.
+
+    It is not a requirement: the app works without it on already-subscribed
+    items. Saying so here is the only place a new user learns the option
+    exists, because the settings page field is invisible until they go there.
+    """
+    if steam_key.stored():
+        return ["· Steam Web API key 已保存（启用线上创意工坊后才会调用）。"]
+    return [
+        "· 还没填 Steam Web API key：现在只在你已订阅的创意工坊里挑。",
+        "  想让它自己去线上找新图：到「设置 → Steam Web API key」填一个，",
+        "  申请地址 steamcommunity.com/dev/apikey（「域名」填 localhost）。",
+    ]
+
+
 def _ready_report(install) -> list[str]:
     lines = [f"· 已找到 Wallpaper Engine：{install}"]
     workshop = workshop_dir_for(install)
@@ -63,6 +79,7 @@ def _ready_report(install) -> list[str]:
     else:
         lines.append("· 创意工坊还没订阅：在 Steam 创意工坊搜 wallpaper，点“订阅”，")
         lines.append("  订阅的内容会自动下载，然后重启本程序。")
+    lines.extend(_steam_key_lines())
     return lines
 
 
@@ -137,6 +154,38 @@ def _environment_report(cfg) -> str:
     return "\n".join(lines)
 
 
+def _ask_steam_key() -> None:
+    """Offer the optional workshop key, once, and only where it can matter.
+
+    Asked on the first launch only: a prompt that came back on every start
+    would nag about something the app runs without. Skipped when no Wallpaper
+    Engine is installed -- the report shown right after this one explains what
+    to set up first, and a workshop key on its own would unlock nothing.
+    """
+    if steam_key.stored():
+        return
+    if detect().we_install_dir is None:
+        return
+    key, ok = QInputDialog.getText(
+        None,
+        f"{identity.title()} · 可选：Steam Web API key",
+        "想让程序除了你已订阅的壁纸，还会自己去创意工坊找新图，\n"
+        "可以顺便填一个 Steam Web API key —— 可选项，留空直接跳过。\n\n"
+        "申请：steamcommunity.com/dev/apikey（「域名」填 localhost）\n"
+        "打不开就先开 Watt Toolkit 的「商店 / 社区加速」。\n"
+        "key 只保存在 Windows 凭据管理器，不写入任何文件。\n\n"
+        "注意：线上创意工坊还需要 SteamCMD 和 Steam 账号，安装版没有内置；\n"
+        "这一格先存着，等那边配好后才会调用。不填也能正常用。",
+        QLineEdit.EchoMode.Password,
+    )
+    if not ok or not key.strip():
+        return
+    try:
+        steam_key.store(key.strip())
+    except Exception as exc:  # a locked store must not end the first run
+        logger.warning(f"steam key save failed: {exc}")
+
+
 def ensure_first_run(cfg) -> bool:
     """Return False when the user cancels the key prompt."""
     import keyring
@@ -166,6 +215,9 @@ def ensure_first_run(cfg) -> bool:
         )
 
     if not install_prefs().get("first_run_done"):
+        # Ask before the report, so the report describes what was just saved
+        # rather than a "not filled" that is already out of date.
+        _ask_steam_key()
         QMessageBox.information(
             None,
             f"{identity.title()} · 环境检查",

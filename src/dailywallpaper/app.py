@@ -9,7 +9,7 @@ from pathlib import Path
 
 import keyring
 
-from dailywallpaper import identity
+from dailywallpaper import identity, steam_key
 from dailywallpaper.analysis.scoring import rank
 from dailywallpaper.analysis.vision import (
     KEYRING_ACCOUNT,
@@ -65,7 +65,6 @@ HOST_COOLDOWN_SECONDS = 300
 # gives up; without a cap a dead network turned one click into a 20-minute
 # freeze over the whole shortlist.
 MATERIALIZE_ATTEMPTS = 3
-STEAM_KEY_ACCOUNT = "steam_api_key"
 # Below this many fresh candidates the day's pool is considered broken (the
 # proxy is down and only Bing answers) and downloaded wallpapers stand in.
 OFFLINE_POOL_MIN = 5
@@ -573,21 +572,21 @@ def build_pipeline(cfg, conn):
     if cfg.steam_workshop.enabled:
         from dailywallpaper.steam_prefetch import setup_ready
 
-        steam_key = keyring.get_password(KEYRING_SERVICE, STEAM_KEY_ACCOUNT)
+        steam_key_stored = steam_key.stored()
         if not setup_ready(cfg):
             # Without an account and SteamCMD every online candidate would be
             # scored and then dropped as not-ready; do not spend the quota.
             logger.warning(
                 "steam workshop needs steam_account and steamcmd; source disabled"
             )
-        elif not steam_key:
+        elif not steam_key_stored:
             logger.warning(
                 "steam workshop is on but has no API key;"
                 " 设置页 → Steam Web API key（源码版也可 scripts/set_steam_key.py）"
             )
         else:
             sources.append(SteamWorkshopSource(
-                SteamWorkshopClient(steam_key, session),
+                SteamWorkshopClient(steam_key_stored, session),
                 Path(cfg.app.data_dir) / "steam_workshop",
                 allow_mature=cfg.sources.allow_mature,
                 query_type=cfg.steam_workshop.query_type,
