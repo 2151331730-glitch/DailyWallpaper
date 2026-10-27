@@ -17,7 +17,11 @@ PAGE_SIZE = 24
 REQUEST_TIMEOUT = 30
 REQUEST_SPACING_SECONDS = 1.0
 # Spec 4.1: mix sorts so the pool is not only popular/template images.
-SORT_PLAN = ("toplist", "toplist", "random", "date_added")
+# Exploration comes first. Page 1 is what an intent query fetches, and the
+# toplist head is byte-for-byte the same 24 files every day: measured on
+# 2026-10-27, toplist/page 1 held 0 wallpapers the database did not already
+# have, while date_added and random held 24 of 24 new each.
+SORT_PLAN = ("date_added", "random", "toplist", "date_added", "random", "toplist")
 
 
 class WallhavenSource:

@@ -141,7 +141,7 @@ def test_upsert_updates_metadata_on_conflict(tmp_path):
 def test_wallhaven_sort_plan():
     src = WallhavenSource(FakeSession({}))
     assert [src._sort_for_page(p) for p in (1, 2, 3, 4)] == [
-        ("toplist", "1M"), ("toplist", "1M"), ("random", None), ("date_added", None),
+        ("date_added", None), ("random", None), ("toplist", "1M"), ("date_added", None),
     ]
 
 
@@ -154,8 +154,8 @@ def test_wallhaven_sends_toprange_only_for_toplist():
             return FakeResponse({"data": []})
 
     src = WallhavenSource(S())
-    src._search(1)
     src._search(3)
+    src._search(2)
     assert calls[0]["topRange"] == "1M"
     assert calls[0]["sorting"] == "toplist"
     assert "topRange" not in calls[1]
@@ -192,7 +192,7 @@ def test_wallhaven_fetches_every_configured_page_and_mixes_sorts():
     src = WallhavenSource(S(), SourcesSection(wallhaven_pages=4))
     items = src.fetch(40)
 
-    assert [c["sorting"] for c in calls] == ["toplist", "toplist", "random", "date_added"]
+    assert [c["sorting"] for c in calls] == ["date_added", "random", "toplist", "date_added"]
     assert len(items) == 40
     # Pages are interleaved, so a small limit still spans every sort type.
     assert [item.source_id for item in items[:4]] == ["p1-0", "p2-0", "p3-0", "p4-0"]

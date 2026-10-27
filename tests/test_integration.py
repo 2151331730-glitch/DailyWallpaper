@@ -1,5 +1,6 @@
 # tests/test_integration.py
 import io
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -292,6 +293,87 @@ def test_one_failing_preview_does_not_abort_the_run(tmp_path):
 
     pipeline.prepare(clock.now())
 
+    assert len(pipeline.shortlist) == 2
+
+
+def _on_disk(tmp_path, name="asset.jpg"):
+    """A file the applier can use, so nothing is downloaded for the full size."""
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not inspected: the asset is already on disk")
+    return path
+
+
+def test_stale_dynamic_rows_do_not_starve_a_fresh_image(tmp_path):
+    """The pool used to be dynamic + static, and the dynamic half never shrank.
+
+    Every day's workshop backlog sat in front of the images, so a small
+    download budget was spent on stale scenes and not one fresh image was ever
+    scored -- the folder stopped growing while the log said the pool was big.
+    """
+    cfg = _config(tmp_path)
+    cfg = replace(cfg, app=replace(cfg.app, max_downloads_per_day=2))
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+
+    project = _on_disk(tmp_path, "scene/project.json")
+    asset = _on_disk(tmp_path)
+    scenes = [
+        Candidate(
+            "we_workshop", f"s{index}", "t", "p", str(project),
+            f"https://img/scene{index}.png", "scene", 3840, 2160, 1000, [], {},
+        )
+        for index in range(4)
+    ]
+    fresh = [
+        Candidate(
+            "wallhaven", f"i{index}", "t", "p", str(asset),
+            f"https://img/fresh{index}.png", "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(2)
+    ]
+    pipeline = RealPipeline(
+        cfg, conn, SynthSession(), [Source(scenes + fresh)], vision, budget,
+        power=_AcPower(),
+    )
+
+    pipeline.prepare(clock.now())
+
+    assert pipeline.shortlist
+    assert any(d.media_type == "image" for d in pipeline.shortlist)
+
+
+def test_a_saved_preview_is_not_downloaded_again(tmp_path):
+    """A second pass has nothing new to fetch, so the cap must not cut it short."""
+    cfg = _config(tmp_path)
+    cfg = replace(cfg, app=replace(cfg.app, max_downloads_per_day=1))
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    asset = _on_disk(tmp_path)
+    candidates = [
+        Candidate(
+            "wallhaven", f"c{index}", "t", "p", str(asset),
+            f"https://img/cached{index}.png", "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(3)
+    ]
+    session = SynthSession()
+    pipeline = RealPipeline(cfg, conn, session, [Source(candidates)], vision, budget)
+
+    pipeline.prepare(clock.now())
+    assert len(pipeline.shortlist) == 1
+    fetched = session.calls
+
+    pipeline.prepare(clock.now(), force=True)
+
+    # Exactly one new preview fetched; the one saved by the first pass is free.
+    assert session.calls - fetched == 1
     assert len(pipeline.shortlist) == 2
 
 

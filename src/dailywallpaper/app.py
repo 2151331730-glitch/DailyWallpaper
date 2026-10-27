@@ -27,6 +27,7 @@ from dailywallpaper.pipeline.select import SelectMixin
 # here. Keep the names importable rather than chasing every call site.
 from dailywallpaper.app_support import (
     configure_session,  # noqa: F401  (re-export)
+    interleave,
     refresh_session_proxy,
     workshop_root,
 )
@@ -434,7 +435,15 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             # the database would pick a wallpaper nothing can apply.
             self._fill_from_cache(dynamic_pool, seen, set(DYNAMIC_TYPES))
         self._fill_from_cache(static_pool, seen, {"image"})
-        pool = dynamic_pool + static_pool if allow_dynamic else static_pool
+        # Round-robin, not concatenation: the dynamic pool is rebuilt from old
+        # workshop rows, so it is longer every day, and a plain head-first pool
+        # let those stale items take the whole download budget before a single
+        # fresh image was scored. Same reasoning as the search-intent interleave.
+        pool = (
+            interleave([dynamic_pool, static_pool])
+            if allow_dynamic
+            else static_pool
+        )
 
         recent = self._recent_styles()
         profile = self._profile(now)

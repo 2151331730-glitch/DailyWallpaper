@@ -224,12 +224,21 @@ class EvaluateMixin:
                         # screening step is free.
                         preview = local_preview
                     else:
-                        preview = download(
-                            self.session,
-                            candidate.preview_url,
-                            data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg",
-                        )
-                counters["downloads"] += 1
+                        # The copy an earlier pass saved is the same bytes.
+                        # Fetching it again made every pass pay ~50 downloads
+                        # and the minutes they take, for nothing.
+                        preview = data_dir / "cache" / "preview" / f"{wallpaper_id}.jpg"
+                        if not preview.is_file():
+                            preview = download(
+                                self.session,
+                                candidate.preview_url,
+                                preview,
+                            )
+                            # The cap is a bandwidth guard, so only bytes
+                            # actually fetched spend it. Counting cache hits
+                            # let already-seen items exhaust the day's
+                            # allowance and starve the fresh ones behind them.
+                            counters["downloads"] += 1
                 canonical, image_hash = canonicalize(
                     preview, data_dir / "cache" / "normalized"
                 )

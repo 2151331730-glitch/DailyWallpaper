@@ -82,6 +82,14 @@ class FetchMixin:
 
         The Steam API can be down while the downloads are still usable; the
         prefetcher may also have items the latest query no longer returns.
+
+        These are old rows, never fresh finds, so they come back as a cache
+        hit: the preview is the copy already saved under ``cache/preview``
+        (the CDN was serving the same 1024px image every pass, ~50 downloads
+        and about 50 s of a pass), and an analysis the database already holds
+        is reused instead of being looked up as new. ``known_id`` is required
+        with a local preview -- upserting would write the cache path over the
+        remote URL the row came from.
         """
         rows = self.conn.execute(
             """
@@ -92,6 +100,7 @@ class FetchMixin:
             """,
             (max(0, int(limit)),),
         ).fetchall()
+        previews = Path(self.cfg.app.data_dir) / "cache" / "preview"
         candidates = []
         for row in rows:
             if int(row["id"]) in self._banned:
@@ -99,6 +108,7 @@ class FetchMixin:
             project = row["file_url"]
             if not project or not Path(project).is_file():
                 continue
+            cached_preview = previews / f"{int(row['id'])}.jpg"
             candidates.append(
                 Candidate(
                     source=row["source"],
@@ -106,13 +116,19 @@ class FetchMixin:
                     title=row["title"],
                     page_url=row["page_url"],
                     file_url=project,
-                    preview_url=row["preview_url"],
+                    preview_url=(
+                        str(cached_preview)
+                        if cached_preview.is_file()
+                        else row["preview_url"]
+                    ),
                     media_type=row["media_type"],
                     width=row["width"],
                     height=row["height"],
                     file_size=row["file_size"],
                     tags=json.loads(row["tags_json"] or "[]"),
                     raw=json.loads(row["raw_json"] or "{}"),
+                    reuse_analysis=True,
+                    known_id=int(row["id"]),
                 )
             )
         return candidates
