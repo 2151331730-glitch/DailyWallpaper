@@ -57,6 +57,17 @@ class SelectMixin:
                 int(row["wallpaper_id"]), self.cfg.vision.screen_model
             )
             if record is None:
+                # A provider switch re-keys the analysis cache by model name,
+                # so this fallback went blind right when it was needed: on
+                # 2026-10-27 all twenty candidates had a ``glm-4.6v`` score
+                # and none a ``deepseek-flash`` one, and two clicks were
+                # answered with a 48 s rebuild that still changed nothing.
+                # This path is "show something known good", not a ranking, so
+                # an older model's opinion is good enough.
+                latest_any = getattr(self.vision, "latest_any_for", None)
+                if latest_any is not None:
+                    record = latest_any(int(row["wallpaper_id"]))
+            if record is None:
                 continue
             local = Path(row["local_path"]) if row["local_path"] else path
             return Decision(

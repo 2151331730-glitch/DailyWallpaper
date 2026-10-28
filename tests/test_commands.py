@@ -252,6 +252,38 @@ def test_change_now_reports_a_rejected_runner_request(tmp_path):
     assert service.change_now() is True
 
 
+def test_is_busy_follows_the_worker(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+
+    assert service.is_busy() is False  # no runner at all: nothing in flight
+
+    class _Runner:
+        state = True
+
+        def change_now(self):
+            return True
+
+        def busy(self):
+            return self.state
+
+    runner = _Runner()
+    service.runner = runner
+    assert service.is_busy() is True
+    runner.state = False
+    assert service.is_busy() is False
+
+
+def test_is_busy_survives_a_broken_worker(tmp_path):
+    conn, machine, service = _setup(tmp_path)
+
+    class _Broken:
+        def busy(self):
+            raise RuntimeError("connection closed")
+
+    service.runner = _Broken()
+    assert service.is_busy() is False
+
+
 def test_current_wallpaper_prefers_the_live_desktop(tmp_path):
     conn, machine, service = _setup(tmp_path)
     conn.execute("insert into wallpapers(source,source_id,created_at) values('t','2','x')")

@@ -23,6 +23,9 @@ class _Service:
         self.changed += 1
         return None
 
+    def is_busy(self):
+        return False
+
     def undo(self):
         return True
 

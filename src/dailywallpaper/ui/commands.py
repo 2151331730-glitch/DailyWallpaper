@@ -100,6 +100,21 @@ class CommandService:
         finally:
             self._apply_lock.release()
 
+    def is_busy(self):
+        """True while a change is in flight, so the button can say so.
+
+        Before this the window's "换一张" looked identical whether the worker
+        was idle or already grinding through a refill, and a click that landed
+        in that window was dropped without a word.
+        """
+        busy = getattr(self.runner, "busy", None)
+        if busy is None:
+            return False
+        try:
+            return bool(busy())
+        except Exception:
+            return False
+
     def current_wallpaper_id(self):
         """The wallpaper on the desktop, falling back to what we last applied."""
         resolver = getattr(self.apply_service, "current_wallpaper_id", None)

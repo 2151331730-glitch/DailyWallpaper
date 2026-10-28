@@ -431,6 +431,28 @@ class VisionClient:
         ).fetchone()
         return None if row is None else self._cached(row, wallpaper_id, model)
 
+    def latest_any_for(self, wallpaper_id: int) -> AnalysisRecord | None:
+        """The newest analysis of a wallpaper under *any* model.
+
+        The model name is part of the cache key, so switching provider leaves
+        almost no history scored under the new one. Anything that merely wants
+        "what did we already decide about this image" has to fall back to an
+        older model's opinion or it goes blind exactly at the moment the user
+        is waiting (see ``SelectMixin.repeat_pick``).
+        """
+        row = self.conn.execute(
+            """
+            select a.* from wallpaper_analyses wa
+            join analyses a on a.id = wa.analysis_id
+            where wa.wallpaper_id = ?
+            order by a.id desc limit 1
+            """,
+            (wallpaper_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._cached(row, wallpaper_id, row["model"])
+
     def _cached(self, row, wallpaper_id: int, model: str) -> AnalysisRecord:
         self.conn.execute(
             "INSERT OR IGNORE INTO wallpaper_analyses(wallpaper_id,analysis_id,created_at)"

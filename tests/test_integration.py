@@ -428,6 +428,55 @@ def test_a_used_up_pool_still_offers_a_previously_used_wallpaper(tmp_path):
     assert repeat.apply_path is not None and repeat.apply_path.is_file()
 
 
+def test_the_reuse_fallback_survives_a_vision_provider_switch(tmp_path):
+    """The model name is part of the analysis cache key.
+
+    Switching provider leaves almost no history scored under the new model,
+    so requiring *today's* model here made the fallback return None for a pool
+    the user had used for weeks. On 2026-10-27 that is exactly what happened:
+    every one of the twenty reuse candidates had a ``glm-4.6v`` analysis and
+    none had a ``deepseek-flash`` one, so two clicks were answered with 48 s
+    and 53 s of "kept" and the wallpaper never changed.
+    """
+    cfg = _config(tmp_path)
+    conn = connect(Path(cfg.app.data_dir) / "app.db")
+    migrate(conn)
+    clock = Clock(datetime(2026, 10, 18, 9, 0))
+    vision = VisionClient(Provider([_scores(90, 10)]), conn, cfg.vision.pricing)
+    budget = BudgetGuard(conn, cfg.budget.monthly_cny, cfg.budget.warn_ratio, clock)
+    candidates = [
+        Candidate(
+            "wallhaven", str(index + 1), "t", "p", f"https://img/{index}.png",
+            f"https://img/{index}.png", "image", 3840, 2160, 1000, [], {},
+        )
+        for index in range(3)
+    ]
+    pipeline = RealPipeline(
+        cfg, conn, BigSession(), [Source(candidates)], vision, budget
+    )
+    pipeline.prepare(clock.now())
+    assert pipeline.shortlist
+
+    # Everything the previous provider scored: exactly what a switch leaves.
+    conn.execute("update analyses set model='glm-4.6v'")
+    for row in conn.execute("select id from wallpapers").fetchall():
+        conn.execute(
+            "insert into decisions(decision_date,wallpaper_id,explore_score,"
+            "personalize_score,final_score,reason,status,created_at)"
+            " values('2026-10-18',?,50,50,50,'r','applied','x')",
+            (row["id"],),
+        )
+    conn.commit()
+
+    pipeline.prepare(clock.now(), force=True)
+    assert pipeline.pick(clock.now()) is None
+
+    repeat = pipeline.repeat_pick(clock.now())
+
+    assert repeat is not None, "the fallback went blind after the model changed"
+    assert repeat.apply_path is not None and repeat.apply_path.is_file()
+
+
 def test_a_previously_used_wallpaper_the_user_rated_low_is_not_reused(tmp_path):
     cfg = _config(tmp_path)
     conn = connect(Path(cfg.app.data_dir) / "app.db")

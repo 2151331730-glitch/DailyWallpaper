@@ -152,7 +152,12 @@ class MainWindow(QWidget):
         layout.addLayout(self.intents_box)
 
     def _change_now(self):
-        self.service.change_now()
+        accepted = self.service.change_now()
+        if accepted is False:
+            # The worker already had a change in flight. Say so instead of
+            # leaving the click unanswered.
+            self.change_button.setText("正在更换…")
+            self.change_button.setEnabled(False)
         self.refresh()
 
     def _undo(self):
@@ -303,7 +308,12 @@ class MainWindow(QWidget):
         self.reviewed_label.setText(
             "已复核（付费模型）" if self._is_reviewed() else ""
         )
-        self.change_button.setEnabled(self.service.snapshot().can_change)
+        busy = self.service.is_busy()
+        self.change_button.setEnabled(self.service.snapshot().can_change and not busy)
+        # "换一张" used to look identical while a 50 s refill was running, and
+        # a click during it was dropped silently -- the user's read was that
+        # the button was broken.
+        self.change_button.setText("正在更换…" if busy else "换一张")
         # Reuse the id resolved above: each lookup scans every wallpaper row
         # with Path.resolve(), and this runs on the 2 s poll.
         self._sync_rating_status(wallpaper_id)
