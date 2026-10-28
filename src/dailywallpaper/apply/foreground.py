@@ -110,11 +110,18 @@ def _user32():
     ``HWND``/``HMONITOR``. A truncated handle makes ``MonitorFromWindow``
     fail, the probe then answers "no fullscreen", and the gate is off without
     anyone noticing.
+
+    A library instance of its own, not ``ctypes.windll.user32``: that
+    singleton is shared with every other module, and an ``argtypes`` set here
+    is then enforced on their calls too. ``apply.we_control`` was passing its
+    own RECT type to ``GetWindowRect`` and got ``ArgumentError`` for it, so
+    its "is Wallpaper Engine drawing" probe answered False forever and the
+    desktop guard stopped working (2026-10-28).
     """
     global _apis
     if _apis is not None:
         return _apis
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL("user32")
     handle = wintypes.HANDLE
     user32.GetForegroundWindow.restype = handle
     user32.GetForegroundWindow.argtypes = []

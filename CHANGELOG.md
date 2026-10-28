@@ -4,6 +4,22 @@
 
 ### 修复
 
+- **桌面显示的和打分窗口里的不是同一张**（用户报告「现在的壁纸和打分的壁纸不一样」）：
+  真正的缺陷是**两个模块抢同一个 `user32` 原型**。`apply/foreground.py` 给
+  `ctypes.windll.user32.GetWindowRect` 声明了 `argtypes = [HWND, POINTER(自己的 RECT)]`，
+  而 `ctypes.windll.user32` 是**全进程唯一**的一个库对象；`apply/we_control.py` 的
+  `desktop_window_visible()` 传的是普通的 `wintypes.RECT`，于是它每次调用都在
+  `EnumChildWindows` 的回调里抛 `ArgumentError`——ctypes 把回调里的异常打印一行就吞掉，
+  那个窗口不进 `found`，函数返回 False。`keep_visible()` 里 `user_is_busy()`（第 939 行）
+  先跑、`we_rendering()`（第 971 行）后跑，所以**每一轮都必然已经污染过**：守护线程一直
+  认为「Wallpaper Engine 没在画」，`ours and not we_active` 静默返回，WE 的动态壁纸就
+  一直盖在我们设的静态图上面。表现就是打分窗口说这张、桌面显示另一张。
+  改法：两个模块各自持有 `ctypes.WinDLL("user32")` **私有实例**（原型不跨实例共享），
+  探测回调里加一次性 warning——这种"静默返回 False"的失败不该无声无息。
+  顺手删掉 `cache/normalized` 缩略图被预取解码的老毛病（`screening_copy()` 一处判断，
+  `_static_target()` 和 `_preflight_next()` 共用），它会在并没有发生的更换上留下
+  「这张图只有 432x243」的假错误。
+
 - **壁纸文件夹终于会瘦**（用户报告「壁纸文件夹中旧的还是没有删」）：旧的保留策略是
   「90 天以上的才删」，这个装了一个月的机器上一次都没触发过——183 张 / 335 MB 一张没删，
   工坊目录更是攒到 3.15 GB。现在改成**数量封顶**（`wallpapers_max = 80` /

@@ -122,6 +122,29 @@ def engine_exe_name(config_path: Path | None = None) -> str:
     return WE_EXE_NAMES[0]
 
 
+_user32_api = None
+_rect_error_logged = False
+
+
+def _user32():
+    """user32 as a library instance of this module's own.
+
+    ``ctypes.windll.user32`` is one object for the whole process, so an
+    ``argtypes`` declared here is seen everywhere (and vice versa).
+    ``apply.foreground`` declares ``GetWindowRect`` as
+    ``[HWND, POINTER(its own RECT)]``; with the shared singleton, every call
+    made from this module then raised ``ArgumentError`` *inside* the
+    EnumChildWindows callback, where ctypes swallows it. The probe answered
+    "WE is not drawing" for the rest of the session, so the desktop guard
+    never closed Wallpaper Engine over our image and the desktop kept showing
+    WE's live wallpaper while the app believed ours was up (2026-10-28).
+    """
+    global _user32_api
+    if _user32_api is None:
+        _user32_api = ctypes.WinDLL("user32")
+    return _user32_api
+
+
 def desktop_window_visible() -> bool:
     """True when Wallpaper Engine is actually drawing on the desktop.
 
@@ -130,26 +153,36 @@ def desktop_window_visible() -> bool:
     window is the only reliable "is it on screen" signal.
     """
     try:
-        user32 = ctypes.windll.user32
+        user32 = _user32()
     except AttributeError:  # non-Windows
         return False
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     found = []
 
     def inspect(hwnd, _lparam):
-        name = ctypes.create_unicode_buffer(128)
-        user32.GetClassNameW(hwnd, name, 128)
-        # Scene wallpapers draw in WPEDesktopDX11Window; videos in
-        # WPEVideoWallpaper, which is *not* WS_VISIBLE. Both exist only while
-        # something is playing, so class plus size is the honest signal.
-        if not name.value.startswith("WPE"):
-            return True
-        if name.value in ("WPEEventWindow", "WPETrayWindow", "WPEFilePickerWindow"):
-            return True
-        rect = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        if rect.right - rect.left >= 1000 and rect.bottom - rect.top >= 500:
-            found.append(name.value)
+        # ctypes prints a callback's exception and carries on with the window
+        # MISSING from the enumeration, which reads as "nothing is drawing".
+        # One warning turns that silent wrong answer into something findable.
+        global _rect_error_logged
+        try:
+            name = ctypes.create_unicode_buffer(128)
+            user32.GetClassNameW(hwnd, name, 128)
+            # Scene wallpapers draw in WPEDesktopDX11Window; videos in
+            # WPEVideoWallpaper, which is *not* WS_VISIBLE. Both exist only
+            # while something is playing, so class plus size is the honest
+            # signal.
+            if not name.value.startswith("WPE"):
+                return True
+            if name.value in ("WPEEventWindow", "WPETrayWindow", "WPEFilePickerWindow"):
+                return True
+            rect = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            if rect.right - rect.left >= 1000 and rect.bottom - rect.top >= 500:
+                found.append(name.value)
+        except Exception as exc:
+            if not _rect_error_logged:
+                _rect_error_logged = True
+                logger.warning(f"WE desktop window probe failed to read a window: {exc}")
         return True
 
     callback = enum_proc(inspect)

@@ -322,6 +322,13 @@ class Worker:
         )
         if path is None:
             return
+        # A pick that is not downloaded yet only has its screening thumbnail;
+        # warming that costs a decode and leaves a "too small" last_error on a
+        # change that never happened.
+        from dailywallpaper.apply.service import screening_copy
+
+        if screening_copy(path):
+            return
         try:
             preflight(path)
         except Exception:

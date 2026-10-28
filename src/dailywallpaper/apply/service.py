@@ -89,6 +89,10 @@ def _norm(path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
+def screening_copy(path) -> bool:
+    """True for a ``cache/normalized`` preview -- never worth putting up."""
+    parts = Path(path).parts
+    return "cache" in parts and "normalized" in parts
 
 
 class ApplyService:
@@ -788,7 +792,7 @@ class ApplyService:
         path = Path(row["local_path"])
         # Never re-apply the <=1024px screening copy: a sharper file may not
         # exist, but a blurry desktop is worse than none.
-        if "cache" in path.parts and "normalized" in path.parts:
+        if screening_copy(path):
             logger.warning("no full-resolution file recorded; skipping")
             return None
         return path
