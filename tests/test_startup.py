@@ -37,6 +37,15 @@ class _FakeApply:
         return True
 
 
+class _DeferredApply:
+    """An apply service that declines: a game owns the screen."""
+
+    last_deferred = True
+
+    def apply(self, wallpaper_id, image_path, trigger="auto"):
+        return False
+
+
 def _park(conn, image, wallpaper_id=42):
     conn.execute(
         "insert or replace into state(key,value) values(?,?)",
@@ -112,6 +121,31 @@ def test_a_parked_file_that_is_gone_is_not_applied(tmp_path, monkeypatch):
 
     assert apply_parked(_cfg(data)) is False
     assert fake.calls == []
+
+
+def test_a_parked_wallpaper_survives_a_boot_with_a_game_on_screen(
+    tmp_path, monkeypatch
+):
+    """Deferred is not failed: the parked file must still be there at noon."""
+    data = tmp_path / "data"
+    data.mkdir()
+    image = data / "42.apply.jpg"
+    image.write_bytes(b"x")
+    conn = connect(data / "app.db")
+    migrate(conn)
+    _park(conn, image)
+    fake = _DeferredApply()
+    _patch_apply_service(monkeypatch, fake)
+    conn.close()
+
+    assert apply_parked(_cfg(data)) is False
+
+    after = connect(data / "app.db")
+    assert (
+        after.execute("select 1 from state where key=?", (PREPARED_KEY,)).fetchone()
+        is not None
+    )
+    after.close()
 
 
 def test_a_broken_database_does_not_take_the_launch_down(tmp_path, monkeypatch):

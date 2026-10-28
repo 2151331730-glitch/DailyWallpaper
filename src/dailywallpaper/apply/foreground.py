@@ -38,12 +38,17 @@ QUNS_APP = 7
 # The states that mean "the screen belongs to something else right now".
 # QUNS_NOT_PRESENT (nobody logged in) and QUNS_QUIET_TIME (the first hour
 # after setup) are not reasons to leave the wallpaper alone.
+#
+# QUNS_APP is deliberately absent: it only says "a Store app is in the
+# foreground", not "it is fullscreen". Settings, Photos and Calculator are all
+# Store apps, so counting it would freeze the scheduler while the user happens
+# to have one of them open. A fullscreen Store app (a video player) is still
+# caught by the rectangle probe.
 BUSY_STATES = frozenset(
     {
         QUNS_BUSY,
         QUNS_RUNNING_D3D_FULL_SCREEN,
         QUNS_PRESENTATION_MODE,
-        QUNS_APP,
     }
 )
 
@@ -81,28 +86,97 @@ class _MONITORINFO(ctypes.Structure):
     ]
 
 
+_apis = None
+_warned = False
+
+
+def _warn_once(exc) -> None:
+    """Say once that a probe is dead, then stay quiet.
+
+    Failing open is right, but failing open *silently* means a probe that lost
+    its API turns the gate off for good with nothing in the log to find.
+    """
+    global _warned
+    if _warned:
+        return
+    _warned = True
+    logger.warning(f"fullscreen probe unavailable, assuming not busy: {exc}")
+
+
+def _user32():
+    """user32 with its prototypes declared, configured once.
+
+    ctypes defaults every restype to ``c_int``, which truncates a 64-bit
+    ``HWND``/``HMONITOR``. A truncated handle makes ``MonitorFromWindow``
+    fail, the probe then answers "no fullscreen", and the gate is off without
+    anyone noticing.
+    """
+    global _apis
+    if _apis is not None:
+        return _apis
+    user32 = ctypes.windll.user32
+    handle = wintypes.HANDLE
+    user32.GetForegroundWindow.restype = handle
+    user32.GetForegroundWindow.argtypes = []
+    user32.IsWindowVisible.argtypes = [handle]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsZoomed.argtypes = [handle]
+    user32.IsZoomed.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [handle, ctypes.POINTER(_RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.MonitorFromWindow.argtypes = [handle, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = handle
+    user32.GetMonitorInfoW.argtypes = [handle, ctypes.POINTER(_MONITORINFO)]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    user32.GetClassNameW.argtypes = [handle, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    _apis = user32
+    return _apis
+
+
+def _covers_monitor(window: _RECT, screen: _RECT, maximized: bool) -> bool:
+    """Whether ``window`` fills ``screen`` the way a fullscreen game does.
+
+    A maximised window is excluded outright. On the primary monitor its rect
+    already stops at the taskbar, but a secondary monitor with no taskbar has
+    ``rcWork == rcMonitor`` -- and there a maximised window lands exactly on
+    the monitor rectangle, which the old geometry-only test read as a game and
+    then deferred the wallpaper for as long as that window stayed open.
+    """
+    if maximized:
+        return False
+    return (
+        abs(window.left - screen.left) <= FULLSCREEN_TOLERANCE
+        and abs(window.top - screen.top) <= FULLSCREEN_TOLERANCE
+        and abs(window.right - screen.right) <= FULLSCREEN_TOLERANCE
+        and abs(window.bottom - screen.bottom) <= FULLSCREEN_TOLERANCE
+    )
+
+
 def notification_state() -> int | None:
     """The shell's QUNS_* state, or None when it cannot be read."""
     try:
         state = ctypes.c_int(0)
-        result = ctypes.windll.shell32.SHQueryUserNotificationState(
-            ctypes.byref(state)
-        )
+        shell32 = ctypes.windll.shell32
+        shell32.SHQueryUserNotificationState.argtypes = [ctypes.POINTER(ctypes.c_int)]
+        shell32.SHQueryUserNotificationState.restype = ctypes.c_long
+        result = shell32.SHQueryUserNotificationState(ctypes.byref(state))
         if result != 0:  # S_OK
             return None
         return int(state.value)
-    except Exception:  # not Windows, or the shell is not answering
+    except Exception as exc:  # not Windows, or the shell is not answering
+        _warn_once(exc)
         return None
 
 
 def fullscreen_foreground() -> str | None:
     """The class name of a foreground window that covers its whole monitor.
 
-    Returns None for the desktop itself, for a maximised window (whose rect
-    stops at the taskbar), and whenever the answer cannot be read.
+    Returns None for the desktop itself, for a maximised window, and whenever
+    the answer cannot be read.
     """
     try:
-        user32 = ctypes.windll.user32
+        user32 = _user32()
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
@@ -116,21 +190,19 @@ def fullscreen_foreground() -> str | None:
         monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
         if not monitor or user32.GetMonitorInfoW(monitor, ctypes.byref(info)) == 0:
             return None
-        screen = info.rcMonitor
-        if (
-            abs(window.left - screen.left) > FULLSCREEN_TOLERANCE
-            or abs(window.top - screen.top) > FULLSCREEN_TOLERANCE
-            or abs(window.right - screen.right) > FULLSCREEN_TOLERANCE
-            or abs(window.bottom - screen.bottom) > FULLSCREEN_TOLERANCE
-        ):
+        if not _covers_monitor(window, info.rcMonitor, bool(user32.IsZoomed(hwnd))):
             return None
         buffer = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, buffer, 256)
-        name = buffer.value or ""
-        if name in SHELL_CLASSES:
+        if user32.GetClassNameW(hwnd, buffer, 256) == 0:
+            # A window whose class cannot be read is not evidence of a game;
+            # guessing "(unknown)" here used to count as busy.
             return None
-        return name or "(unknown)"
-    except Exception:
+        name = buffer.value or ""
+        if not name or name in SHELL_CLASSES:
+            return None
+        return name
+    except Exception as exc:
+        _warn_once(exc)
         return None
 
 

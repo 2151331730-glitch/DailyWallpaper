@@ -448,11 +448,54 @@ def test_worker_defers_a_tick_while_a_fullscreen_app_owns_the_screen(monkeypatch
     # No fetch, no vision, no apply: the next tick does the work.
     assert ticks == []
     assert worker.last_action == "deferred"
-    assert worker.last_result == ("deferred", "全屏应用正在运行，稍后再换", True)
+    assert worker.last_result == (
+        "deferred", "全屏应用正在运行，退出后会补上这一张", True
+    )
+
+
+def test_a_deferred_click_is_run_once_the_screen_is_free(monkeypatch):
+    """The click is owed a change, and owes the user exactly one message."""
+    from dailywallpaper.ui import worker as worker_mod
+    from dailywallpaper.ui.worker import Worker
+
+    busy = {"on": True}
+    monkeypatch.setattr(worker_mod, "_screen_is_busy", lambda: busy["on"])
+    ticks = []
+
+    class _Result:
+        action = "applied"
+        reason = ""
+
+    class _M:
+        pipeline = None
+        clock = None
+
+        def tick(self, **kwargs):
+            ticks.append(kwargs)
+            return _Result()
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker._machine = _M()
+    worker._tick_once(manual=True)
+
+    assert worker._pending_manual is True
+    announced = worker.result_seq
+
+    # Still in the game: the retry waits, and it does not bubble again.
+    worker._tick_once(manual=True)
+    assert ticks == []
+    assert worker.result_seq == announced
+    assert worker._pending_manual is True
+
+    busy["on"] = False
+    worker._tick_once(manual=True)
+
+    assert worker._pending_manual is False
+    assert ticks == [{"manual": True, "startup": False}]
 
 
 def test_worker_still_runs_the_startup_tick_while_the_screen_is_busy(monkeypatch):
-    """Nothing else restores the desktop after a reboot."""
+    """The pool still gets built after a reboot; only the swap itself waits."""
     from dailywallpaper.ui import worker as worker_mod
     from dailywallpaper.ui.worker import Worker
 
@@ -503,7 +546,7 @@ def test_a_deferred_click_says_why_nothing_changed(qapp, tmp_path):
     class _Worker:
         last_action = "deferred"
         result_seq = 1
-        last_result = ("deferred", "全屏应用正在运行，稍后再换", True)
+        last_result = ("deferred", "全屏应用正在运行，退出后会补上这一张", True)
 
         def busy(self):
             return False
@@ -519,7 +562,7 @@ def test_a_deferred_click_says_why_nothing_changed(qapp, tmp_path):
     finally:
         shell.poll_timer.stop()
 
-    assert messages == [("稍后再换", "全屏应用正在运行，稍后再换")]
+    assert messages == [("稍后再换", "全屏应用正在运行，退出后会补上这一张")]
 
 
 def test_rating_dialog_saves_a_score_and_comment(qapp, tmp_path):

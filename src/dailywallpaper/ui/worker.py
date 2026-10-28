@@ -80,6 +80,11 @@ class Worker:
         # a finished manual change exactly once.
         self.last_result = ("", "", False)
         self.result_seq = 0
+        # A click that arrived while a game owned the screen. It is owed a
+        # change, so the next tick that gets through runs as a manual one; the
+        # flag also keeps the retries from bubbling a tray message every
+        # minute the game stays open.
+        self._pending_manual = False
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -180,7 +185,9 @@ class Worker:
                 self._preflight_next()
             remaining = deadline - now
             if remaining <= 0:
-                return False
+                # A click that landed during a game is still owed its change:
+                # run the next tick as that manual one.
+                return bool(self._pending_manual)
             # A click should be picked up within ~0.1 s, not a quarter second.
             self._stop.wait(min(0.1, remaining))
         return None
@@ -369,17 +376,29 @@ class Worker:
         try:
             # A game or a fullscreen video owns the screen: no fetch, no
             # ffmpeg, no apply. The next tick does the work instead. A startup
-            # tick still runs, because nothing else would restore the desktop
-            # after a reboot.
+            # tick still runs so the pool gets built and today's pick is ready,
+            # though the swap itself defers inside ``ApplyService.apply`` and
+            # the parked wallpaper is kept for the next tick.
             if not startup and _screen_is_busy():
                 self.last_action = "deferred"
-                self.last_result = ("deferred", "全屏应用正在运行，稍后再换", manual)
-                self.result_seq += 1
+                # A click must not vanish because a game was up: remember it
+                # and run it on the first tick that gets through. Say so once --
+                # the retries would otherwise bubble every minute.
+                announce = manual and not self._pending_manual
+                if manual:
+                    self._pending_manual = True
+                if announce:
+                    self.last_result = (
+                        "deferred", "全屏应用正在运行，退出后会补上这一张", manual
+                    )
+                    self.result_seq += 1
                 logger.info(
                     "tick deferred: a fullscreen app owns the screen"
                     f" (manual={int(bool(manual))})"
                 )
                 return
+            # This tick gets through, so it is the click's answer.
+            self._pending_manual = False
             # A failure while applying a pending config or rebuilding the pool
             # must not leave the thread at low priority.
             try:

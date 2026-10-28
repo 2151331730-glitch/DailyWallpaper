@@ -68,7 +68,7 @@ def test_video_contact_sheet_hides_the_console_window(tmp_path):
     finally:
         media.subprocess.run = original
 
-    assert seen["creationflags"] & subprocess.CREATE_NO_WINDOW
+    assert seen["creationflags"] & getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def test_video_contact_sheet_reuses_an_existing_sheet(tmp_path):

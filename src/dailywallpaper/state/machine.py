@@ -169,6 +169,12 @@ class DailyStateMachine:
             logger.warning(f"prepared wallpaper apply failed: {exc}")
             ok = False
         if not ok:
+            if getattr(self.apply_service, "last_deferred", False):
+                # A game took the screen between the tick and the swap. Nothing
+                # was attempted and nothing failed: keep the parked wallpaper
+                # for the next tick. Discarding it here threw away a finished
+                # download and marked a perfectly good decision 'apply_failed'.
+                return TickResult("deferred", "全屏应用正在运行，稍后再换")
             self._discard_prepared("apply_failed")
             return None
         decision_id = payload.get("decision_id")
@@ -265,6 +271,11 @@ class DailyStateMachine:
             decision.apply_path or decision.image_path,
             trigger,
         )
+        if not ok and getattr(self.apply_service, "last_deferred", False):
+            # Deferred is not failed: the wallpaper never touched the screen,
+            # so the decision stays in the shortlist for the next tick instead
+            # of being recorded as a failure.
+            return TickResult("deferred", "全屏应用正在运行，稍后再换")
         marker = getattr(self.pipeline, "mark_applied" if ok else "mark_failed", None)
         if marker is not None:
             marker(decision)

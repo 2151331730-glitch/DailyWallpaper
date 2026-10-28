@@ -95,6 +95,23 @@ def test_before_daily_time_runs_in_background(tmp_path):
     assert svc.calls == []
 
 
+def test_a_deferred_apply_is_not_recorded_as_a_failure(tmp_path):
+    """A game taking the screen must not cost the pick its good name."""
+    conn, machine, clock, pipeline, svc = _setup(
+        tmp_path, datetime(2026, 10, 18, 9, 0)
+    )
+    failed = []
+    pipeline.mark_failed = failed.append
+    pipeline.mark_applied = lambda decision: None
+    svc.last_deferred = True
+    svc.apply = lambda *args, **kwargs: False
+
+    result = machine.tick()
+
+    assert result.action == "deferred"
+    assert failed == []
+
+
 def test_after_latest_change_time_is_too_late(tmp_path):
     conn, machine, clock, pipeline, svc = _setup(tmp_path, datetime(2026, 10, 18, 23, 0))
 

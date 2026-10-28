@@ -119,6 +119,11 @@ class ApplyService:
         # desktop. None keeps tests (tiny fixture images) unaffected.
         self.min_resolution = min_resolution
         self.last_error = ""
+        # A declined-for-now apply is not a failed one. Callers must be able to
+        # tell them apart: the scheduler throws away a finished download and
+        # marks the decision failed on a *failed* apply, and doing that to a
+        # mere "a game owns the screen" destroys the parked wallpaper.
+        self.last_deferred = False
         # "Is WE drawing right now" -- its config keeps a selection while
         # stopped, so only the desktop window answers this (or a fake's
         # rendering() in tests).
@@ -447,11 +452,13 @@ class ApplyService:
     @_serialised
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         self.last_error = ""
+        self.last_deferred = False
         started = time.monotonic()
         # A game in exclusive or borderless fullscreen owns the display; the
         # apply re-broadcasts WM_SETTINGCHANGE to every window and can cost the
         # player a frame -- or the whole session. Defer instead.
         if foreground.user_is_busy():
+            self.last_deferred = True
             self.last_error = "全屏应用正在运行，稍后再换"
             logger.info("apply deferred: a fullscreen app owns the screen")
             return False
