@@ -44,6 +44,33 @@ def test_video_contact_sheet_calls_ffmpeg_with_a_tile_filter(tmp_path):
     assert any("tile=3x1" in arg for arg in calls[0])
 
 
+def test_video_contact_sheet_hides_the_console_window(tmp_path):
+    """Under pythonw there is no console to inherit, so a bare spawn opens one."""
+    seen = {}
+
+    class _Result:
+        returncode = 0
+        stderr = ""
+
+    def runner(args, **kwargs):
+        seen.update(kwargs)
+        (tmp_path / "sheet.jpg").write_bytes(b"x")
+        return _Result()
+
+    import subprocess
+
+    import dailywallpaper.analysis.media as media
+
+    original = media.subprocess.run
+    media.subprocess.run = runner
+    try:
+        video_contact_sheet(tmp_path / "clip.mp4", tmp_path / "sheet.jpg")
+    finally:
+        media.subprocess.run = original
+
+    assert seen["creationflags"] & subprocess.CREATE_NO_WINDOW
+
+
 def test_video_contact_sheet_reuses_an_existing_sheet(tmp_path):
     import os
 

@@ -63,6 +63,10 @@ def video_contact_sheet(video: Path, dest: Path, ffmpeg: str = "ffmpeg") -> Path
         capture_output=True,
         text=True,
         timeout=FFMPEG_TIMEOUT,
+        # The app runs from ``pythonw`` (no console of its own), so a child
+        # without this flag gets a brand-new black window. Every other spawn
+        # in the tree already passes it; this one was the last leak.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if result.returncode != 0 or not dest.is_file():
         raise MediaError(f"ffmpeg failed: {result.stderr[-300:]}")
