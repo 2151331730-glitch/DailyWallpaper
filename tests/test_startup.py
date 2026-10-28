@@ -253,54 +253,18 @@ def test_logon_task_is_a_no_op_when_the_tooling_is_missing(monkeypatch):
     )
 
 
-def test_rehydrate_only_serves_a_day_that_is_already_prepared(tmp_path):
-    """Rebuild the shortlist after a restart, never after a failed prepare."""
-    from dailywallpaper.app import RealPipeline
-    from dailywallpaper.db import connect, migrate
+def test_the_idle_pipeline_never_prepares_or_picks(tmp_path):
+    """The startup pass may only apply what is already parked.
 
-    conn = connect(tmp_path / "app.db")
-    migrate(conn)
-    pipeline = RealPipeline.__new__(RealPipeline)
-    pipeline.conn = conn
-    pipeline.shortlist = []
-    forced = []
-    budgets = []
+    Every other answer would start the fetch-and-score run in front of the
+    worker thread that is about to do exactly that work.
+    """
+    from dailywallpaper.startup import _IdlePipeline
 
-    def prepare(now, force=False, dry_run=False, budget=None):
-        forced.append(force)
-        budgets.append(budget)
-        pipeline.shortlist = ["candidate"]
-
-    pipeline.prepare = prepare
+    idle = _IdlePipeline()
     now = datetime(2026, 10, 24, 12, 0)
 
-    # The day was never prepared: a failed prepare must keep its backoff.
-    assert pipeline.rehydrate(now) is False
-    assert forced == []
+    assert idle.prepare(now) is None
+    assert idle.prepare_local(now) is False
+    assert idle.pick(now) is None
 
-    conn.execute(
-        "insert into state(key,value) values('prepared_2026-10-24','1')"
-    )
-    conn.commit()
-
-    assert pipeline.rehydrate(now) is True
-    assert forced == [True]
-    # Only the pool is wanted back, not eight fresh opinions: a restart must
-    # not spend a full refill before it can answer a click.
-    assert budgets == [2]
-
-
-def test_rehydrate_leaves_a_working_shortlist_alone(tmp_path):
-    from dailywallpaper.app import RealPipeline
-    from dailywallpaper.db import connect, migrate
-
-    conn = connect(tmp_path / "app.db")
-    migrate(conn)
-    conn.execute("insert into state(key,value) values('prepared_2026-10-24','1')")
-    conn.commit()
-    pipeline = RealPipeline.__new__(RealPipeline)
-    pipeline.conn = conn
-    pipeline.shortlist = ["already here"]
-    pipeline.prepare = lambda *a, **k: (_ for _ in ()).throw(AssertionError("refetched"))
-
-    assert pipeline.rehydrate(datetime(2026, 10, 24, 12, 0)) is False

@@ -222,13 +222,17 @@ def test_malformed_latest_change_time_does_not_crash(tmp_path):
 
 
 
-def _exhausted_pipeline(decision, forces):
+def _exhausted_pipeline(decision, calls):
     class _Pipeline:
         def __init__(self):
             self.calls = 0
 
         def prepare(self, now, force=False, mark=True, dry_run=False):
-            forces.append(force)
+            calls.append("prepare")
+
+        def prepare_local(self, now):
+            calls.append("prepare_local")
+            return True
 
         def pick(self, now, dry_run=False):
             self.calls += 1
@@ -237,7 +241,8 @@ def _exhausted_pipeline(decision, forces):
     return _Pipeline()
 
 
-def test_manual_change_refills_an_exhausted_shortlist(tmp_path):
+def test_manual_change_refills_from_the_disk_not_the_network(tmp_path):
+    """A click has to be answered now; a network rebuild answered in 34-65 s."""
     from types import SimpleNamespace
 
     from dailywallpaper.config import AppSection
@@ -249,19 +254,19 @@ def test_manual_change_refills_an_exhausted_shortlist(tmp_path):
     conn.commit()
     wid = conn.execute("select id from wallpapers").fetchone()[0]
     clock = FakeClock(datetime(2026, 10, 18, 9, 0))
-    forces = []
+    calls = []
     machine = DailyStateMachine(
         conn,
         SimpleNamespace(app=AppSection()),
         clock,
-        _exhausted_pipeline(_decision(wid), forces),
+        _exhausted_pipeline(_decision(wid), calls),
         FakeApplyService(conn, clock),
     )
 
     result = machine.tick(manual=True)
 
     assert result.action == "applied"
-    assert forces == [True]
+    assert calls == ["prepare_local"]
 
 
 def test_a_manual_change_answers_from_history_instead_of_waiting(tmp_path):
@@ -285,6 +290,9 @@ def test_a_manual_change_answers_from_history_instead_of_waiting(tmp_path):
         def prepare(self, now, force=False, mark=True, dry_run=False):
             forces.append(force)
 
+        def prepare_local(self, now):
+            forces.append("local")
+
         def pick(self, now, dry_run=False):
             return None
 
@@ -302,7 +310,8 @@ def test_a_manual_change_answers_from_history_instead_of_waiting(tmp_path):
     result = machine.tick(manual=True)
 
     assert result.action == "applied"
-    assert forces == []
+    # Only the disk rebuild ran; no network pass sat in front of the click.
+    assert forces == ["local"]
 
 
 def test_automatic_change_refills_without_forcing(tmp_path):
@@ -329,7 +338,8 @@ def test_automatic_change_refills_without_forcing(tmp_path):
     result = machine.tick()
 
     assert result.action == "applied"
-    assert forces == [False]
+    # The scheduled pass keeps its network refill; only a click is disk-only.
+    assert forces == ["prepare"]
 
 
 # -- pre-generated wallpaper ---------------------------------------------

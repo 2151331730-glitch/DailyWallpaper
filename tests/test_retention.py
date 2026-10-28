@@ -48,9 +48,16 @@ def test_old_cache_files_are_removed(tmp_path):
     assert removed["cache"] == 1
 
 
-def test_the_applied_wallpaper_is_kept(tmp_path):
+def test_the_applied_wallpaper_survives_the_count_cap(tmp_path):
+    """Protection, not age, is what keeps the picture on the desktop.
+
+    ``wallpapers_max=1`` would drop everything but the newest file; the one the
+    desktop is wearing has to be exempt or the wallpaper disappears from disk
+    while it is still on screen.
+    """
     applied = _aged(tmp_path / "wallpapers" / "1.jpg", 200)
-    other = _aged(tmp_path / "wallpapers" / "2.jpg", 200)
+    newest = _aged(tmp_path / "wallpapers" / "2.jpg", 1)
+    stale = _aged(tmp_path / "wallpapers" / "3.jpg", 300)
     conn = connect(tmp_path / "app.db")
     migrate(conn)
     conn.execute(
@@ -59,19 +66,40 @@ def test_the_applied_wallpaper_is_kept(tmp_path):
     )
     conn.commit()
 
-    removed = cleanup(tmp_path, _config(tmp_path), conn)
+    removed = cleanup(tmp_path, _config(tmp_path, wallpapers_max=1), conn)
 
     assert applied.exists()
-    assert not other.exists()
+    assert newest.exists()
+    assert not stale.exists()
     assert removed["wallpapers"] == 1
 
 
-def test_the_last_seven_days_are_kept(tmp_path):
-    recent = _aged(tmp_path / "wallpapers" / "1.jpg", 3)
+def test_only_the_newest_wallpapers_are_kept(tmp_path):
+    """A count is the promise: "keep the last N" can be checked, 90 days cannot."""
+    for index in range(5):
+        _aged(tmp_path / "wallpapers" / f"{index}.jpg", index)
 
-    cleanup(tmp_path, _config(tmp_path, wallpapers_days=90))
+    removed = cleanup(tmp_path, _config(tmp_path, wallpapers_max=2))
 
-    assert recent.exists()
+    kept = sorted(p.name for p in (tmp_path / "wallpapers").iterdir())
+    assert kept == ["0.jpg", "1.jpg"]
+    assert removed["wallpapers"] == 3
+
+
+def test_workshop_folders_are_capped(tmp_path):
+    """A workshop project is a folder of gigabytes, not a file."""
+    root = tmp_path / "steam_workshop"
+    for index in range(4):
+        folder = root / str(index)
+        folder.mkdir(parents=True)
+        (folder / "project.json").write_bytes(b"x")
+        stamp = time.time() - index * 86400
+        os.utime(folder, (stamp, stamp))
+
+    removed = cleanup(tmp_path, _config(tmp_path, workshop_max=2))
+
+    assert sorted(p.name for p in root.iterdir()) == ["0", "1"]
+    assert removed["workshop"] == 2
 
 
 def test_cleanup_runs_once_a_day(tmp_path):

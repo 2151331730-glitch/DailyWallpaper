@@ -102,8 +102,10 @@ ffmpeg_path = "ffmpeg"
 ffprobe_path = "ffprobe"
 
 [retention]
-wallpapers_days = 90
-cache_days = 180
+# Counts, not ages: an age limit never fired in a month-old install.
+wallpapers_max = 80
+workshop_max = 12
+cache_days = 30
 log_mb = 5
 log_backups = 5
 

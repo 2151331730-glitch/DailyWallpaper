@@ -304,11 +304,12 @@ def test_worker_warms_the_shortlist_after_the_startup_tick():
         worker.stop()
 
 
-def test_worker_refills_an_empty_shortlist_before_parking():
-    """A restart empties the in-memory shortlist while the day stays prepared.
+def test_worker_fetches_on_boot_and_refills_from_disk_afterwards():
+    """The boot pass may go to the network; every later refill may not.
 
-    Without the forced pass the next wallpaper was never parked again, so the
-    boot after that had to run the whole pipeline before showing anything.
+    A restart empties the in-memory shortlist while the day stays marked as
+    prepared, so the disk holds the only material a click can draw on. A
+    network rebuild on the tick thread is what made "换一张" wait 34-65 s.
     """
     import threading
     from datetime import datetime
@@ -323,11 +324,13 @@ def test_worker_refills_an_empty_shortlist_before_parking():
             self.shortlist = []
 
         def prepare(self, now, force=False, dry_run=False):
-            calls.append(("prepare", force))
+            calls.append("prepare")
+            self.shortlist = []
 
-        def rehydrate(self, now):
-            calls.append(("rehydrate", None))
+        def prepare_local(self, now):
+            calls.append("prepare_local")
             self.shortlist = ["candidate"]
+            return True
 
         def prepare_next(self, now):
             parked.set()
@@ -351,7 +354,40 @@ def test_worker_refills_an_empty_shortlist_before_parking():
     finally:
         worker.stop()
 
-    assert calls == [("prepare", False), ("rehydrate", None)]
+    assert calls == ["prepare", "prepare_local"]
+
+
+def test_worker_refill_after_a_click_never_touches_the_network():
+    from datetime import datetime
+
+    from dailywallpaper.ui.worker import Worker
+
+    calls = []
+
+    class _Pipeline:
+        shortlist = []
+
+        def prepare(self, now, force=False, dry_run=False):
+            calls.append("prepare")
+
+        def prepare_local(self, now):
+            calls.append("prepare_local")
+            self.shortlist = ["candidate"]
+            return True
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 19, 12, 0)
+
+    class _M:
+        pipeline = _Pipeline()
+        clock = _Clock()
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker._machine = _M()
+    worker._warm_shortlist()
+
+    assert calls == ["prepare_local"]
 
 
 def test_worker_reports_busy_while_a_tick_runs():

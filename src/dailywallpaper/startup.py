@@ -33,6 +33,9 @@ class _IdlePipeline:
     def prepare(self, now, force: bool = False, dry_run: bool = False) -> None:
         return None
 
+    def prepare_local(self, now) -> bool:
+        return False
+
     def pick(self, now, dry_run: bool = False):
         return None
 

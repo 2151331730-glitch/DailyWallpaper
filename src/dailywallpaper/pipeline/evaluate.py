@@ -265,9 +265,15 @@ class EvaluateMixin:
                         self._reanalyze_budget is not None
                         and self._reanalyze_budget <= 0
                     ):
-                        # A refill may not spend minutes re-scoring: use what
-                        # the cache already knows, or skip the candidate.
+                        # A click may not spend minutes re-scoring: use what
+                        # the cache already knows, or skip the candidate. The
+                        # rubric version still has to match -- an older
+                        # prompt knew nothing about sugar water or clichés.
                         if stale is None:
+                            latest_any = getattr(self.vision, "latest_any_for", None)
+                            if latest_any is not None:
+                                stale = latest_any(wallpaper_id)
+                        if stale is None or stale.prompt_version != PROMPT_VERSION:
                             continue
                         record = stale
                     else:

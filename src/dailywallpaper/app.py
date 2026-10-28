@@ -49,7 +49,6 @@ from dailywallpaper.sources.steam_workshop import (
 )
 from dailywallpaper.constants import (
     BANNED_MAX_RATING,
-    MAX_FORCED_PREPARES,
     RATE_LIMIT_ABORT_AFTER,  # noqa: F401  (re-export)
 )
 from dailywallpaper.sources.wallhaven import WallhavenSource
@@ -66,10 +65,10 @@ HOST_COOLDOWN_SECONDS = 300
 # gives up; without a cap a dead network turned one click into a 20-minute
 # freeze over the whole shortlist.
 MATERIALIZE_ATTEMPTS = 3
-# Below this many fresh candidates the day's pool is considered broken (the
-# proxy is down and only Bing answers) and downloaded wallpapers stand in.
-OFFLINE_POOL_MIN = 5
-OFFLINE_POOL_LIMIT = 60
+# How many candidates a disk-only rebuild of the pool reads. Measured at
+# ~1.9 s and no paid call for 60; the click never waits for this because the
+# pool it feeds normally holds dozens.
+LOCAL_POOL_LIMIT = 60
 # A source can fail because the proxy or Wi-Fi was not up yet at login. The
 # pool is then rebuilt a couple of times instead of being fixed for the day.
 MAX_PREPARE_RETRIES = 2
@@ -205,10 +204,6 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # In-memory only: the prepared shortlist does not survive a restart,
         # so persisting this would strand the day exactly like the dry-run bug.
         self._prepared_on = None
-        # A manual "new one" may refill an exhausted shortlist a couple of
-        # times a day; unbounded refills would burn the analysis quota.
-        self._forced_on = None
-        self._forced_count = 0
         self._rate_limited_streak = 0
         # A host that just timed out will time out again; without this one
         # dead CDN cost 30 s per candidate and the click looked broken.
@@ -220,31 +215,63 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         # the old catch-all "no candidate passed".
         self.last_pick_reason = ""
 
-    def rehydrate(self, now) -> bool:
-        """Rebuild an empty shortlist for a day that is already prepared.
+    def prepare_local(self, now) -> bool:
+        """Rebuild the shortlist out of wallpapers already on disk.
 
-        A restart keeps ``prepared_{day}`` in the database while the shortlist
-        it refers to lived in memory only. Without this the next wallpaper
-        could not be pre-picked at all, so the boot after the restart fell
-        back to the whole fetch-and-score run.
+        This is the pool a click draws on. It never touches the network: the
+        rows were downloaded and scored on earlier days, so the only work is
+        re-deciding which of them still qualifies (a rating or a wallpaper
+        applied since can rule one out). Measured on this machine: 60
+        candidates in 1.9 s and zero paid calls -- against the 34-65 s
+        fetch-and-score run that used to answer an empty queue, which is what
+        "点换一张没反应" actually was.
 
-        Only that case is served: when the prepare this launch just ran found
-        nothing (no proxy yet, every source down), its cross-process backoff
-        has to stand, or each launch would refetch a dead network.
+        Returns True when the rebuild produced something to click through.
         """
-        if self.shortlist:
-            return False
-        day = now.date().isoformat()
-        row = self.conn.execute(
-            "select 1 from state where key=?", (f"prepared_{day}",)
-        ).fetchone()
-        if row is None:
-            return False
-        # Two fresh analyses, not the eight a refill spends: this pass only
-        # needs the pool back after a restart, and every candidate it keeps
-        # was already scored. With the full budget a boot waited ~50 s before
-        # it could serve a click.
-        self.prepare(now, force=True, budget=2)
+        # Anything not already in the cache is not worth buying here: the
+        # click came first, the network pass can score it tomorrow.
+        self._reanalyze_budget = 0
+        self._failed_hosts.clear()
+        self._banned = {
+            int(row[0])
+            for row in self.conn.execute(
+                "select wallpaper_id from ratings where rating <= ?",
+                (BANNED_MAX_RATING,),
+            ).fetchall()
+        }
+        seen: set[tuple[str, str]] = set()
+        pool = []
+        on_battery = False
+        if self.cfg.wallpaper.dynamic_requires_ac:
+            try:
+                on_battery = (self.power or PowerStatus()).on_battery()
+            except Exception:
+                on_battery = False
+        if not (on_battery and self.cfg.wallpaper.dynamic_requires_ac):
+            for cached in self._cached_steam_candidates(
+                max(10, self.cfg.steam_workshop.per_page)
+            ):
+                key = (cached.source, cached.source_id)
+                if key not in seen:
+                    pool.append(cached)
+                    seen.add(key)
+        pool.extend(self._cached_local_candidates({"image"}, LOCAL_POOL_LIMIT))
+        counters = {"downloads": 0, "analyses": 0}
+        self._rank_pool(pool, now, counters, allow_review=False)
+        if not self.shortlist:
+            # Nothing left that the current model scored. An older model's
+            # verdict on the current rubric is a worse ranking but a much
+            # better answer than repeating a wallpaper, and it is free.
+            stale = self._cached_local_candidates(
+                {"image"}, LOCAL_POOL_LIMIT, any_model=True
+            )
+            if stale:
+                self._rank_pool(stale, now, counters, allow_review=False)
+        self.conn.commit()
+        logger.info(
+            f"local pool: {len(pool)} candidate(s), {len(self.shortlist)}"
+            f" usable"
+        )
         return bool(self.shortlist)
 
     def apply_config(self, cfg) -> None:
@@ -295,24 +322,102 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         self.conn.execute("delete from state where key=?", (key,))
 
     def _fill_from_cache(self, pool, seen, media_types) -> None:
-        """Top a thin pool up from wallpapers already on disk.
+        """Add wallpapers already on disk to a pool built from the network.
 
-        A dead proxy leaves Bing's single daily image as the whole pool,
-        which is why "换一张" did nothing and the picks were poor. The images
-        downloaded on earlier days are still on disk and already scored (a
-        cache hit), so they can stand in for the day.
+        The early return that stood here (``if len(pool) >= 5: return``) is
+        why the desktop repeated itself: the network offered two or three
+        candidates a day, so the check always passed and hundreds of scored
+        wallpapers sitting in ``data/wallpapers`` never entered the pool at
+        all. They cost nothing to include -- their analysis is a cache hit.
         """
-        if len(pool) >= OFFLINE_POOL_MIN:
-            return
-        for cached in self._cached_local_candidates(media_types, OFFLINE_POOL_LIMIT):
+        for cached in self._cached_local_candidates(media_types, LOCAL_POOL_LIMIT):
             key = (cached.source, cached.source_id)
             if key not in seen:
                 pool.append(cached)
                 seen.add(key)
-        logger.info(f"online sources thin; {len(pool)} candidate(s) after local cache")
+        logger.info(f"{len(pool)} candidate(s) including the local stock")
 
-    def prepare(self, now, force: bool = False, dry_run: bool = False,
-                budget: int | None = None) -> None:
+    def _weather(self) -> tuple[int, str]:
+        """Today's conditions for the scoring bonus, or a neutral 0."""
+        if not self.cfg.weather.enabled:
+            return 0, ""
+        try:
+            weather = cached_weather(
+                self.session,
+                self.conn,
+                self.cfg.weather.latitude,
+                self.cfg.weather.longitude,
+                self.cfg.weather.cache_minutes,
+            )
+            return weather.code, weather_label(weather.code)
+        except Exception as exc:
+            logger.warning(f"weather unavailable, scoring neutral: {exc}")
+            return 0, ""
+
+    def _rank_pool(self, pool, now, counters, *, allow_review: bool) -> None:
+        """Score one pool and make it today's shortlist.
+
+        Both ways in land here: the daily network pass and the disk-only
+        rebuild a click triggers. They differ in where the candidates come
+        from, not in how they are judged.
+        """
+        data_dir = Path(self.cfg.app.data_dir)
+        recent = self._recent_styles()
+        profile = self._profile(now)
+        # Only wallpapers that were actually applied: comparing against every
+        # fetched candidate would reject the whole pool after a restart.
+        recent_hashes = [
+            row["phash"]
+            for row in self.conn.execute(
+                """
+                select w.phash from wallpapers w
+                where w.phash <> '' and exists (
+                    select 1 from decisions d
+                    where d.wallpaper_id = w.id and d.status = 'applied'
+                )
+                order by w.id desc limit 200
+                """
+            ).fetchall()
+        ]
+        self.budget.warn_if_needed()
+        weather_code, weather_text = self._weather()
+        decisions = self._evaluate(
+            pool, data_dir, profile, recent, weather_code,
+            weather_text, recent_hashes, counters, hour=now.hour,
+        )
+        ready = self._ready(decisions)
+        floor = float(getattr(self.cfg.wallpaper, "min_score", 0.0) or 0.0)
+        qualified = [decision for decision in ready if decision.final >= floor]
+        if not qualified and ready:
+            # Nothing cleared the bar. An empty desktop is worse than a
+            # mediocre wallpaper, so the best of them still goes on -- but say
+            # so, because it means the floor is set above this pool.
+            best = max(decision.final for decision in ready)
+            logger.info(
+                "media plan: nothing at or above %.0f; best is %.1f, using it",
+                floor,
+                best,
+            )
+            qualified = ready
+        self.shortlist = rank(qualified, now.date().isoformat())
+        logger.info(
+            "media plan: %d candidate(s) at or above %.0f",
+            len(self.shortlist),
+            floor,
+        )
+        # The review pass only adds information when it uses a different
+        # model: with the same one every call is a cache hit on the screening
+        # verdict, so the "second opinion" was the first opinion re-read.
+        if (
+            allow_review
+            and self.cfg.vision.review_top_n > 0
+            and self.shortlist
+            and self.cfg.vision.review_model != self.cfg.vision.screen_model
+        ):
+            self._review_top(profile, recent, weather_code, hour=now.hour)
+            self.shortlist = rank(self.shortlist, now.date().isoformat())
+
+    def prepare(self, now, force: bool = False, dry_run: bool = False) -> None:
         # A dry run must not consume the day's one prepare: its shortlist
         # only lives in memory, so a later real run would find nothing.
         day = now.date().isoformat()
@@ -335,16 +440,6 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             retry_at = self._state_number(retry_at_key)
             if retry_at is not None and time.time() < retry_at:
                 return
-        if force:
-            day = now.date().isoformat()
-            if self._forced_on != day:
-                self._forced_on = day
-                self._forced_count = 0
-            if self._forced_count >= MAX_FORCED_PREPARES:
-                logger.info("prepare skipped: forced-refill cap reached for today")
-                return
-            self._forced_count += 1
-            logger.info(f"prepare running: forced refill {self._forced_count} today")
         throttle = self.conn.execute(
             "select value from state where key='empty_prepare_at'"
         ).fetchone()
@@ -360,15 +455,9 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
         refresh_session_proxy(self.session, self.cfg)
         failed_sources: list[str] = []
         self._rate_limited_streak = 0
-        # A refill must be quick: re-scoring 41 candidates against a new
-        # prompt version took minutes and looked like a dead click. Spend a
-        # bounded number of fresh analyses, then reuse what is cached. Eight
-        # is the speed/freshness compromise: enough to keep the refilled head
-        # honestly scored, still well under a minute. ``budget`` overrides it
-        # for callers that only need the pool back, not a fresh opinion.
-        self._reanalyze_budget = (
-            budget if budget is not None else (8 if force else None)
-        )
+        # This pass may buy fresh analyses; only the disk-only rebuild
+        # (``prepare_local``) is barred from spending.
+        self._reanalyze_budget = None
         self._failed_hosts.clear()
         self._banned = {
             int(row[0])
@@ -445,83 +534,9 @@ class RealPipeline(FetchMixin, EvaluateMixin, MaterializeMixin, SelectMixin):
             else static_pool
         )
 
-        recent = self._recent_styles()
-        profile = self._profile(now)
-        # Only wallpapers that were actually applied: comparing against every
-        # fetched candidate would reject the whole pool after a restart.
-        recent_hashes = [
-            row["phash"]
-            for row in self.conn.execute(
-                """
-                select w.phash from wallpapers w
-                where w.phash <> '' and exists (
-                    select 1 from decisions d
-                    where d.wallpaper_id = w.id and d.status = 'applied'
-                )
-                order by w.id desc limit 200
-                """
-            ).fetchall()
-        ]
-
-        self.budget.warn_if_needed()
-
-        weather_code = 0
-        weather_text = ""
-        if self.cfg.weather.enabled:
-            try:
-                weather = cached_weather(
-                    self.session,
-                    self.conn,
-                    self.cfg.weather.latitude,
-                    self.cfg.weather.longitude,
-                    self.cfg.weather.cache_minutes,
-                )
-                weather_code = weather.code
-                weather_text = weather_label(weather.code)
-            except Exception as exc:
-                logger.warning(f"weather unavailable, scoring neutral: {exc}")
-
-        data_dir = Path(self.cfg.app.data_dir)
         counters = {"downloads": 0, "analyses": 0}
-        decisions = self._evaluate(
-            pool, data_dir, profile, recent, weather_code,
-            weather_text, recent_hashes, counters, hour=now.hour,
-        )
-        ready = self._ready(decisions)
-        floor = float(getattr(self.cfg.wallpaper, "min_score", 0.0) or 0.0)
-        qualified = [decision for decision in ready if decision.final >= floor]
-        if not qualified and ready:
-            # Nothing cleared the bar. An empty desktop is worse than a
-            # mediocre wallpaper, so the best of them still goes on -- but say
-            # so, because it means the floor is set above this pool.
-            best = max(decision.final for decision in ready)
-            logger.info(
-                "media plan: nothing at or above %.0f; best is %.1f, using it",
-                floor,
-                best,
-            )
-            qualified = ready
-        self.shortlist = rank(qualified, now.date().isoformat())
-        logger.info(
-            "media plan: %d candidate(s) at or above %.0f",
-            len(self.shortlist),
-            floor,
-        )
-
-        # A refill is a click the user is waiting on: the review pass costs
-        # five more model calls and only re-ranks the head, which is not
-        # worth a minute of "换一张" looking broken.
-        # The review pass only adds information when it uses a different
-        # model: with the same one every call is a cache hit on the screening
-        # verdict, so the "second opinion" was the first opinion re-read.
-        if (
-            not force
-            and self.cfg.vision.review_top_n > 0
-            and self.shortlist
-            and self.cfg.vision.review_model != self.cfg.vision.screen_model
-        ):
-            self._review_top(profile, recent, weather_code, hour=now.hour)
-            self.shortlist = rank(self.shortlist, now.date().isoformat())
+        self._rank_pool(pool, now, counters, allow_review=not force)
+        data_dir = Path(self.cfg.app.data_dir)
         self._materialize(data_dir, counters)
         if dry_run:
             # A dry run reports what it would pick; it must not mark the day

@@ -234,22 +234,16 @@ class DailyStateMachine:
                 return TickResult("too_late")
 
         decision = self.pipeline.pick(now, dry_run=dry_run)
-        if decision is None and manual:
-            # A click must not sit on a 40-60 s refetch that may itself fail:
-            # hand back a known good wallpaper at once. The refill still runs,
-            # just after the click has been answered.
-            repeat = getattr(self.pipeline, "repeat_pick", None)
-            if repeat is not None:
-                decision = repeat(now)
-                if decision is not None:
-                    logger.info(
-                        "manual change: pool is empty, reusing a known good"
-                        " wallpaper while the pool rebuilds"
-                    )
         if decision is None:
-            # A manual "换一张" may find the shortlist used up; refill it so
-            # the click does something instead of silently keeping the image.
-            self.pipeline.prepare(now, force=manual, dry_run=dry_run)
+            if manual:
+                # The queue drains and the click has to be answered now.
+                # Refilling used to mean the fetch-and-score run, 34-65 s the
+                # click sat through -- which is what "点换一张没反应" was. The
+                # wallpapers already on disk rebuild in about two seconds and
+                # cost nothing, so that is what answers a click.
+                self.pipeline.prepare_local(now)
+            else:
+                self.pipeline.prepare(now, dry_run=dry_run)
             decision = self.pipeline.pick(now, dry_run=dry_run)
         if decision is None:
             # Nothing new is usable (no proxy, provider down, seen before).

@@ -171,7 +171,10 @@ class SelectMixin:
                 # A manual change this afternoon does not invalidate it: the
                 # pre-picked decision was already popped off the shortlist.
                 return True
-        self.prepare(now)
+        if not self.shortlist:
+            # Parked wallpaper is the convenience; a network fetch here would
+            # run on the tick thread and answer every click seconds late.
+            self.prepare_local(now)
         decision = self.pick(now)
         if decision is None:
             return False

@@ -21,9 +21,10 @@ TICK_SECONDS = 60
 KEEP_ALIVE_SECONDS = 10
 # A tick longer than this is worth a log line even when nobody clicked.
 SLOW_TICK_SECONDS = 5.0
-# Below this many candidates left, rebuilding the pool is worth the wait it
-# puts in front of the next click. Above it, the queue can serve the click now.
-REFILL_BELOW = 2
+# Below this many candidates left, the pool is topped up from the disk. The
+# pass costs ~2 s and no paid call, so the threshold can be generous: a bigger
+# queue is what makes the next click instant.
+REFILL_BELOW = 8
 
 
 def _set_thread_priority(below_normal: bool) -> None:
@@ -132,7 +133,9 @@ class Worker:
             # downloaded during the previous session, which is what makes a
             # boot show a new image immediately.
             self._tick_once(startup=True)
-            self._warm_shortlist()
+            # Only the boot pass goes to the network: it is the day's one
+            # fetch, and the click that arrives meanwhile is not waiting on it.
+            self._warm_shortlist(network=True)
         finally:
             self._working.clear()
         while True:
@@ -143,16 +146,17 @@ class Worker:
             try:
                 self._tick_once(manual=manual)
                 if self.last_action == "applied":
-                    # A fresh change makes the pool move on, but rebuilding it
-                    # takes 30-60 s and the next click waits behind it. Only
-                    # refill when the queue is about to run dry.
+                    # The queue moves down by one. Top it up from the disk
+                    # before it runs dry: that pass costs ~2 s and no paid
+                    # call, so it can run after every change without the next
+                    # click queueing behind a 34-65 s network fetch.
                     pipeline = getattr(self._machine, "pipeline", None)
                     remaining = len(getattr(pipeline, "shortlist", None) or [])
                     if remaining < REFILL_BELOW:
                         self._warm_shortlist()
                     else:
                         logger.info(
-                            f"shortlist still holds {remaining}; not rebuilding"
+                            f"shortlist still holds {remaining}; not refilling"
                         )
             finally:
                 self._working.clear()
@@ -218,13 +222,13 @@ class Worker:
         except Exception as exc:  # startup must never kill the tick thread
             logger.warning(f"startup wallpaper check failed: {exc}")
 
-    def _warm_shortlist(self) -> None:
-        """Build today's candidate pool and pre-decide the next wallpaper.
+    def _warm_shortlist(self, network: bool = False) -> None:
+        """Make sure the queue can serve the next click.
 
-        A tick that finds the day already changed returns without preparing,
-        so the next "换一张" had to pay the whole fetch + ffmpeg + vision cost
-        on the click. Warming here (prepare is once-per-day in memory) makes
-        that click pick from a ready shortlist.
+        ``network`` is the once-a-day pass that fetches new material; the boot
+        calls it. Every other call rebuilds from wallpapers already on disk
+        (~2 s, no paid call), because a click that arrives during the warm-up
+        waits behind it and a network pass made that wait 34-65 s.
 
         The same pass chooses and downloads the next wallpaper into ``state``,
         so the following boot applies that finished file in under a second
@@ -237,15 +241,10 @@ class Worker:
         _set_thread_priority(True)
         started = time.monotonic()
         try:
-            pipeline.prepare(clock.now())
-            # The shortlist lives in memory while the day stays marked as
-            # prepared in the database, so a restart left it empty and the
-            # next wallpaper could not be pre-picked at all. The pipeline
-            # decides whether that is the case: a prepare that just ran and
-            # found nothing must keep its backoff instead of refetching.
-            rehydrate = getattr(pipeline, "rehydrate", None)
-            if rehydrate is not None and not getattr(pipeline, "shortlist", None):
-                rehydrate(clock.now())
+            if network:
+                pipeline.prepare(clock.now())
+            if len(getattr(pipeline, "shortlist", None) or []) < REFILL_BELOW:
+                pipeline.prepare_local(clock.now())
             prepare_next = getattr(pipeline, "prepare_next", None)
             # A click that lands while this runs is queued behind it; the
             # pre-generation is a convenience, the click is not.

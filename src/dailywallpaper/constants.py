@@ -11,8 +11,6 @@ BANNED_MAX_RATING = 2
 SOUND_KEY = "sound_enabled"
 # WE forgets its mute state on restart; the guard re-asserts it this often.
 SOUND_REASSERT_SECONDS = 60.0
-# A day's shortlist can be refilled a handful of times.
-MAX_FORCED_PREPARES = 6
 # Only the head of the ranked list is downloaded up front.
 MATERIALIZE_TOP_N = 3
 # Stop a prepare pass after this many rate-limit refusals in a row.

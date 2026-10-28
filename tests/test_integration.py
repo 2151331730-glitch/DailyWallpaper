@@ -1661,22 +1661,6 @@ def test_a_forced_prepare_retries_a_source_marked_down(tmp_path):
     assert pipeline.shortlist
 
 
-def test_forced_prepares_are_capped_for_the_day(tmp_path):
-    clock = Clock(datetime(2026, 10, 18, 9, 0))
-    session = ImageSession()
-    provider = Provider([_scores(90, 10)])
-    cfg, conn, pipeline, budget = _pipeline(tmp_path, session, provider, clock)
-
-    from dailywallpaper.app import MAX_FORCED_PREPARES
-
-    for _ in range(MAX_FORCED_PREPARES):
-        pipeline.prepare(clock.now(), force=True)
-    settled = session.calls
-    pipeline.prepare(clock.now(), force=True)
-
-    assert session.calls == settled
-
-
 def test_downloaded_steam_items_survive_a_dead_workshop_api(tmp_path):
     clock = Clock(datetime(2026, 10, 18, 9, 0))
     cfg = _config(tmp_path)

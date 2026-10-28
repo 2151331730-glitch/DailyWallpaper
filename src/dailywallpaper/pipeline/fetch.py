@@ -133,25 +133,39 @@ class FetchMixin:
             )
         return candidates
 
-    def _cached_local_candidates(self, media_types, limit: int) -> list[Candidate]:
+    def _cached_local_candidates(
+        self, media_types, limit: int, any_model: bool = False
+    ) -> list[Candidate]:
         """Candidates rebuilt from wallpapers downloaded on earlier days.
 
         They come back as local paths, so nothing is fetched and the vision
         analysis is a cache hit; the saved full-resolution copy is preferred
         over the 1024px screening image so a 4K desktop stays sharp.
+
+        ``any_model`` is the last resort of the disk-only rebuild: once every
+        wallpaper the current model scored has been shown, an older model's
+        verdict on the same rubric beats repeating a picture. Only callers
+        that cannot pay for a fresh analysis should ask for it.
         """
         placeholders = ",".join("?" for _ in media_types)
-        # Only rows that already carry a screen-model analysis: one without it
-        # would be a paid call, which is exactly what a dead proxy cannot do.
+        # Only rows that already carry an analysis: one without it would be a
+        # paid call, which is exactly what a click must never wait for.
+        model_filter = "" if any_model else (
+            " and exists (select 1 from wallpaper_analyses wa join analyses a"
+            "   on a.id = wa.analysis_id"
+            "   where wa.wallpaper_id = w.id and a.model = ?)"
+        )
+        params = [*sorted(media_types)]
+        if not any_model:
+            params.append(self.cfg.vision.screen_model)
+        params.append(int(limit))
         rows = self.conn.execute(
             f"select id, source, source_id, title, page_url, file_url, media_type,"
             f" width, height, file_size, tags_json, raw_json, local_path"
             f" from wallpapers w where local_path<>'' and media_type in ({placeholders})"
-            f" and exists (select 1 from wallpaper_analyses wa join analyses a"
-            f"   on a.id = wa.analysis_id"
-            f"   where wa.wallpaper_id = w.id and a.model = ?)"
+            f"{model_filter}"
             f" order by id desc limit ?",
-            (*sorted(media_types), self.cfg.vision.screen_model, int(limit)),
+            (*params,),
         ).fetchall()
         data_dir = Path(self.cfg.app.data_dir) / "wallpapers"
         candidates = []

@@ -24,6 +24,9 @@ class _Pipeline(SelectMixin):
     def prepare(self, now, force=False, dry_run=False):
         self.prepared += 1
 
+    def prepare_local(self, now):
+        return False
+
     def _materialize_one(self, decision):
         return decision
 
@@ -113,3 +116,6 @@ def test_prepare_next_with_an_empty_shortlist_reports_failure(tmp_path):
 
     assert pipeline.prepare_next(datetime(2026, 10, 22, 20, 0)) is False
     assert _payload(conn) is None
+    # It runs on the tick thread while a click may be waiting behind it, so it
+    # may only rebuild from the disk, never fetch.
+    assert pipeline.prepared == 0

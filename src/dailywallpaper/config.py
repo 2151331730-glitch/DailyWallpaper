@@ -131,8 +131,12 @@ class ToolsSection:
 
 @dataclass(frozen=True)
 class RetentionSection:
-    wallpapers_days: int = 90
-    cache_days: int = 180
+    # Counts, not ages: "keep the last 80" is a promise the user can check,
+    # while "delete after 90 days" never fired in a month-old install and let
+    # 333 MB of wallpapers accumulate. 80 is ~13 days at the observed 6 a day.
+    wallpapers_max: int = 80
+    workshop_max: int = 12
+    cache_days: int = 30
     log_mb: int = 5
     log_backups: int = 5
 
