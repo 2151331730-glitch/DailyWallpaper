@@ -31,6 +31,9 @@ class _Service:
         self.changed += 1
         return TickResult("applied")
 
+    def is_busy(self):
+        return False
+
     def undo(self):
         return True
 
@@ -422,6 +425,101 @@ def test_worker_ignores_a_second_manual_request_while_busy():
 
     assert worker.change_now() is True
     assert worker.change_now() is False
+
+
+def test_worker_defers_a_tick_while_a_fullscreen_app_owns_the_screen(monkeypatch):
+    from dailywallpaper.ui import worker as worker_mod
+    from dailywallpaper.ui.worker import Worker
+
+    monkeypatch.setattr(worker_mod, "_screen_is_busy", lambda: True)
+    ticks = []
+
+    class _M:
+        pipeline = None
+        clock = None
+
+        def tick(self, **kwargs):
+            ticks.append(kwargs)
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker._machine = _M()
+    worker._tick_once(manual=True)
+
+    # No fetch, no vision, no apply: the next tick does the work.
+    assert ticks == []
+    assert worker.last_action == "deferred"
+    assert worker.last_result == ("deferred", "全屏应用正在运行，稍后再换", True)
+
+
+def test_worker_still_runs_the_startup_tick_while_the_screen_is_busy(monkeypatch):
+    """Nothing else restores the desktop after a reboot."""
+    from dailywallpaper.ui import worker as worker_mod
+    from dailywallpaper.ui.worker import Worker
+
+    monkeypatch.setattr(worker_mod, "_screen_is_busy", lambda: True)
+    ticks = []
+
+    class _Result:
+        action = "kept"
+        reason = ""
+
+    class _M:
+        pipeline = None
+        clock = None
+
+        def tick(self, **kwargs):
+            ticks.append(kwargs)
+            return _Result()
+
+    worker = Worker(lambda: _M(), interval=60)
+    worker._machine = _M()
+    worker._tick_once(startup=True)
+
+    assert len(ticks) == 1
+    assert worker.last_action == "kept"
+
+
+def test_a_deferred_click_says_why_nothing_changed(qapp, tmp_path):
+    from datetime import datetime
+
+    from dailywallpaper.config import AppSection
+    from dailywallpaper.db import connect, migrate
+    from dailywallpaper.state.machine import TickResult
+    from dailywallpaper.ui.commands import CommandService
+    from dailywallpaper.ui.shell import UiShell
+
+    class _Clock:
+        def now(self):
+            return datetime(2026, 10, 18, 9, 0)
+
+    class _Machine:
+        def tick(self, dry_run=False):
+            return TickResult("kept")
+
+    class _Apply:
+        def undo_last(self):
+            return True
+
+    class _Worker:
+        last_action = "deferred"
+        result_seq = 1
+        last_result = ("deferred", "全屏应用正在运行，稍后再换", True)
+
+        def busy(self):
+            return False
+
+    conn = connect(tmp_path / "app.db")
+    migrate(conn)
+    service = CommandService(conn, AppSection(), _Clock(), _Machine(), _Apply())
+    shell = UiShell(service, _Machine(), on_quit=lambda: None, worker=_Worker())
+    messages = []
+    shell.tray.notify = lambda title, message: messages.append((title, message))
+    try:
+        shell._poll()
+    finally:
+        shell.poll_timer.stop()
+
+    assert messages == [("稍后再换", "全屏应用正在运行，稍后再换")]
 
 
 def test_rating_dialog_saves_a_score_and_comment(qapp, tmp_path):

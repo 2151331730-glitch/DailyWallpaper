@@ -42,6 +42,19 @@ def _set_thread_priority(below_normal: bool) -> None:
         pass
 
 
+def _screen_is_busy() -> bool:
+    """True while a game or a fullscreen video owns the display.
+
+    Fail open: a probe that cannot answer must never stop the scheduler.
+    """
+    try:
+        from dailywallpaper.apply.foreground import user_is_busy
+
+        return bool(user_is_busy())
+    except Exception:
+        return False
+
+
 class Worker:
     def __init__(self, machine_factory, interval: int = TICK_SECONDS):
         self.machine_factory = machine_factory
@@ -354,6 +367,19 @@ class Worker:
         _set_thread_priority(True)
         started = time.monotonic()
         try:
+            # A game or a fullscreen video owns the screen: no fetch, no
+            # ffmpeg, no apply. The next tick does the work instead. A startup
+            # tick still runs, because nothing else would restore the desktop
+            # after a reboot.
+            if not startup and _screen_is_busy():
+                self.last_action = "deferred"
+                self.last_result = ("deferred", "全屏应用正在运行，稍后再换", manual)
+                self.result_seq += 1
+                logger.info(
+                    "tick deferred: a fullscreen app owns the screen"
+                    f" (manual={int(bool(manual))})"
+                )
+                return
             # A failure while applying a pending config or rebuilding the pool
             # must not leave the thread at low priority.
             try:

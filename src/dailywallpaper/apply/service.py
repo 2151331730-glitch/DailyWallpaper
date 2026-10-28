@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 
+from dailywallpaper.apply import foreground
 from dailywallpaper.apply.we_control import desktop_window_visible
 
 # A failed live-wallpaper reopen must not spawn WE every guard cycle.
@@ -447,6 +448,13 @@ class ApplyService:
     def apply(self, wallpaper_id: int, image_path: Path, trigger: str = "auto") -> bool:
         self.last_error = ""
         started = time.monotonic()
+        # A game in exclusive or borderless fullscreen owns the display; the
+        # apply re-broadcasts WM_SETTINGCHANGE to every window and can cost the
+        # player a frame -- or the whole session. Defer instead.
+        if foreground.user_is_busy():
+            self.last_error = "全屏应用正在运行，稍后再换"
+            logger.info("apply deferred: a fullscreen app owns the screen")
+            return False
         if not self._inspection_passes(Path(image_path)):
             return False
         chosen, method = self._applier_for(wallpaper_id)
@@ -917,6 +925,12 @@ class ApplyService:
           points WE away from it, and the guard pulls it back off the
           desktop).
         """
+        # The guard is the biggest source of traffic during a game: it spawns
+        # ``wallpaper32.exe -control`` to close or reopen a live wallpaper, and
+        # a full-screen app takes that as a device reset. Leave the screen
+        # alone until the game is over.
+        if foreground.user_is_busy():
+            return False
         self.forget_banned_selection()
         row = self._last_change()
         if row is None:

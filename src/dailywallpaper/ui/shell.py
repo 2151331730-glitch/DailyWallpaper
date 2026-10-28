@@ -145,6 +145,11 @@ class UiShell:
             # The pool ran dry and the applier handed back something already
             # seen. Without a word that looks like the click did nothing.
             self.tray.notify("候选已用完", "先用一张以前用过的；新图还在下载")
+        elif action == "deferred":
+            # The click was accepted but the work waited: a game or a
+            # fullscreen video owns the screen. Saying nothing would look
+            # like the click was lost.
+            self.tray.notify("稍后再换", reason or "全屏应用正在运行，稍后再换")
         elif action in ("apply_failed", "tick_failed"):
             self.tray.notify("更换失败", reason or "应用壁纸时出错，详情见日志")
 
