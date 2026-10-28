@@ -1481,3 +1481,90 @@ def test_a_cold_start_paints_no_blackout(tmp_path):
 
     assert applier.applied == [], "no blackout picture may reach the desktop"
     assert control.opened and Path(control.opened[0]).name == "project.json"
+
+
+def test_a_just_booted_engine_gets_another_chance_at_the_command(tmp_path):
+    """The process appears seconds before the control channel answers.
+
+    2026-10-28: the engine started at :22 and the command issued two seconds
+    later was rejected, which the user experienced as "点了换不了". A refusal
+    from a cold engine is not final; a refusal from one that was already up is.
+    """
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class SlowEngine:
+        def __init__(self):
+            self.current_value = ""
+            self.running_now = False
+            self.refusals = 2
+            self.opened = []
+
+        def current(self):
+            return self.current_value
+
+        def running(self):
+            return self.running_now
+
+        def start(self):
+            self.running_now = True
+            return True
+
+        def open(self, file, monitor=0):
+            if self.refusals:
+                self.refusals -= 1
+                self.opened.append("refused")
+                return False
+            self.opened.append("opened")
+            self.current_value = _resolve_package(file)
+            return True
+
+    project = tmp_path / "777" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    control = SlowEngine()
+    applier = WeApplier(
+        control, sleep=lambda s: None, boot_seconds=0.05,
+        interval=0.01, settle_seconds=0.05,
+    )
+
+    result = applier.apply(project)
+
+    assert result.ok is True
+    assert control.opened == ["refused", "refused", "opened"]
+
+
+def test_a_running_engine_that_refuses_is_believed_immediately(tmp_path):
+    from dailywallpaper.apply.we_applier import WeApplier
+
+    class RefusingEngine:
+        def __init__(self):
+            self.current_value = ""
+            self.opened = []
+
+        def current(self):
+            return self.current_value
+
+        def running(self):
+            return True
+
+        def open(self, file, monitor=0):
+            self.opened.append(str(file))
+            return False
+
+        def replace_selection(self, file, monitor=None):
+            return False
+
+    project = tmp_path / "888" / "project.json"
+    project.parent.mkdir()
+    project.write_bytes(b"x")
+    control = RefusingEngine()
+    applier = WeApplier(
+        control, sleep=lambda s: None, boot_seconds=0.05,
+        interval=0.01, settle_seconds=0.05,
+    )
+
+    result = applier.apply(project)
+
+    assert result.ok is False
+    assert "refused the switch" in result.error
+    assert len(control.opened) == 1

@@ -121,10 +121,25 @@ class WeApplier:
                     f"{self.boot_seconds:.0f} s"
                 ),
             )
-        if not self.control.open(target):
-            # The control channel refused outright. Only roll back when the
-            # engine was already up: on a cold start restore() opens the old
-            # project, which boots a second engine window for nothing.
+        opened = self.control.open(target)
+        if not opened and not was_running:
+            # A just-booted engine answers the process probe seconds before it
+            # answers the control channel: Steam init, CEF and the renderer
+            # still have to come up. Taking that first refusal as final failed
+            # the whole click on a cold start (2026-10-28: the engine appeared
+            # at :22 and the command at :24 was rejected), which the user sees
+            # as "点了换不了". Keep asking while the engine settles.
+            logger.info(
+                "wallpaper engine refused the first command after a cold "
+                "start; retrying until it answers"
+            )
+            opened = self._wait_until(
+                lambda: self.control.open(target), self.boot_seconds
+            )
+        if not opened:
+            # Only roll back when the engine was already up: on a cold start
+            # restore() opens the old project, which boots a second engine
+            # window for nothing.
             if was_running:
                 self.restore(state)
             return ApplyResult(ok=False, error="wallpaper engine refused the switch")
